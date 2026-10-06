@@ -1077,6 +1077,14 @@ every outbound BACK unchanged. The twin calibrated to the clips (the render swit
   the same reading's world |yaw| says side-on (>= 60; 85 there) - `return-side` §3e.2b (267ms sooner); the synthetic snap of
   §1.19 (|yaw| 40) is still a snap. Even so, a return that fast lands ~0.25s late: the side comes one reading after the
   deepest back, and the deepest reading cannot yet say the shopper is coming round.
+- **THE LANDING MODEL (`return-side` §4c) - the consistency bar, slow to fast:** the thirteen recorded 360s x 4 tick phases
+  at 0.8x / 1x / 1.3x (1.3x is the user's own fast turn, a ~2.1s 360), today's engine (lat 520ms), a swap landing on the
+  body at send + (lat - 250ms). Pinned: the back print on a chest past 300 degrees 0ms (0.8x) and 20ms (1x) over 48 turns,
+  at 1.3x p90 42ms / 606ms total (the 2026-10-04 rule 1,960ms); a front landing before 235 at most once in 48; never a
+  third swap in a turn. Near the back the order saturates (-0.98..-1.0 on bodies at 150-230 degrees), so the projection
+  fires from -0.9 (`LEAD_FLOOR_PROJECTED`; the 2026-10-04 rule keeps -0.85) - a shopper standing at the back wobbles
+  -0.93..-1.07 and never fires it (`return-side` §1.20b). At 1.6x (a ~1.3s 360) the model shows no gain over before: the
+  side comes one reading after the saturated back, and only a faster reading rate could see it sooner.
 
 ### 2.31 THE POSE, READ FOR THE DECISION - every decision on a fresh reading (2026-10-05)
 "Make it react as fast as you can." The live pose loop (240ms, `startPresenceWatcher`) and the orientation tick (250ms)
@@ -1085,8 +1093,69 @@ their phase - and the outbound BACK, which fires on a reading (the early turn), 
 return's projection (§2.30) corrects for the age, the BACK's rules do not. With `POSE_SYNC` the tick runs the session's
 inference itself before it samples (`_poseInferNow`, at most `POSE_SYNC_WAIT_MS` 120), and the loop's own timer only
 covers what the tick does not (no watcher, a single-view garment): the same ~4 inferences a second, one in flight at a
-time, always fresh. `?pose_sync=0` is the free-running loop. The replay harnesses run the tick without the pose loop
-(typeof-guarded), so `orient-engine` §1 is unchanged; §4 pins the step.
+time, always fresh. The replay harnesses run the tick without the pose loop (typeof-guarded), so `orient-engine` §1 is
+unchanged; §4 pins the step. **OFF BY DEFAULT the same evening (`?pose_sync=1` turns it on):** "it's laggy" - the room's
+camera presented 24-26 fps in all three of that day's sessions against 28-30 before it (one longer main-thread block per tick,
+a dropped frame each, four times a second). The return's projection corrects the reading's age without it.
+
+### 2.32 THE SESSION CAP - no engine session outlives 90s through the edge (2026-10-05)
+A TEST run on a machine that froze mid-session (load 19, the WiFi daemon at 65% CPU) left its engine session open ~5
+minutes: the room's 5s kill clock is a timer in that page, and a frozen page - or a phone tab put away - runs none. The
+edge's relay (`cloudflare/orient/src/rt.js` `relay()`, `rtMaxSessionMs()`) now closes every `/v/s` session after
+`RT_MAX_SESSION_MS` (default 90s, bounded 30s-10min; a real one takes 15-25s, ~45s with a slow connect and a 10s timer),
+the room's side with a reason on the SDK's permanent list ("not allowed") so it does not reconnect into a second one.
+`rt-proxy` §7. Worker deploy.
+
+### 2.33 "The back disappears too fast, in the middle" - the shoulder scale re-learns; a projection needs a deep back (2026-10-05)
+After §2.30 the user reported the front perfect and the back vanishing mid-back. The 17:25 record: the shoulders read 0.46-0.56
+square to the lens and -0.71 at the deepest back - the square-on width the presence gate had learned was 2x the live one (the
+raw separation was symmetric, +0.35 / -0.35); the next back reading (-0.60) read as a crossing of the deepest point (135 ->
+233 degrees at ~380 deg/s) and the projection sent the FRONT on a body still at ~200. 17:23 carried a 3-4x scale and, worse,
+a mirrored skeleton for the whole back view (the shoulders read FRONT while the shopper faced away), which withdrew the BACK.
+- **THE BASELINE RE-LEARNS (`app.js`, the torso-twist block, `BASELINE_OFF`):** two live square-on readings in a row outside
+  0.6-1.6x the learned width start the baseline afresh (a TEST record logs `baseline-relearn`). The twelve recorded 360s never
+  re-learn (`torso-twist` §6).
+- **...and the torso's height (17:41):** the gate learned it ~2x (the shopper still walking back), every live reading fell
+  outside `TWIST_TORSO_BAND`, and the order went stale for 12s through the whole turn - the FRONT went out on a vote, late,
+  the back print on the chest. Two square-on readings out of the height band re-learn it too (`torso-twist` §6.3b).
+- **Pixel proportions:** `poseTorsoWidths(result, aspect)` multiplies by the frame's width over its height (`_poseAspect`,
+  set at every inference; a change is logged as `pose-aspect`) - if the camera changes shape between the gate and the live
+  loop, the width no longer changes with it. Ratios are unchanged at a constant aspect, so nothing else moves.
+- **The projection needs the back seen DEEP (`lib/orient-engine.js` `DEEP_SEEN` -0.85):** a turn that never reads past it is
+  left to the side rule; a re-arm on the same leg keeps it. `return-side` §3e.2c (17:25: now on the side reading, 0.14);
+  the landing model (§4c) is unchanged. **Worker deploy.**
+- **Not fixed:** a mirrored skeleton for a whole back view (17:23) - the pose model's own front/back confusion.
+
+### 2.34 The landing recalibrated - the back stays to the side (2026-10-05 evening)
+"Now the back disappears too fast." The 18:10 clip, read against its record: the front reached the body 0-100ms after it was
+sent (acks 408-413ms that evening - 17:25 the same) and the panel went from a back at ~200 degrees to plain at ~230-240. The
+projection had assumed the front lands (ack - 200ms) after the send and aimed it at 270 - so it went out early.
+- `LEAD_BASE_MS` 200 -> 350: a reference reaches the body about (ack - 350ms) after the send; the lead still follows the
+  session's own pace (`lat`), so a slower engine gets more.
+- `RETURN_TARGET` 270 -> 280 (the order's own angle): in the landing model with the measured delay (`return-side` §4c, now
+  lat 430 / L 80ms) the front lands median 270 / 270 / 275 degrees at 0.8x / 1x / 1.3x, p10 251 / 256 / 263 - the 270 aim
+  landed it 262 / 265 / 273, p10 243 / 251 / 261 - and the back on a chest 0 / 0 / 244ms over 48 turns. §4c.5 pins the
+  median at 265-290 and p10 at 250+ at every speed. **Worker deploy.**
+- The 06:09 and 05:55 fast returns still fire on the same readings (now 5ms / 49ms later, `return-side` §3e).
+
+### 2.35 Making "the second measurement" the rule - 18:21 vs 18:22 (2026-10-05 evening)
+"The first time it vanished too fast, the second time it worked perfectly - make the second consistent." Read against
+their records, the first had three causes the second did not:
+- **A rotation re-drape held the wire (`reconditionForTopology`):** the turn's first 15 degrees fired a body-contour
+  re-drape - a full FRONT re-upload - and the BACK waited 418ms behind it. In AI Auto dual view a ROTATION-only shift
+  now stands aside (the front/back swap re-conditions the rotation); a lean or a volume change still re-drapes. TEST
+  records log `redrape` / `redrape-skip`.
+- **The phantom step at the bottom of the back (`lib/orient-engine.js`, THE DEEPEST IS THE BACK):** the back read -0.87 at
+  its deepest; on the order's own scale -0.87 (150 on the way in) -> -0.84 (213 on the way out) was a 63-degree step at
+  285 deg/s and the FRONT was scheduled at the back. The projection now measures both readings against the deepest the
+  leg has read (`deepest`, at least `DEEP_SEEN`). Replayed (`return-side` §3e.2d/e): 18:21 now goes out at the side
+  (-0.18); 18:22, the perfect one, keeps its reading (within 32ms); 18:10 within 5ms. **Worker deploy.**
+- **The camera changes shape at go-live:** in a portrait room the stream opens 9:16 and turns 512x288 when the input
+  throttle's constraints reach the shared source (`pose-aspect` 0.56 -> 1.78); the shoulder baseline now starts afresh on
+  the first reading of a new shape (`torsoTwistObserve`), and an "off" reading no longer averages into the baseline
+  before its pair forms (`torsoTwistStep`). `return-side` §4d.
+- Landing model (§4c, measured delay): the front lands median 268 / 270 / 276 degrees at 0.8x / 1x / 1.3x, p10
+  249 / 259 / 263; the back on a chest 0 / 0 / 239ms over 48 turns.
 
 ## 3. Cross-file lockstep
 

@@ -165,8 +165,8 @@ console.log("\n── §1 the trigger ──");
     [paced(200, true), paced(null, true), paced(750, false)].every((o) => firstFire(o) === 4 && o[4].via === "order"));
   const snapSteps = [
     { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1, ordAt: 0 },
-    { vote: null, lock: "back", yawAbs: 30, at: 240, ord: -0.9, ordAt: 240 },
-    { vote: null, lock: "back", yawAbs: 40, at: 480, ord: -0.05, ordAt: 480 },   // +0.85 in one reading: a snap, not a speed
+    { vote: "back", lock: "back", yawAbs: 6, at: 240, ord: -0.99, ordAt: 240 },   // still at the back
+    { vote: null, lock: "back", yawAbs: 40, at: 480, ord: -0.05, ordAt: 480 },   // +0.94 in one reading, |yaw| 40: a snap, not a speed
   ];
   check("§1.19 a snap (more than 0.8 in one reading) is not a speed: nothing fires early", !paced(750, true, snapSteps).some((o) => o.fire));
   const deep = [
@@ -174,7 +174,24 @@ console.log("\n── §1 the trigger ──");
     { vote: "back", lock: "back", yawAbs: 20, at: 240, ord: -0.95, ordAt: 240 },
     { vote: null, lock: "back", yawAbs: 30, at: 480, ord: -0.88, ordAt: 480 },   // rising and fast, but past the floor (-0.85)
   ];
-  check("§1.20 ...and never from deeper than the floor (-0.85), however fast", !paced(750, true, deep).some((o) => o.fire));
+  check("§1.20 ...and the 2026-10-04 rule never fires from deeper than its floor (-0.85), however fast", !paced(750, true, deep).some((o) => o.fire));
+  /* THE PROJECTION (its floor is -1.0): a shopper STANDING at the back - the order wobbling around -1 (the recorded 360s:
+     +-0.05-0.07) - is kept from firing by the projection's own step speed: a wobble projects nowhere near the side. */
+  const projTrig = () => E.createOrientEngine(E.sanitizeOrientKnobs({})).internals.makeEarlyTurnTrigger(
+    40, 45, 50, 50, 10, [450, 960], 20, 0.2, true, true);
+  const projected = (lat, steps) => run(projTrig(), [START, ...steps].map((o) => ({ ...o, lat }))).slice(1);
+  const still = [
+    { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1.02, ordAt: 0 },
+    { vote: "back", lock: "back", yawAbs: 4, at: 250, ord: -0.97, ordAt: 250 },
+    { vote: "back", lock: "back", yawAbs: 6, at: 500, ord: -1.04, ordAt: 500 },
+    { vote: "back", lock: "back", yawAbs: 3, at: 750, ord: -0.96, ordAt: 750 },
+    { vote: "back", lock: "back", yawAbs: 5, at: 1000, ord: -0.99, ordAt: 1000 },
+    { vote: "back", lock: "back", yawAbs: 7, at: 1250, ord: -0.93, ordAt: 1250 },
+  ];
+  check("§1.20b the projection: a shopper standing at the back (the order wobbling at -1) never fires, however slow the engine",
+    !projected(750, still).some((o) => o.fire) && !projected(1200, still).some((o) => o.fire), JSON.stringify(projected(1200, still)));
+  check("§1.20c ...while a real return from the same depth does - and a reading earlier than the 2026-10-04 rule",
+    firstFire(projected(750, ret)) >= 0 && firstFire(projected(750, ret)) < firstFire(slow), JSON.stringify(projected(750, ret)));
   const falling = [
     { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -0.55, ordAt: 0 },
     { vote: null, lock: "back", yawAbs: 20, at: 240, ord: -0.62, ordAt: 240 },   // turning back toward the back
@@ -234,7 +251,7 @@ function roomRun(rows, { knobs = {}, sendOrd = true, phase = 0, lat = null } = {
       yawAbs, yawAt, lostAt, ord: sendOrd ? ord : null, ordAt: sendOrd ? ordAt : 0, lat, lock, profile: false, dualView: true }));
     for (const a of acts) if (a.do === "swap") {
       if (lock === null && a.next === "front") { lock = "front"; continue; }
-      if (a.next !== lock) { swaps.push({ next: a.next, t }); lock = a.next; }
+      if (a.next !== lock) { swaps.push({ next: a.next, t: t + (a.delay || 0) }); lock = a.next; }   // a scheduled send goes out then
     }
   }
   return swaps;
@@ -367,7 +384,7 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
     const rec = PACE["f-0609"], R = recorded(rec), on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
     check(`§3e.1 06:09 (fast): the record's return went out on the side reading (o=${R && R.o}, ${R && R.t}ms)`, !!R && R.o === 0.04 && R.t === 2617, JSON.stringify(R));
     check(`§3e.1 ...the projected rule sends it on the reading before, at once - o=${on && on.o}, ${R && on ? R.t - on.t : "?"}ms sooner`,
-      !!on && on.o === -0.72 && on.delay === 0 && R.t - on.t >= 240, JSON.stringify(on));
+      !!on && on.o === -0.72 && on.delay <= 60 && R.t - on.t >= 200, JSON.stringify(on));   // the aim at 280 adds a few ms
     /* The 2026-10-04 rule sat ON the line there: 224 + 0.157 x 297 = 270.7 in this replay, 269.x on the Worker (the record's
        ages are rounded) - it did not fire live. The projection clears it by ~30 degrees: with every reading 40ms younger it
        still fires on that reading. */
@@ -379,13 +396,15 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
   {
     const rec = PACE["m2-0555"], R = recorded(rec), on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
     check(`§3e.2 05:55 (fast): the projection sends the return at ${on && on.t}ms (o=${on && on.o}) - the 2026-10-04 rule ${off && off.t}ms, the record ${R && R.t}ms`,
-      !!on && !!off && !!R && off.t - on.t >= 250 && R.t - on.t >= 450 && on.o >= -0.85, JSON.stringify({ on, off, R }));
+      /* 2519ms since THE DEEPEST IS THE BACK (2026-10-05 evening; 2379 before it) - the clip put the right moment near 2530. */
+      !!on && !!off && !!R && off.t - on.t >= 250 && R.t - on.t >= 250 && on.o >= -0.85, JSON.stringify({ on, off, R }));
   }
   {
     const rec = PACE["s-0611"], on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
     check(`§3e.3 06:11 (slow - reported as working): the return within 150ms of the 2026-10-04 rule (${on && on.t} vs ${off && off.t}ms)`,
       !!on && !!off && Math.abs(on.t - off.t) <= 150, JSON.stringify({ on, off }));
-    check("§3e.3 ...where it falls between two readings it carries a delay, never longer than a tick", !!on && on.delay > 0 && on.delay <= 260, JSON.stringify(on));
+    /* Since the landing delay was recalibrated (LEAD_BASE_MS 350, 2026-10-05 evening) this one lands on a reading - no delay. */
+    check("§3e.3 ...and a scheduled send, when there is one, is never longer than a tick", !!on && on.delay >= 0 && on.delay <= 260, JSON.stringify(on));
   }
   {
     /* A ~300 deg/s return (a real production session, the user's recorded 360 at 1.3x, 2026-10-05 06:48): the order went
@@ -394,6 +413,26 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
     const rec = PACE["x-0648"], R = recorded(rec), on = ret(replay(rec, {}));
     check(`§3e.2b a back-to-side jump in one reading is a step: the return on the side reading (${on && on.o}), ${R && on ? R.t - on.t : "?"}ms before the record's chest one (${R && R.o})`,
       !!on && !!R && on.o === -0.04 && R.o === 0.53 && R.t - on.t >= 250, JSON.stringify({ on, R }));
+  }
+  {
+    /* 17:25 (2026-10-05, "the back disappears too fast, in the middle"): the shoulder scale was learned 2x too wide, the back
+       read -0.71 at its deepest, and the projection took the next reading (-0.60) for one coming round past the deepest
+       point - the FRONT went out on a body still at ~200 degrees. A projection now needs the back seen DEEP (-0.85). */
+    const rec = PACE["b-1725"], R = recorded(rec), on = ret(replay(rec, {}));
+    check(`§3e.2c a back never seen deep is left to the side rule: the record sent the return at o=${R && R.o}; now at o=${on && on.o}`,
+      !!R && R.o === -0.6 && !!on && on.o >= -0.25 && on.t > R.t, JSON.stringify({ R, on }));
+  }
+  {
+    /* 18:21 / 18:22 (2026-10-05 evening): "the first time it vanished too fast, the second time it was perfect". 18:21's back
+       read -0.87 at its deepest; on the order's own scale -0.87 (150, on the way in) -> -0.84 (213, on the way out) was a
+       63-degree step at 285 deg/s, and the FRONT was scheduled at the back. Measured against the deepest the leg read
+       (THE DEEPEST IS THE BACK), the return goes out at the side - and 18:22, the perfect one, keeps its reading. */
+    const bad = PACE["p-1821"], good = PACE["g-1822"];
+    const Rb = recorded(bad), onB = ret(replay(bad, {})), Rg = recorded(good), onG = ret(replay(good, {}));
+    check(`§3e.2d 18:21: the return no longer goes out at the deepest back (record o=${Rb && Rb.o}) - now at o=${onB && onB.o}`,
+      !!Rb && Rb.o <= -0.8 && !!onB && onB.o > -0.5 && onB.t > Rb.t, JSON.stringify({ Rb, onB }));
+    check(`§3e.2e 18:22 (reported perfect): the same reading as the record (o=${Rg && Rg.o}), within 60ms`,
+      !!Rg && !!onG && onG.o === Rg.o && Math.abs(onG.t - Rg.t) <= 60, JSON.stringify({ Rg, onG }));
   }
   {
     /* Every outbound BACK is untouched: the projection only reads the BACK leg. */
@@ -574,6 +613,69 @@ console.log("\n── §4b the engine's pace: a slow engine's return goes out ea
   check("§4b.5 the return is never lost and no run swaps more", res.every((r) => r.on.front !== null && r.on.n <= r.off.n),
     JSON.stringify(res.filter((r) => !(r.on.front !== null && r.on.n <= r.off.n)).map((r) => [r.name, r.phase])));
   check("§4b.6 the outbound BACK is untouched (the same tick with and without the lead)", res.every((r) => r.on.back === r.off.back));
+}
+
+console.log("\n── §4c THE LANDING MODEL - where the back and the front land, slow to fast (2026-10-05) ──");
+{
+  /* "Make it work well and consistently." The thirteen recorded 360s x 4 tick phases through the real measurement and
+     engine, each played at 0.8x, 1x and 1.3x (1.3x is the user's own fast turn: a ~2.1s 360), on today's engine (lat
+     520ms). A swap sent at t lands on the body at t + (lat - 250ms) - the user's 05:55 and 06:09 clips read frame by
+     frame. Counted per speed: how long the back print sat on a chest past 300 degrees, front landings before 235 (the
+     front print on the back), and any session with more than one BACK and one FRONT (the shirt jumping). */
+  const clips = { ...POSES.clips, "s3.mp4 (reported)": S3.rows };
+  /* The delay a swap lands with: (ack - 350ms) - the user's 17:25 and 18:10 clips read frame by frame against their records
+     (acks 408-413ms, the reference on the body 0-100ms after the send); 430ms is that evening's typical ack. */
+  const LAT = 430, L = LAT - 350;
+  const model = (knobs, speed) => {
+    const r = { n: 0, chestMs: [], early: 0, flaps: 0, lands: [] };
+    for (const rows0 of Object.values(clips)) {
+      const rows = rows0.map((x) => [x[0] / speed, ...x.slice(1)]);
+      if (!rows.some((x) => x[1] !== null && x[1] <= -0.25)) continue;
+      const th = thetaOf(rows);
+      for (const phase of [0, 62, 125, 187]) {
+        const sw = roomRun(rows, { knobs, phase, lat: LAT });
+        r.n++;
+        const B = sw.find((x) => x.next === "back"), F = B && sw.find((x) => x.next === "front" && x.t > B.t);
+        if (sw.length > 2) r.flaps++;
+        if (!F) continue;
+        if (th(F.t + L) < 235) r.early++;
+        r.lands.push(th(F.t + L));
+        let t300 = null; for (let tt = B.t; tt <= F.t + L; tt += 10) if (th(tt) >= 300) { t300 = tt; break; }
+        r.chestMs.push(t300 === null ? 0 : Math.max(0, F.t + L - t300));
+      }
+    }
+    const sum = r.chestMs.reduce((x, y) => x + y, 0), sorted = [...r.chestMs].sort((x, y) => x - y);
+    const ls = [...r.lands].sort((x, y) => x - y);
+    return { n: r.n, chestTotal: sum, chestP90: sorted[Math.floor(sorted.length * 0.9)] || 0, early: r.early, flaps: r.flaps,
+      landMed: Math.round(ls[Math.floor(ls.length / 2)]), landP10: Math.round(ls[Math.floor(ls.length * 0.1)]) };
+  };
+  const now = { 0.8: model({}, 0.8), 1: model({}, 1), 1.3: model({}, 1.3) };
+  const was = { 1: model({ lead_project: "0" }, 1), 1.3: model({ lead_project: "0" }, 1.3) };
+  console.log(`        now:    0.8x ${JSON.stringify(now[0.8])}  1x ${JSON.stringify(now[1])}  1.3x ${JSON.stringify(now[1.3])}`);
+  console.log(`        before: 1x ${JSON.stringify(was[1])}  1.3x ${JSON.stringify(was[1.3])}`);
+  check(`§4c.1 slow and normal turns: the back print on a chest ~never (0.8x ${now[0.8].chestTotal}ms, 1x ${now[1].chestTotal}ms over ${now[1].n} turns)`,
+    now[0.8].chestTotal <= 60 && now[1].chestTotal <= 120);
+  check(`§4c.2 the user's fast turn (1.3x): rarely and briefly - p90 ${now[1.3].chestP90}ms, ${now[1.3].chestTotal}ms over ${now[1.3].n} turns (the 2026-10-04 rule: ${was[1.3].chestTotal}ms)`,
+    now[1.3].chestP90 <= 60 && now[1.3].chestTotal * 2 <= was[1.3].chestTotal);
+  check("§4c.3 never the front print on the back from it: a front landing before 235 at most once in 48, at any speed",
+    now[0.8].early <= 1 && now[1].early <= 1 && now[1.3].early <= 1, JSON.stringify(now));
+  check("§4c.4 the shirt never jumps: one BACK and one FRONT per turn, at every speed", now[0.8].flaps + now[1].flaps + now[1.3].flaps === 0, JSON.stringify(now));
+  /* "The back disappears too fast" (18:10): the front must not land while the back still shows - median at the side or just
+     past it, and nine turns in ten past 245, at every speed. */
+  check(`§4c.5 the back stays to the side: the front lands median ${now[0.8].landMed} / ${now[1].landMed} / ${now[1.3].landMed} degrees, p10 ${now[0.8].landP10} / ${now[1].landP10} / ${now[1.3].landP10}`,
+    /* p10 248: THE DEEPEST IS THE BACK moved the slow turns' tenth percentile 251 -> 249 (and normal 256 -> 259). */
+    [0.8, 1, 1.3].every((k) => now[k].landMed >= 265 && now[k].landMed <= 290 && now[k].landP10 >= 248), JSON.stringify(now));
+}
+
+console.log("\n── §4d the room's side of the 18:21 / 18:22 fixes ──");
+{
+  /* 18:21: the BACK waited 418ms behind a rotation re-drape (a full FRONT re-upload) fired by the turn's first 15 degrees. */
+  check("§4d.1 a rotation re-drape stands aside in AI Auto dual view (a lean or a volume change still re-drapes)",
+    /if \(step && step\.reason === "rotation" && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE\) \{\s*\n[^\n]*traceOrient\("redrape-skip"/.test(APP) &&
+    /traceOrient\("redrape", \{ reason: step && step\.reason \}\)/.test(APP));
+  /* 18:22: the camera went 9:16 -> 512x288 at go-live; the gate's baseline described another picture. */
+  check("§4d.2 a frame of another shape starts the shoulder baseline afresh, and drops the stale order",
+    /if \(_poseTwist\.aspect && Math\.abs\(_poseTwist\.aspect - aspect\) \/ _poseTwist\.aspect > 0\.02\) \{\s*\n\s*_poseTwist = makeTwistState\(\);\s*\n\s*_poseOrd = null; _poseOrdAt = 0;/.test(APP));
 }
 
 console.log("\n── §5 the wiring ──");

@@ -8228,6 +8228,7 @@ const TWIST_HIP_MIN = 0.7;          // hip width that must remain, as a share of
 const TWIST_READINGS = 2;           // consecutive readings before it counts
 const TWIST_BASELINE_MIN = 5;       // square-on readings learned before the rule may fire
 const TWIST_TORSO_BAND = [0.7, 1.4];   // torso height vs the learned one - a degenerate read is not a pose
+const BASELINE_OFF = [0.6, 1.6];       // a square-on reading this far from the learned width (two in a row) re-learns it
 const TWIST_ENABLED = (() => {
   try { return new URLSearchParams(location.search).get("twist") !== "0"; } catch (_) { return true; }
 })();
@@ -8235,8 +8236,9 @@ const TWIST_ENABLED = (() => {
 function makeTwistState() {
   return { sh0: 0, hip0: 0, th0: 0, n: 0, shMax: 0, streak: 0, active: false, at: 0, yawDeg: 0, shR: null, hipR: null };
 }
-/** Image-space torso widths of the primary subject, normalised by torso height, or null. */
-function poseTorsoWidths(result) {
+/** Image-space torso widths of the primary subject, normalised by torso height, or null. `aspect` (the frame's width over
+ *  its height) puts them in pixel proportions, so a frame-shape change does not read as a change of width. */
+function poseTorsoWidths(result, aspect = 1) {
   const sets = result && Array.isArray(result.landmarks) ? result.landmarks : null;
   const subject = sets && sets.length && typeof primaryPoseIndex === "function" ? primaryPoseIndex(sets) : (sets && sets.length ? 0 : -1);
   const lm = subject >= 0 ? sets[subject] : null;
@@ -8245,7 +8247,8 @@ function poseTorsoWidths(result) {
   const lh = lm[POSE_LANDMARK.LEFT_HIP], rh = lm[POSE_LANDMARK.RIGHT_HIP];
   const th = Math.abs((lh.y + rh.y) / 2 - (ls.y + rs.y) / 2);
   if (!(th > 1e-3)) return null;
-  return { sh: (ls.x - rs.x) / th, hip: (lh.x - rh.x) / th, th };
+  const k = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
+  return { sh: (ls.x - rs.x) * k / th, hip: (lh.x - rh.x) * k / th, th };
 }
 /** One reading into the state. Pure over (state, reading) - torso-twist drives it with literals.
  *  @param {{sh:number, hip:number, th:number}|null} w  poseTorsoWidths()
@@ -8257,10 +8260,24 @@ function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
   /* Learn the square-on widths from readings the shoulder ORDER already calls a side - facing or
      facing away, where both widths are at their full size - and a world yaw that agrees. */
   if (ash >= ORIENT_POSE_FACING_MARGIN && (worldYawAbs === null || worldYawAbs < 20)) {
-    const a = s.n ? 0.2 : 1;
-    s.sh0 = s.sh0 * (1 - a) + ash * a; s.hip0 = s.hip0 * (1 - a) + ahip * a; s.th0 = s.th0 * (1 - a) + w.th * a;
-    s.shMax = Math.max(s.shMax || 0, ash);   // the widest square-on reading - torsoOrder()'s scale before the baseline settles
-    s.n++;
+    /* THE BASELINE RE-LEARNS (2026-10-05) - "the back disappears too fast, in the middle". Two sessions that day carried
+       a square-on width 2x and 3-4x what the live loop then read (the presence gate learned it): the shoulder order read
+       0.5 to the lens and -0.71 at the back, and the engine took a reading at the back for one coming round. Two square-on
+       readings in a row outside BASELINE_OFF of it start the baseline afresh from the live ones. */
+    /* ...and the torso's HEIGHT (17:41 that day): the gate learned it with the shopper still walking back, ~2x the live one, so
+       every live reading fell outside TWIST_TORSO_BAND and the order went stale for 12s - through the whole turn. */
+    const off = s.n >= TWIST_BASELINE_MIN && s.sh0 > 0 && (ash < s.sh0 * BASELINE_OFF[0] || ash > s.sh0 * BASELINE_OFF[1] ||
+      (s.th0 > 0 && (w.th < s.th0 * TWIST_TORSO_BAND[0] || w.th > s.th0 * TWIST_TORSO_BAND[1])));
+    s.offStreak = off ? (s.offStreak || 0) + 1 : 0;
+    if (s.offStreak >= 2) { s.sh0 = 0; s.hip0 = 0; s.th0 = 0; s.n = 0; s.shMax = 0; s.offStreak = 0; s.relearned = (s.relearned || 0) + 1; }
+    /* An off reading waits for its pair rather than averaging in: drawn toward it, the baseline made the next one look
+       "on" and the pair never formed (18:22 that day re-learned only mid-turn). */
+    if (s.offStreak === 0) {
+      const a = s.n ? 0.2 : 1;
+      s.sh0 = s.sh0 * (1 - a) + ash * a; s.hip0 = s.hip0 * (1 - a) + ahip * a; s.th0 = s.th0 * (1 - a) + w.th * a;
+      s.shMax = Math.max(s.shMax || 0, ash);   // the widest square-on reading - torsoOrder()'s scale before the baseline settles
+      s.n++;
+    }
   }
   s.shR = s.sh0 ? ash / s.sh0 : null;
   s.hipR = s.hip0 ? ahip / s.hip0 : null;
@@ -8321,9 +8338,24 @@ let _poseOrd = null, _poseOrdAt = 0;
 /** The pose loop's hook: one inference in, the published |yaw| out (the world one unless a torso-only
  *  turn is being read). Logs and records the on/off edges. */
 function torsoTwistObserve(result, worldYawAbs, now) {
+  const aspect = typeof _poseAspect === "number" && _poseAspect > 0 ? _poseAspect : 1;
+  /* A FRAME OF ANOTHER SHAPE IS ANOTHER PICTURE (2026-10-05, 18:22): in a portrait room the camera opened 9:16 and turned
+     512x288 at go-live (the input throttle's constraints reach the shared source), so the gate's square-on width and torso
+     height described a different picture - the order read 0.43-0.57 to the lens until a re-learn mid-turn. The baseline
+     starts afresh on the first reading of a new shape; the order is back from the second. */
+  if (_poseTwist.aspect && Math.abs(_poseTwist.aspect - aspect) / _poseTwist.aspect > 0.02) {
+    _poseTwist = makeTwistState();
+    _poseOrd = null; _poseOrdAt = 0;
+    if (typeof traceOrient === "function") traceOrient("baseline-relearn", { why: "aspect", to: Math.round(aspect * 100) / 100 });
+  }
+  _poseTwist.aspect = aspect;
   const was = _poseTwist.active;
-  const widths = poseTorsoWidths(result);
+  const relearnedBefore = _poseTwist.relearned || 0;
+  const widths = poseTorsoWidths(result, aspect);
   const on = torsoTwistStep(_poseTwist, widths, worldYawAbs, now);
+  if ((_poseTwist.relearned || 0) !== relearnedBefore && typeof traceOrient === "function") {
+    traceOrient("baseline-relearn", { sh: widths ? Math.round(Math.abs(widths.sh) * 100) / 100 : null });
+  }
   const ord = torsoOrder(_poseTwist, widths);
   if (ord !== null) { _poseOrd = ord; _poseOrdAt = now; }
   if (on !== was) {
@@ -17471,9 +17503,18 @@ function makeBodyTopologyTracker(opts = {}) {
    the same value - so every detectForVideo() in this file goes through here. It costs one
    comparison and removes an entire class of "Packet timestamp mismatch" session failure. */
 let _lastPoseTimestamp = 0;
+/* The frame's width over its height at the last inference - torsoTwistObserve() reads the shoulder widths in PIXEL proportions
+   with it (THE BASELINE RE-LEARNS), so a camera that changes its aspect between the presence gate and the live loop does not
+   change the shopper's square-on width. A TEST record names each change (`pose-aspect`). */
+let _poseAspect = null;
 function detectPoseFrame(detector, video) {
   const ts = Math.max(performance.now(), _lastPoseTimestamp + 1);
   _lastPoseTimestamp = ts;
+  const aspect = video && video.videoWidth > 0 && video.videoHeight > 0 ? video.videoWidth / video.videoHeight : null;
+  if (aspect && (!_poseAspect || Math.abs(aspect - _poseAspect) > 0.01)) {
+    if (_poseAspect && typeof traceOrient === "function") traceOrient("pose-aspect", { from: Math.round(_poseAspect * 100) / 100, to: Math.round(aspect * 100) / 100, w: video.videoWidth, h: video.videoHeight });
+    _poseAspect = aspect;
+  }
   /* The whole frame, exactly as always - unless the whole frame has stopped finding a body, in
      which case a window around the shopper (see POSE FOCUS WINDOW below). One call either way. */
   const win = typeof poseFocusWindow === "function" ? poseFocusWindow(video) : null;
@@ -17795,8 +17836,11 @@ let presenceWatcherTimer = null;
    RUNS the session's inference itself, right before it samples (waiting at most POSE_SYNC_WAIT_MS), and the loop's own
    timer only covers what the tick does not (no watcher, a single-view garment) - the same ~4 inferences a second, now
    always fresh. ?pose_sync=0 is the free-running loop. */
+/* OFF BY DEFAULT since the evening it shipped ("it's laggy"): with the inference run inside the tick, the room's camera presented
+   24-26 fps in all three sessions of 2026-10-05 against 28-30 before it - one longer main-thread block per tick, a dropped frame
+   each, four times a second. ?pose_sync=1 turns it on for an A/B; the return's projection corrects the reading's age anyway. */
 const POSE_SYNC = (() => {
-  try { return new URLSearchParams(location.search).get("pose_sync") !== "0"; } catch (_) { return true; }
+  try { return new URLSearchParams(location.search).get("pose_sync") === "1"; } catch (_) { return false; }
 })();
 const POSE_SYNC_WAIT_MS = 120;
 let _poseInferNow = null;   // the live loop's inference, for the tick to run (startPresenceWatcher)
@@ -18091,6 +18135,16 @@ let topologyReconditionInFlight = false;
 async function reconditionForTopology(step) {
   if (topologyReconditionInFlight || !isLive() || !isGarmentApplied) return;
   if (_orientHoldActive) return;
+  /* A ROTATION IN AI AUTO IS THE TURN'S (2026-10-05). The 18:21 TEST record: the BACK waited 418ms on the wire behind a
+     write already in flight at the turn's first 15 degrees - this re-drape, a full FRONT re-upload fired by the rotation
+     the turn itself is made of - and the back print showed for a fraction of the back view. With both sides on the wire,
+     the front/back swap re-conditions the rotation anyway; a lean or a change of volume still re-drapes. typeof: the
+     orientation globals are not in every suite's sandbox. */
+  if (step && step.reason === "rotation" && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE) {
+    if (typeof traceOrient === "function") traceOrient("redrape-skip", { reason: "rotation" });
+    return;
+  }
+  if (typeof traceOrient === "function") traceOrient("redrape", { reason: step && step.reason });
   /* THE SHARED MUTEX, and this is the send site that made hoisting it urgent: this one
      forces a full image re-upload, so stacking it on an in-flight write is the most
      expensive collision available.

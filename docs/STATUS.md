@@ -301,7 +301,34 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
   back-to-side jump in one reading counts as a step (`c781818`, Worker `32f73241`) - a real
   ~300 deg/s session had its return held for the chest by the snap filter. Real sessions this
   round: 3 (budget 50). One hit a congested uplink (image acks ~1.25s, the orientation link
-  1.1s) - nothing to read from it. **Next: your measurement, fast and slow.**
+  1.1s) - nothing to read from it.
+- **2026-10-05 - every decision on a fresh pose reading (`528888a`, §2.31)** and **the session
+  cap at the edge (`2839d9c`, Worker `83081607`, §2.32)**. Verified live: a fast real session
+  (1.2x) read every tick 2-4ms fresh (was 4-215ms), BACK at ~60 degrees, FRONT by the
+  projection at ~220 with a scheduled send - the render showed the back print on the back and
+  the front print back on the chest, no back on the chest; a normal session after the cap ran
+  15.6s end to end. One TEST session on a frozen machine stayed open ~5 minutes before the cap
+  existed.
+- **2026-10-05 - consistency (`300257f`, Worker `136acf18`, CLAUDE.md §2.30):** the landing model
+  (13 recorded 360s x 4 phases, slow/normal/fast, the real measurement and engine) is now a
+  test: the back print on a chest past 300 degrees 0ms / 20ms / 606ms (p90 42ms) over 48 turns at
+  0.8x / 1x / 1.3x (was 730 / 1,330 / 1,960ms), never a third swap. The projection fires from -0.9
+  (the order saturates near the back). A browser sweep in the twin could not run: the machine was
+  on battery at load 52.
+- **2026-10-05 17:25 report - "front perfect, the back disappears too fast" (§2.33):** a wrong
+  shoulder scale (2x / 3-4x) made a reading at the back look like one coming round. The scale
+  now re-learns from live readings and is aspect-proof; the projection needs a deep back.
+  17:23 also had a mirrored skeleton through the whole back view - not fixed.
+- **17:41 report - "the back on the front a little, and laggy":** the torso height learned in the
+  gate (~2x) kept the order stale through the turn - it re-learns now too; and the tick-driven
+  pose inference (§2.31) cost the camera 4-6 fps - off by default again.
+- **18:10 report - "the back disappears too fast" (§2.34):** the front landed 0-100ms after the
+  send (fast acks that evening), so the projection's lead and aim were recalibrated: the model
+  lands the front median 270 at every speed, p10 251+.
+- **18:21 / 18:22 report - "make the perfect one consistent" (§2.35):** the bad one had a rotation
+  re-drape delaying the BACK 418ms, a phantom 63-degree step at the bottom of the back, and a
+  camera that changed shape at go-live - all three fixed; replayed, the bad one now sends the
+  front at the side and the good one keeps its timing. **Next: your measurement.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
