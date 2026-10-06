@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · branch `claude/project-thread-cr4uyn`: size-guide capture Phase 2 (ready for your review)_
+_Last updated: 2026-10-06 · main: THE SWAP FLOW + THE LANDING, PROJECTED · branch `claude/project-thread-cr4uyn`: size-guide capture Phase 2, [PR #1](https://github.com/pearInd/Pear/pull/1) open for your review_
 
 ## At a glance
 
@@ -12,7 +12,7 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
-| Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch, **waiting on your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
+| Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch, **[PR #1](https://github.com/pearInd/Pear/pull/1) waiting on your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
@@ -35,7 +35,7 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
 - [ ] **Re-save adidas** when it answers you: `node scan-store.js --size-charts --save https://www.adidas.co.il`
       (from `scanner/`). It refused your machine in the 2026-10-03 sweep (HTTP 403 on the static and the
       browser stage); its 2 charts from the 2026-10-03 capture are still live.
-- [ ] **Review the Phase 2 PR** (`claude/project-thread-cr4uyn` → main) — the capture CLI. Nothing merges
+- [ ] **Review the Phase 2 PR** ([PR #1](https://github.com/pearInd/Pear/pull/1), `claude/project-thread-cr4uyn` → main) — the capture CLI. Nothing merges
       or saves without you.
 - [ ] **Decide which sweep charts to save** (none saved; dry runs only, see *Phase 2 coverage*): delta's 4
       store-wide charts look ready; hoodies (men's tops with only L/XXL), twentyfourseven (bottoms
@@ -165,8 +165,8 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
 - **Open decisions:** none on the code shape - server-side (`lib/sizing.js`) since the `hide/edge`
   merge (CLAUDE.md §2.27).
 
-### Phase 2 — capture any store (branch `claude/project-thread-cr4uyn`, waiting on your review)
-- **Stage:** done on the branch, waiting on your review. Not on main; nothing saved by it.
+### Phase 2 — capture any store (branch `claude/project-thread-cr4uyn`, [PR #1](https://github.com/pearInd/Pear/pull/1))
+- **Stage:** done on the branch, PR #1 open since 2026-10-06, waiting on your review. Not on main; nothing saved by it.
 - **Commands:** `npm run capture -- <store-url> [--dry-run]` (static → browser → image OCR,
   summary, y/n, save, then reads `GET /api/store-size-chart` back); `npm run import:chart --
   --host <h> (--url|--html|--image) <src> [--gender/--age/--type] [--only n]` (manual, store-wide);
@@ -190,11 +190,13 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
   store that refused every sampled product page (under the 3 of a polite stop) was re-asked by the
   browser; three guessed guide paths answering 403 marked a store that served every product page
   BLOCKED; `--only=1` (the equals form) was ignored and imported every chart. Also: after a
-  refusal, images on the store's own host are no longer fetched.
-- **Verified 2026-10-05 (after `0630a23`):** unit suite green (4,014 checks, real Chromium for the
-  browser tests); `npm run mutation:capture` 21/21 killed with Chromium (without Chromium the
-  CSS-visibility one is reported SKIPPED); `trace:prompt --json` byte-identical to main (`528888a`);
-  `qa:visual` 40/40.
+  refusal, images on the store's own host are no longer fetched. Main `0818688` merged in `d86bdc5`
+  (no conflicts); branch pushed and PR #1 opened 2026-10-06.
+- **Verified 2026-10-06 (after merging main `0818688`):** unit suite green (4,035 checks, real
+  Chromium for the browser tests); `npm run mutation:capture` 21/21 killed with Chromium (without
+  Chromium the CSS-visibility one is reported SKIPPED); `trace:prompt --json` byte-identical to main,
+  `lib/prompts.js` and `fitting-room/config.js` byte-identical to main; `qa:visual` 40/40 (and again
+  in the pre-push hook).
 - **Coverage — sweep from your machine, 2026-10-03, 11 stores, dry runs (all exit 0):**
 
   | Store | Result |
@@ -359,7 +361,7 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
 ## Other branches (not merged)
 | Branch | Ahead / behind main | Note |
 |---|---|---|
-| `claude/project-thread-cr4uyn` | Phase 2 capture | size-guide capture CLI - your review |
+| `claude/project-thread-cr4uyn` | Phase 2 capture, main `0818688` merged in | size-guide capture CLI - [PR #1](https://github.com/pearInd/Pear/pull/1), your review |
 | `size-capture-phase2-local` | — | the 2026-10-03 WIP as pushed from your machine; superseded by the branch above |
 | `hide/edge` | merged into main 2026-10-04 | the hidden build - main now |
 | `hide/main-v2` | superseded by `hide/edge` | not to be merged |
