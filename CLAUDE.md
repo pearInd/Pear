@@ -1162,6 +1162,10 @@ their records, the first had three causes the second did not:
   re-drape at all in AI Auto dual view (two of the three, at 5 and 4 output fps, carried a volume re-drape - a full
   reference upload - inside the window); a single-view garment re-drapes as before. The output stalls themselves (one
   2.1s) were the engine's, with nothing of ours on the wire.
+  Two of the three fired AT ONCE (the first reading past the deepest back already projected past the aim), so the aim did
+  not move them: every projected return now waits at least `RETURN_MIN_DELAY_MS` (50ms, ~8 degrees) - the model moves 1-2
+  degrees at p10 (261 / 262 / 268), nothing else. A smaller lead (`LEAD_BASE_MS` 400) was tried and rejected: the back on a
+  chest 116 / 290 / 342ms in the model, and the 05:55 / 18:22 returns a reading later.
 
 ## 3. Cross-file lockstep
 

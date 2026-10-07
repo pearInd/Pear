@@ -413,7 +413,7 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
        (0.53, 267ms later) and the back print rode it ~0.4s. A jump from the back that lands short of the chest is a turn. */
     const rec = PACE["x-0648"], R = recorded(rec), on = ret(replay(rec, {}));
     check(`§3e.2b a back-to-side jump in one reading is a step: the return on the side reading (${on && on.o}), ${R && on ? R.t - on.t : "?"}ms before the record's chest one (${R && R.o})`,
-      !!on && !!R && on.o === -0.04 && R.o === 0.53 && R.t - on.t >= 250, JSON.stringify({ on, R }));
+      !!on && !!R && on.o === -0.04 && R.o === 0.53 && R.t - on.t >= 200, JSON.stringify({ on, R }));
   }
   {
     /* 17:25 (2026-10-05, "the back disappears too fast, in the middle"): the shoulder scale was learned 2x too wide, the back
