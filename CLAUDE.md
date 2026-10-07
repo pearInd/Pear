@@ -1156,6 +1156,12 @@ their records, the first had three causes the second did not:
   before its pair forms (`torsoTwistStep`). `return-side` §4d.
 - Landing model (§4c, measured delay): the front lands median 268 / 270 / 276 degrees at 0.8x / 1x / 1.3x, p10
   249 / 259 / 263; the back on a chest 0 / 0 / 239ms over 48 turns.
+- **The next night - "almost perfect, it goes a little before; add a tiny bit, and no stutters at all":** three sessions sent
+  the front at -0.16 / -0.28 / -0.52 (+236ms) - 10-20 degrees before the side. `RETURN_TARGET` 280 -> 290: the model lands it
+  median 276 / 275 / 278, p10 259 / 261 / 267, the back on a chest 0 / 110 / 240ms over 48 turns. And no body-contour
+  re-drape at all in AI Auto dual view (two of the three, at 5 and 4 output fps, carried a volume re-drape - a full
+  reference upload - inside the window); a single-view garment re-drapes as before. The output stalls themselves (one
+  2.1s) were the engine's, with nothing of ours on the wire.
 
 ## 3. Cross-file lockstep
 

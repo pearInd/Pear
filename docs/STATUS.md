@@ -277,7 +277,10 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
 - **18:21 / 18:22 report - "make the perfect one consistent" (§2.35):** the bad one had a rotation
   re-drape delaying the BACK 418ms, a phantom 63-degree step at the bottom of the back, and a
   camera that changed shape at go-live - all three fixed; replayed, the bad one now sends the
-  front at the side and the good one keeps its timing. **Next: your measurement.**
+  front at the side and the good one keeps its timing.
+- **Three sessions the next night - "almost perfect, a tiny bit later; no stutters":** the return's
+  aim 280 -> 290 (model median 275-278, p10 259+), and no re-drape inside the window in AI Auto.
+  **Next: your measurement.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).

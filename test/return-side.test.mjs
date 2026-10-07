@@ -397,7 +397,8 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
     const rec = PACE["m2-0555"], R = recorded(rec), on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
     check(`§3e.2 05:55 (fast): the projection sends the return at ${on && on.t}ms (o=${on && on.o}) - the 2026-10-04 rule ${off && off.t}ms, the record ${R && R.t}ms`,
       /* 2519ms since THE DEEPEST IS THE BACK (2026-10-05 evening; 2379 before it) - the clip put the right moment near 2530. */
-      !!on && !!off && !!R && off.t - on.t >= 250 && R.t - on.t >= 250 && on.o >= -0.85, JSON.stringify({ on, off, R }));
+      /* 2588ms since RETURN_TARGET 290 (2026-10-05 night, "a tiny bit more"). */
+      !!on && !!off && !!R && off.t - on.t >= 200 && R.t - on.t >= 200 && on.o >= -0.85, JSON.stringify({ on, off, R }));
   }
   {
     const rec = PACE["s-0611"], on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
@@ -431,8 +432,10 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
     const Rb = recorded(bad), onB = ret(replay(bad, {})), Rg = recorded(good), onG = ret(replay(good, {}));
     check(`§3e.2d 18:21: the return no longer goes out at the deepest back (record o=${Rb && Rb.o}) - now at o=${onB && onB.o}`,
       !!Rb && Rb.o <= -0.8 && !!onB && onB.o > -0.5 && onB.t > Rb.t, JSON.stringify({ Rb, onB }));
-    check(`§3e.2e 18:22 (reported perfect): the same reading as the record (o=${Rg && Rg.o}), within 60ms`,
-      !!Rg && !!onG && onG.o === Rg.o && Math.abs(onG.t - Rg.t) <= 60, JSON.stringify({ Rg, onG }));
+    /* "Almost perfect, it goes a little before - add a tiny bit" (three sessions, 2026-10-05 night): RETURN_TARGET 290 sends
+       18:22's return on the same reading, 85ms later. */
+    check(`§3e.2e 18:22 (reported perfect): the same reading as the record (o=${Rg && Rg.o}), a little later (${onG && Rg ? onG.t - Rg.t : "?"}ms)`,
+      !!Rg && !!onG && onG.o === Rg.o && onG.t - Rg.t >= 0 && onG.t - Rg.t <= 150, JSON.stringify({ Rg, onG }));
   }
   {
     /* Every outbound BACK is untouched: the projection only reads the BACK leg. */
@@ -670,8 +673,8 @@ console.log("\n── §4c THE LANDING MODEL - where the back and the front land
 console.log("\n── §4d the room's side of the 18:21 / 18:22 fixes ──");
 {
   /* 18:21: the BACK waited 418ms behind a rotation re-drape (a full FRONT re-upload) fired by the turn's first 15 degrees. */
-  check("§4d.1 a rotation re-drape stands aside in AI Auto dual view (a lean or a volume change still re-drapes)",
-    /if \(step && step\.reason === "rotation" && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE\) \{\s*\n[^\n]*traceOrient\("redrape-skip"/.test(APP) &&
+  check("§4d.1 no re-drape in AI Auto dual view - the swaps re-condition (a single-view garment re-drapes as before)",
+    /if \(step && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE\) \{\s*\n[^\n]*traceOrient\("redrape-skip"/.test(APP) &&
     /traceOrient\("redrape", \{ reason: step && step\.reason \}\)/.test(APP));
   /* 18:22: the camera went 9:16 -> 512x288 at go-live; the gate's baseline described another picture. */
   check("§4d.2 a frame of another shape starts the shoulder baseline afresh, and drops the stale order",
