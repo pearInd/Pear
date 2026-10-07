@@ -1261,6 +1261,11 @@ PEAR_SERVE_DIST=1 npm start   # run the server the way production does, after np
 npm run sync:size-chart-parser            # regenerate scanner/size-chart-parser.js (widget token block + scanner/size-chart-reader.src.js)
 npm run build:edge-assets                 # the pose model's scrambled binaries for the edge + lib/edge-assets.json (§2.24); then wrangler deploy
 npm run scan:size-charts -- <store-url>   # size-guide DRY RUN: coverage report, no keys, writes nothing
+npm run capture -- <store-url> [--dry-run] # Phase 2 one-command capture: static -> browser -> image OCR, y/n, save, live check
+npm run import:chart -- --host <h> (--url|--html|--image) <src>   # manual import (blocked stores, saved pages, screenshots)
+npm run mutation:capture                  # breaks each capture rule in a scratch copy; every mutation must go red
+#   how-to for a new store: docs/ADDING-A-STORE.md. Every capture path feeds extractAllSizeCharts()
+#   (the shared parser, scanner/size-chart-parser.js) -> buildRecords() -> saveSizeChartRecords(); none has its own parser.
 node scanner/scan-store.js --size-charts --save <store-url>   # capture into store_size_charts (needs v15 + Supabase env)
 ```
 

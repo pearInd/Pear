@@ -39,6 +39,22 @@ import { createHash } from "node:crypto";
 import { createSizeChartParser, SHARED_BLOCK_HASH } from "./size-chart-parser.js";
 
 export const PARSER_VERSION = 1;
+
+/* CAPTURE METHODS (the `source` column). Phase 1: inline_table, product_description,
+   linked_page. Phase 2 (scanner/capture.js): browser_page (a chart in the RENDERED
+   product page), browser_modal (behind a clicked size-guide trigger or tab),
+   browser_network (inside a JSON/HTML response the page fetched), image_ocr (an image
+   chart read by Gemini), manual_url / manual_html / manual_image (scanner/import-chart.js).
+   Every one of them reaches buildRecords() as parser rows from extractAllSizeCharts() -
+   no method has its own parser or its own validation.
+
+   STORE-WIDE vs PRODUCT-SCOPED is unchanged: a chart seen on 2+ product pages, or found
+   on a guide page / handed over manually for the whole store, is the store's chart
+   (product_key ''); seen once on one PDP it stays product-scoped. */
+export const STORE_WIDE_SOURCES = new Set(["linked_page", "manual_url", "manual_html", "manual_image"]);
+/* A chart READ BY A MODEL is weaker evidence than one read off markup: an OCR digit
+   error inside the clamps is still plausible. */
+export const SOURCE_CONFIDENCE_PENALTY = { image_ocr: 0.2, manual_image: 0.1 };
 const FETCH_USER_AGENT = "Mozilla/5.0 (compatible; PEAR-StoreScanner/1.0)";
 const PRODUCT_LINK_PATTERNS = ["/products/", "/product/", "/item/", "/p/", "/shop/"];
 const MAX_GUIDE_PAGES = 6;
@@ -232,11 +248,40 @@ const PURE = createSizeChartParser(null);
 const isGridMarkup = (el) => el.tagName === "TABLE" || (el.getAttribute && el.getAttribute("role") === "table") ||
   !!(el.querySelector && el.querySelector('table,[role="table"]'));
 
-export function tableContextText(table) {
+/* `boundary` (optional, a CSS selector): stop climbing at the GUIDE'S OWN CONTAINER - the
+   dialog / drawer that holds it. The browser fallback passes the modal selector - a size
+   guide opened in a dialog over a product page must not read the PAGE's <h1> ("Slim Fit
+   Jeans") as its own heading just because the dialog was appended next to it. Static
+   callers pass none, so Phase 1 is unchanged.
+   WHICH ancestor: the first cut stopped at the FIRST match, and the selector's
+   [class*="modal"] / [class*="drawer"] match the inner wrappers too - Bootstrap's
+   .modal > .modal-dialog > .modal-content > (.modal-header h5 "Women's dresses size
+   guide", .modal-body table) stopped at .modal-body, never read its header sibling, and
+   stored a dress chart as gender-unknown "tops" off its columns (a Shopify .drawer >
+   .drawer__header / .drawer__content did the same to "Men's jeans"). Now: the closest
+   real dialog ([role=dialog], [aria-modal], <dialog>) when there is one, else the
+   OUTERMOST matching wrapper - but never <body>/<html> (Bootstrap puts "modal-open" on
+   <body> while a modal shows, which matches too) and never past an ancestor that holds the
+   page itself (its <main>, or an <h1> outside the guide). The first match is always
+   kept, so this can only widen the read inside the guide, never drop the stop. */
+function guideContainerOf(table, boundary) {
+  if (!boundary || !table.closest) return null;
+  const dialog = table.closest("[role=dialog],[aria-modal=true],dialog");
+  if (dialog && dialog.matches(boundary)) return dialog;
+  let stop = null;
+  for (let a = table.parentElement, d = 0; a && d < 6; a = a.parentElement, d++) {
+    if (stop && (a.tagName === "BODY" || a.tagName === "HTML" || a.querySelector("main,[role=main]") ||
+      (a.querySelector("h1") && !stop.querySelector("h1")))) break;
+    if (a.matches && a.matches(boundary)) stop = a;
+  }
+  return stop;
+}
+export function tableContextText(table, boundary = null) {
   const parts = [];
   try {
     const cap = table.querySelector("caption");
     if (cap) parts.push(shortText(cap));
+    const stopAt = guideContainerOf(table, boundary);
     let node = table, depth = 0;
     while (node && node.nodeType === 1 && depth < 6) {
       const id = node.getAttribute ? PURE.sizeChartContextClean(node.getAttribute("id") || "") : "";
@@ -250,8 +295,10 @@ export function tableContextText(table) {
           if (el) parts.push(shortText(el));
         }
       }
+      /* At the boundary itself: its own labels count, its SIBLINGS are the page's. */
+      const atBoundary = !!stopAt && node === stopAt;
       /* The nearest preceding heading-like siblings - "Women" above the women's table. */
-      let sib = node.previousElementSibling, seen = 0;
+      let sib = atBoundary ? null : node.previousElementSibling, seen = 0;
       while (sib && seen < 4) {
         /* The previous chart's territory: a sibling that IS or CONTAINS a table carries
            another chart's heading ("Men's tops" above the men's section must never label
@@ -264,13 +311,14 @@ export function tableContextText(table) {
         }
         sib = sib.previousElementSibling; seen++;
       }
+      if (atBoundary) break;
       node = node.parentElement; depth++;
     }
   } catch { /* context is best-effort; a missing label is "unknown", never a throw */ }
   return parts.filter(Boolean).join(" | ");
 }
 
-function pageContextText(doc, url) {
+export function pageContextText(doc, url) {
   const bits = [];
   try {
     bits.push(doc.title || "");
@@ -300,7 +348,7 @@ function pageContextText(doc, url) {
    shared parser reads both natively now, so the widget gets the same fixes. Each
    chart's labels are read from its `anchor` - for a collapsed toggle pair, the
    first-rendered grid, the one directly under the section heading. */
-export function extractAllSizeCharts(doc, url, referrer = null) {
+export function extractAllSizeCharts(doc, url, referrer = null, { contextBoundary = null } = {}) {
   const parser = createSizeChartParser(doc);
   const pageText = pageContextText(doc, url);
   const out = [];
@@ -315,7 +363,7 @@ export function extractAllSizeCharts(doc, url, referrer = null) {
     const measured = rows.filter((r) =>
       ["Chest", "Waist", "Hips", "Legs"].some((k) => typeof r["min" + k] === "number"));
     if (measured.length < 2) continue;
-    const localText = tableContextText(anchor);
+    const localText = tableContextText(anchor, contextBoundary);
     out.push({
       rows: measured,
       localText,
@@ -662,6 +710,10 @@ export async function discoverSizeCharts(storeUrl, {
       js_app_detected: { apps: [], triggers_without_link: 0 },
     },
     blocked: { count: 0, examples: [] },
+    /* polite_stop: the POLITE STOP below fired - the store began refusing mid-run.
+       refused_urls: every product/guide URL that answered a refusal. capture.js reads both:
+       a store that said no is never re-asked by the browser stage. */
+    polite_stop: false, refused_urls: [],
     outcome: "none_found", charts: [], conflicts: [], errors: [],
   };
   /* Every fetch goes through this, so a bot challenge is counted wherever it appears
@@ -686,7 +738,7 @@ export async function discoverSizeCharts(storeUrl, {
        requests) - the store is up, we are refused. Anything else is unreachable. */
     report.outcome = report.blocked.count || home.status === 403 || home.status === 429
       ? "blocked_by_bot_protection" : "unreachable";
-    return { report, records: [] };
+    return { report, records: [], found: [], products: [], images: [], imagePages: {} };
   }
   const platform = detectPlatform(home.text);
   const isShopify = platform === "shopify";
@@ -697,7 +749,35 @@ export async function discoverSizeCharts(storeUrl, {
   /* guide URL -> the page context of every PDP that links to it (referrerAudience). */
   const guideLinks = new Map(), images = new Set(), apps = new Set();
   let triggers = 0;
+  /* WHERE each image hit was seen: image URL -> the PDP URLs it appeared on, with ""
+     for a guide page / a PDF or image the PDP linked as its guide (store-wide evidence).
+     The flat `images` list lost it, so capture.js scoped every static image store-wide -
+     a chart seen on ONE product page became the store's chart, against the STORE-WIDE vs
+     PRODUCT-SCOPED rule above. capture.js reads it as `imagePages`. */
+  const imagePages = new Map();
+  const noteImage = (url, page) => {
+    images.add(url);
+    if (!imagePages.has(url)) imagePages.set(url, new Set());
+    imagePages.get(url).add(page);
+  };
 
+  /* POLITE STOP: three refusals in a row (403/429/a challenge) is the store saying no.
+     It stops every further REQUEST - the rest of the product pages AND the guide pages
+     below (the first cut only left the product loop, then asked the six well-known guide
+     paths anyway, under a report that said "not asking for more pages"). It does not stop
+     reading what is already downloaded: a Shopify product's body_html came with the one
+     products.json request, and parsing it asks the store for nothing (the first cut's
+     `break` skipped it, and lost charts Phase 1 used to capture). */
+  let refusedInARow = 0, politeStop = false;
+  const isRefusal = (r) => /bot-protection/.test(r.error || "") || r.status === 403 || r.status === 429;
+  const noteRefusal = (refused, url) => {
+    if (refused && report.refused_urls.length < 50) report.refused_urls.push(url);
+    refusedInARow = refused ? refusedInARow + 1 : 0;
+    if (refusedInARow >= 3) {
+      report.errors.push(`stopped after ${refusedInARow} refusals in a row - not asking for more pages`);
+      politeStop = report.polite_stop = true;
+    }
+  };
   for (const p of products) {
     if (p.bodyHtml) {
       report.paths.product_description.products_checked++;
@@ -709,13 +789,28 @@ export async function discoverSizeCharts(storeUrl, {
         found.push({ chart: c, source: "product_description", sourceUrl: p.url, productUrl: p.url });
       }
     }
+    /* Stopped: no more requests - but the body_html above was still read. */
+    if (politeStop) continue;
     await pause();
     const r = await fetchText(p.url).catch((e) => ({ ok: false, status: 0, text: "", error: e.message }));
     if (!r.ok || !r.text) {
       report.pages_failed++;
       if (report.errors.length < 10) report.errors.push(`${p.url}: ${r.error || "HTTP " + r.status}`);
+      /* Three refusals in a row: the POLITE STOP above. Asking the other nine product
+         pages anyway is exactly the pattern bot management escalates on, and cannot
+         change the answer. */
+      const refused = isRefusal(r);
+      /* A flat 403/429 on a public product page is the same refusal as a challenge page
+         (which the fetch wrapper already counts) - count it, or a store that refuses
+         every PDP reads as "none_found", a false claim about the store. */
+      if (refused && !/bot-protection/.test(r.error || "")) {
+        report.blocked.count++;
+        if (report.blocked.examples.length < 3) report.blocked.examples.push(p.url + " (HTTP " + r.status + ")");
+      }
+      noteRefusal(refused, p.url);
       continue;
     }
+    refusedInARow = 0;
     report.pages_fetched++;
     report.paths.inline_table.pages_checked++;
     const doc = new JSDOMCtor(r.text, { url: r.url || p.url }).window.document;
@@ -728,7 +823,7 @@ export async function discoverSizeCharts(storeUrl, {
       if (!guideLinks.has(l)) guideLinks.set(l, []);
       guideLinks.get(l).push(pdpContext);
     }
-    sig.images.forEach((i) => images.add(i));
+    sig.images.forEach((i) => noteImage(i, p.url));
     sig.apps.forEach((a) => apps.add(a));
     triggers += sig.triggers;
   }
@@ -736,18 +831,37 @@ export async function discoverSizeCharts(storeUrl, {
   /* Linked guide pages first, then the well-known paths nobody linked. */
   const guideUrls = [...guideLinks.keys()];
   report.paths.linked_page.links_found = guideUrls.length;
+  const guessed = new Set();
   if (isShopify || !guideUrls.length) {
     for (const path of WELL_KNOWN_GUIDE_PATHS) {
       const u = baseUrl + path;
-      if (!guideUrls.includes(u)) guideUrls.push(u);
+      if (!guideUrls.includes(u)) { guideUrls.push(u); guessed.add(u); }
     }
   }
+  let guessRefusedInARow = 0, guessStop = false;
   for (const gUrl of guideUrls.slice(0, MAX_GUIDE_PAGES + (guideLinks.size ? 0 : WELL_KNOWN_GUIDE_PATHS.length))) {
-    if (/\.pdf(?:$|[?#])/i.test(gUrl)) { images.add(gUrl); continue; }
+    if (/\.pdf(?:$|[?#])/i.test(gUrl)) { noteImage(gUrl, ""); continue; }
+    /* The POLITE STOP holds here too, and three refused LINKED guide pages in a row - the
+       store's own URLs - trigger it (a 404 is an answer, not a refusal: it resets the count).
+       A GUESSED path (a well-known one nobody linked) refusing is not the store refusing us:
+       hosts and WAFs answer 403 to unknown paths on stores that served every product page.
+       Three refused guesses in a row stop the guessing, never the store - the first cut
+       counted them, and a store that had served every PDP was reported BLOCKED with the
+       browser never run. */
+    if (politeStop || (guessStop && guessed.has(gUrl))) continue;
     await pause();
     const r = unwrapHtmlEnvelope(await fetchText(gUrl).catch((e) => ({ ok: false, status: 0, text: "", error: e.message })));
-    if (!r.ok) continue;
-    if (/pdf|image\//i.test(r.contentType || "")) { images.add(gUrl); continue; }
+    if (!r.ok) {
+      if (!guessed.has(gUrl)) { noteRefusal(isRefusal(r), gUrl); continue; }
+      guessRefusedInARow = isRefusal(r) ? guessRefusedInARow + 1 : 0;
+      if (guessRefusedInARow >= 3 && !guessStop) {
+        guessStop = true;
+        report.errors.push(`${guessRefusedInARow} guessed guide paths refused in a row - not guessing more (not counted as the store refusing)`);
+      }
+      continue;
+    }
+    refusedInARow = 0; guessRefusedInARow = 0;   // the store answered - neither count runs on
+    if (/pdf|image\//i.test(r.contentType || "")) { noteImage(gUrl, ""); continue; }
     if (!r.text) continue;
     if (isHomeEcho(r, home, gUrl)) { report.paths.linked_page.home_echo++; continue; }
     report.paths.linked_page.pages_fetched++;
@@ -759,7 +873,7 @@ export async function discoverSizeCharts(storeUrl, {
     }
     for (const c of charts) found.push({ chart: c, source: "linked_page", sourceUrl: gUrl, productUrl: "" });
     const sig = scanPageSignals(doc, r.url || gUrl, baseUrl, createSizeChartParser(doc));
-    sig.images.forEach((i) => images.add(i));
+    sig.images.forEach((i) => noteImage(i, ""));
     sig.apps.forEach((a) => apps.add(a));
   }
 
@@ -780,7 +894,12 @@ export async function discoverSizeCharts(storeUrl, {
   else if (apps.size || triggers) report.outcome = "js_app_detected";
   else if (blockedHidAnswer) report.outcome = "blocked_by_bot_protection";
   else report.outcome = "none_found";
-  return { report, records };
+  /* `found`, `products`, `images` and `imagePages` are the raw evidence, for capture.js:
+     the browser and image stages add to the SAME found list and re-run buildRecords(), so
+     every capture method ends in one validation and one save path. `imagePages` is a
+     plain object { imageUrl: [pageUrl, ...] } ("" = store-wide evidence, above). */
+  return { report, records, found, products: products.map((p) => p.url), images: [...images],
+    imagePages: Object.fromEntries([...imagePages].map(([url, pages]) => [url, [...pages]])) };
 }
 
 /* Found charts -> store_size_charts rows, one per (gender, age, type, size_system,
@@ -806,7 +925,7 @@ export function buildRecords(found, storeDomain, report = { charts: [], conflict
   }
   const byKey = new Map();
   for (const e of byHash.values()) {
-    const productKey = e.f.source === "linked_page" || e.pages.length >= 2 ? "" : normalizePageUrl(e.pages[0] || "");
+    const productKey = STORE_WIDE_SOURCES.has(e.f.source) || e.pages.length >= 2 ? "" : normalizePageUrl(e.pages[0] || "");
     const record = {
       store_domain: storeDomain,
       gender: e.cls.gender,
@@ -817,7 +936,7 @@ export function buildRecords(found, storeDomain, report = { charts: [], conflict
       rows: e.rows,
       source: e.f.source,
       source_url: e.f.sourceUrl,
-      confidence: e.cls.confidence,
+      confidence: Math.round(Math.max(0.05, e.cls.confidence - (SOURCE_CONFIDENCE_PENALTY[e.f.source] || 0)) * 100) / 100,
       status: "active",
       sightings: e.sightings,
       content_hash: e.hash,

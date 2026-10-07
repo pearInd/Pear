@@ -28,6 +28,7 @@ import {
   discoverSizeCharts, buildRecords, classifyContextText, classifyChart, canonicalStoreHost,
   saveSizeChartRecords, isMissingTableError, formatReport, toStoredRows, looksLikeBotChallenge,
   unwrapHtmlEnvelope, isHomeEcho, referrerAudience, normalizePageUrl, isProductPathUrl, detectPlatform,
+  tableContextText,
 } from "../scanner/size-charts.js";
 
 let fails = 0;
@@ -497,6 +498,194 @@ console.log("\n── §9 adidas.co.il's shape ──");
   const r = await discoverSizeCharts(BASE, { fetchText: tiny.fetchText, delayMs: 0, log: () => {}, JSDOM });
   check("§9.8 a bare 16x16 icon (no hidden class, just small dimensions) is not an image chart",
     r.report.paths.image_chart_detected.count === 0, JSON.stringify(r.report.paths.image_chart_detected));
+}
+
+console.log("\n── §10 the polite stop ──");
+{
+  /* A store that refuses every product page. After the third refusal in a row NOTHING
+     more is asked - the first cut left the product loop and then requested all six
+     well-known guide paths, under a report saying "not asking for more pages". */
+  const asked = [];
+  const ten = Array.from({ length: 10 }, (_, i) => `${BASE}/products/p${i}`);
+  const refusing = async (url) => {
+    asked.push(url);
+    const key = url.replace(BASE, "") || "/";
+    if (key === "/") return { ok: true, status: 200, url, contentType: "text/html", text: pdp("<p>home</p>", "Home") };
+    if (key === "/sitemap.xml") return { ok: true, status: 200, url, contentType: "application/xml",
+      text: `<urlset>${ten.map((u) => `<url><loc>${u}</loc></url>`).join("")}</urlset>` };
+    if (key === "/robots.txt") return { ok: false, status: 404, url, contentType: "text/plain", text: "" };
+    return { ok: false, status: 403, url, contentType: "text/html", text: "" };
+  };
+  const r = await discoverSizeCharts(BASE, { fetchText: refusing, delayMs: 0, log: () => {}, JSDOM });
+  const pdpAsks = asked.filter((u) => /\/products\//.test(u));
+  check("§10.1 three refused product pages -> no further request at all (no guide paths either)",
+    pdpAsks.length === 3 && asked[asked.length - 1] === pdpAsks[2] && !asked.some((u) => /size-(?:guide|chart)|sizing/.test(u)),
+    JSON.stringify(asked.map((u) => u.replace(BASE, ""))));
+  check("§10.2 ...reported as blocked, with the stop in errors",
+    r.report.outcome === "blocked_by_bot_protection" && r.report.errors.some((e) => /stopped after 3 refusals in a row/.test(e)),
+    JSON.stringify([r.report.outcome, r.report.errors]));
+  check("§10.2b ...and the report says so for capture.js: polite_stop, and the three refused URLs",
+    r.report.polite_stop === true && JSON.stringify(r.report.refused_urls) === JSON.stringify(pdpAsks),
+    JSON.stringify([r.report.polite_stop, r.report.refused_urls]));
+
+  /* GUESSED guide paths (the well-known ones nobody linked) refusing is not the store
+     refusing us: a host or WAF that answers 403 to unknown paths served every product page
+     here. Three refused guesses in a row stop the GUESSING (a 404 is an answer and resets
+     the count) - but not the store: polite_stop stays false, so the browser still runs.
+     The first cut counted them toward the polite stop and reported a store that had served
+     every PDP as BLOCKED, the browser never run. */
+  const gAsked = [];
+  const guideRefusing = async (url) => {
+    gAsked.push(url);
+    const key = url.replace(BASE, "") || "/";
+    if (key === "/") return { ok: true, status: 200, url, contentType: "text/html", text: pdp("<p>home</p>", "Home") };
+    if (key === "/sitemap.xml") return { ok: true, status: 200, url, contentType: "application/xml",
+      text: `<urlset><url><loc>${BASE}/products/a</loc></url></urlset>` };
+    if (key === "/products/a") return { ok: true, status: 200, url, contentType: "text/html", text: pdp("<p>no guide</p>", "Tee") };
+    if (key === "/robots.txt" || key === "/pages/size-chart") return { ok: false, status: 404, url, contentType: "text/html", text: "" };
+    return { ok: false, status: 403, url, contentType: "text/html", text: "" };
+  };
+  const g = await discoverSizeCharts(BASE, { fetchText: guideRefusing, delayMs: 0, log: () => {}, JSDOM });
+  const guideAsks = gAsked.filter((u) => /size-(?:guide|chart)|sizing/.test(u)).map((u) => u.replace(BASE, ""));
+  check("§10.3 guessed guide paths: 403, 404 (resets), 403, 403, 403 -> stop guessing; the sixth well-known path is never asked",
+    JSON.stringify(guideAsks) === JSON.stringify(["/pages/size-guide", "/pages/size-chart", "/pages/sizing", "/pages/size-guide-1", "/size-guide"]) &&
+    g.report.errors.some((e) => /3 guessed guide paths refused in a row/.test(e)), JSON.stringify([guideAsks, g.report.errors]));
+  check("§10.3b ...and that is not the STORE refusing us: no polite stop, the product page that answered is not 'refused'",
+    g.report.polite_stop === false && g.report.outcome !== "blocked_by_bot_protection" && !g.report.refused_urls.some((u) => /products/.test(u)),
+    JSON.stringify([g.report.polite_stop, g.report.outcome, g.report.refused_urls]));
+  /* A LINKED guide page is the store's own URL: three of those refusing in a row (here the
+     product page links three guides) IS the store saying no - the polite stop. */
+  const lAsked = [];
+  const linkedRefusing = async (url) => {
+    lAsked.push(url);
+    const key = url.replace(BASE, "") || "/";
+    if (key === "/") return { ok: true, status: 200, url, contentType: "text/html", text: pdp("<p>home</p>", "Home") };
+    if (key === "/sitemap.xml") return { ok: true, status: 200, url, contentType: "application/xml",
+      text: `<urlset><url><loc>${BASE}/products/a</loc></url></urlset>` };
+    if (key === "/products/a") return { ok: true, status: 200, url, contentType: "text/html",
+      text: pdp(`<a href="/guides/tops-size-guide">Size guide</a><a href="/guides/pants-size-guide">Size chart</a><a href="/guides/kids-size-guide">Size guide</a>`, "Tee") };
+    if (key === "/robots.txt") return { ok: false, status: 404, url, contentType: "text/html", text: "" };
+    return { ok: false, status: 403, url, contentType: "text/html", text: "" };
+  };
+  const l = await discoverSizeCharts(BASE, { fetchText: linkedRefusing, delayMs: 0, log: () => {}, JSDOM });
+  check("§10.3c three LINKED guide pages refusing in a row is the store refusing: the polite stop, no guessed path asked after",
+    l.report.polite_stop === true && l.report.errors.some((e) => /stopped after 3 refusals in a row/.test(e)) &&
+    !lAsked.some((u) => /\/pages\/|\/size-guide$|\/size-chart$/.test(u.replace(BASE, ""))),
+    JSON.stringify([l.report.polite_stop, l.report.errors, lAsked.map((u) => u.replace(BASE, ""))]));
+
+  /* The stop ends REQUESTS, not reading: a Shopify product's body_html arrived with the one
+     products.json request. Every PDP answers 429; products 4 and 5 carry a size table in
+     body_html. The first cut's `break` never read them - Phase 1 captured them. */
+  const sAsked = [];
+  const shopProducts = Array.from({ length: 6 }, (_, i) => ({ handle: `p${i}`, title: "Men's Tee " + i, product_type: "T-Shirt",
+    tags: [], body_html: i === 3 || i === 4 ? INLINE : "<p>Soft cotton.</p>" }));
+  const shopify429 = async (url) => {
+    sAsked.push(url);
+    const key = url.replace(BASE, "") || "/";
+    if (key === "/") return { ok: true, status: 200, url, contentType: "text/html",
+      text: pdp(`<link rel="stylesheet" href="https://cdn.shopify.com/s/files/theme.css"><p>home</p>`, "Home") };
+    if (key.startsWith("/products.json")) return { ok: true, status: 200, url, contentType: "application/json",
+      text: JSON.stringify({ products: shopProducts }) };
+    return { ok: false, status: 429, url, contentType: "text/html", text: "" };
+  };
+  const s = await discoverSizeCharts(BASE, { fetchText: shopify429, delayMs: 0, log: () => {}, JSDOM });
+  check("§10.4 every sampled product's body_html is still read after the stop",
+    s.report.platform === "shopify" && s.report.sampled_products === 6 &&
+    s.report.paths.product_description.products_checked === s.report.sampled_products &&
+    s.report.paths.product_description.products_with_chart === 2, JSON.stringify([s.report.platform, s.report.sampled_products, s.report.paths.product_description]));
+  check("§10.5 ...so the chart is captured", s.report.outcome === "captured" && s.records.length >= 1 &&
+    s.records.every((rec) => rec.source === "product_description"), JSON.stringify([s.report.outcome, s.records.map((rec) => [rec.source, rec.product_key])]));
+  check("§10.6 ...and still nothing is asked after the third refusal (home, products.json, three PDPs)",
+    sAsked.length === 5 && sAsked.filter((u) => /\/products\/p\d$/.test(u)).length === 3, JSON.stringify(sAsked.map((u) => u.replace(BASE, ""))));
+}
+
+console.log("\n── §11 where each static image hit was seen (imagePages) ──");
+{
+  /* capture.js scopes an image chart by this: one PDP -> product-scoped, 2+ PDPs or any
+     store-wide evidence ("") -> the store's chart. The flat `images` list alone sent a
+     chart seen on ONE product page to every product of the store. */
+  const imgStore = fakeStore({
+    "/": pdp("<a href='/products/a'>A</a>", "Home"),
+    "/sitemap.xml": `<urlset><url><loc>${BASE}/products/a</loc></url><url><loc>${BASE}/products/b</loc></url></urlset>`,
+    "/products/a": pdp(`<img src="/img/a-size-chart.png" alt="size chart"><img src="/img/shared-size-chart.png" alt="size chart">`, "Tee A"),
+    "/products/b": pdp(`<img src="/img/shared-size-chart.png" alt="size chart"><a href="/pages/size-guide">Size guide</a>
+      <a href="/files/size-guide.pdf">Size guide (PDF)</a>`, "Tee B"),
+    "/pages/size-guide": pdp(`<img src="/img/guide-size-chart.png" alt="size chart">`, "Size guide"),
+  });
+  const r = await discoverSizeCharts(BASE, { fetchText: imgStore.fetchText, delayMs: 0, log: () => {}, JSDOM });
+  const ip = r.imagePages || {};
+  const A = BASE + "/products/a", B = BASE + "/products/b";
+  const same = (list, want) => JSON.stringify([...(list || [])].sort()) === JSON.stringify([...want].sort());
+  check("§11.1 imagePages is a plain object keyed by exactly the image URLs",
+    ip && Object.getPrototypeOf(ip) === Object.prototype && same(Object.keys(ip), r.images), JSON.stringify([Object.keys(ip), r.images]));
+  check("§11.2 seen on ONE product page -> that page only", same(ip[BASE + "/img/a-size-chart.png"], [A]), JSON.stringify(ip));
+  check("§11.3 seen on two product pages -> both", same(ip[BASE + "/img/shared-size-chart.png"], [A, B]), JSON.stringify(ip));
+  check("§11.4 seen on a guide page -> store-wide evidence (\"\")", same(ip[BASE + "/img/guide-size-chart.png"], [""]), JSON.stringify(ip));
+  check("§11.5 a PDF the PDP links as its guide carries the store-wide mark",
+    (ip[BASE + "/files/size-guide.pdf"] || []).includes(""), JSON.stringify(ip));
+  check("§11.6 the coverage report is unchanged by it (four image hits counted)",
+    r.report.paths.image_chart_detected.count === 4 && r.report.outcome === "image_chart_detected",
+    JSON.stringify([r.report.paths.image_chart_detected, r.report.outcome]));
+  const down = await discoverSizeCharts(BASE, { fetchText: async () => ({ ok: false, status: 503, text: "" }), delayMs: 0, log: () => {}, JSDOM });
+  check("§11.7 an unreachable store still returns the field (empty)", down.imagePages && !Object.keys(down.imagePages).length);
+}
+
+console.log("\n── §12 a guide's context stops at its OUTERMOST container ──");
+{
+  /* The browser fallback reads a guide opened in a modal with GUIDE_BOUNDARY. Bootstrap's
+     wrappers all match [class*="modal"]; the first cut stopped at .modal-body, never read
+     the .modal-header beside it, and stored a dress chart as gender-unknown "tops". The
+     page's own <h1> (outside the modal, under a <body class="modal-open"> that ALSO
+     matches) must still never label the guide. */
+  const { chartsFromHtml, GUIDE_BOUNDARY } = await import("../scanner/browser-capture.js");
+  const DRESS_TABLE = `<table><tr><th>Size</th><th>Bust</th><th>Waist</th><th>Hips</th></tr>
+    <tr><td>S</td><td>84-88</td><td>66-70</td><td>90-94</td></tr><tr><td>M</td><td>89-93</td><td>71-75</td><td>95-99</td></tr>
+    <tr><td>L</td><td>94-98</td><td>76-80</td><td>100-104</td></tr></table>`;
+  const JEANS_TABLE = `<table><tr><th>Size</th><th>Waist</th><th>Hips</th></tr>
+    <tr><td>30</td><td>76-78</td><td>97-99</td></tr><tr><td>32</td><td>81-83</td><td>102-104</td></tr>
+    <tr><td>34</td><td>86-88</td><td>107-109</td></tr></table>`;
+  const page = (inner, bodyClass = "") => `<html><head><title>Shop</title></head><body class="${bodyClass}">
+    <h1>Men's Slim Fit Jeans</h1><div class="product"><p>Product copy</p></div>${inner}</body></html>`;
+  const PURL = "https://shop.example.com/products/slim-jeans";
+  const bootstrap = page(`<div class="modal fade show"><div class="modal-dialog"><div class="modal-content">
+      <div class="modal-header"><h2>Women's dresses size guide</h2></div>
+      <div class="modal-body">${DRESS_TABLE}</div></div></div></div>`, "modal-open");
+  const [b] = chartsFromHtml(bootstrap, PURL, JSDOM, { source: "browser_modal", productUrl: PURL, referrerText: "" });
+  check("§12.1 Bootstrap .modal-header beside .modal-body is read -> women/dresses",
+    b && b.chart.classification.gender === "women" && b.chart.classification.garmentType === "dresses",
+    JSON.stringify(b && [b.chart.classification, b.chart.localText]));
+  check("§12.2 ...and the page's <h1> outside the modal is still excluded (body.modal-open is not the guide)",
+    b && !/Slim Fit Jeans/.test(b.chart.localText), b && b.chart.localText);
+  const drawer = page(`<div class="drawer drawer--right"><div class="drawer__header"><h2>Men's jeans size chart</h2></div>
+      <div class="drawer__content">${JEANS_TABLE}</div></div>`);
+  const [d] = chartsFromHtml(drawer.replace("Men's Slim Fit Jeans", "Floral Dress"), PURL, JSDOM,
+    { source: "browser_modal", productUrl: PURL, referrerText: "" });
+  check("§12.3 Shopify .drawer__header beside .drawer__content is read -> men/jeans",
+    d && d.chart.classification.gender === "men" && d.chart.classification.garmentType === "jeans" && !/Floral/.test(d.chart.localText),
+    JSON.stringify(d && [d.chart.classification, d.chart.localText]));
+  /* A page wrapper that happens to carry "drawer" in its class and holds the page's own
+     <h1> is not the guide's container: the stop stays at the modal. */
+  const wrapped = `<html><body><div class="page-container drawer-page-content"><h1>Men's Slim Fit Jeans</h1>
+    <div class="modal"><div class="modal-content"><div class="modal-header"><h2>Women's dresses size guide</h2></div>
+    <div class="modal-body">${DRESS_TABLE}</div></div></div></div></body></html>`;
+  const [w] = chartsFromHtml(wrapped, PURL, JSDOM, { source: "browser_modal", productUrl: PURL, referrerText: "" });
+  check("§12.4 a page wrapper matching the selector but holding the page <h1> is not climbed into",
+    w && !/Slim Fit Jeans/.test(w.chart.localText) && w.chart.classification.garmentType === "dresses",
+    JSON.stringify(w && [w.chart.classification, w.chart.localText]));
+  /* A real dialog wins outright - even one whose own header is an <h1>, which the
+     wrapper climb alone would read as "the page" and stop short of. */
+  const dialog = page(`<div role="dialog" aria-modal="true" class="size-popup"><div class="popup__head"><h1>Women's dresses</h1></div>
+      <div class="popup__body">${DRESS_TABLE}</div></div>`, "popup-open");
+  const [g] = chartsFromHtml(dialog, PURL, JSDOM, { source: "browser_modal", productUrl: PURL, referrerText: "" });
+  check("§12.5 a real dialog is the container: its inner wrappers do not cut the read short, its outside never leaks in",
+    g && g.chart.classification.gender === "women" && !/Slim Fit/.test(g.chart.localText),
+    JSON.stringify(g && [g.chart.classification, g.chart.localText]));
+  /* The static path passes no boundary and climbs its six levels as before - on this markup
+     it does reach the page <h1>, which is exactly why the browser path passes one. */
+  const staticText = tableContextText(new JSDOM(bootstrap).window.document.querySelector("table"));
+  check("§12.6 static callers (no boundary) are unchanged: no container is looked for",
+    /Women's dresses/.test(staticText) && /Slim Fit Jeans/.test(staticText), staticText);
+  check("§12.7 GUIDE_BOUNDARY still names the semantic dialogs first", /^\[role=dialog\]/.test(GUIDE_BOUNDARY));
 }
 
 console.log("");
