@@ -18140,8 +18140,11 @@ async function reconditionForTopology(step) {
      the turn itself is made of - and the back print showed for a fraction of the back view. With both sides on the wire,
      the front/back swap re-conditions the rotation anyway; a lean or a change of volume still re-drapes. typeof: the
      orientation globals are not in every suite's sandbox. */
-  if (step && step.reason === "rotation" && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE) {
-    if (typeof traceOrient === "function") traceOrient("redrape-skip", { reason: "rotation" });
+  /* ...AND NO RE-DRAPE AT ALL IN AI AUTO (the next night: "remove the stutters completely"). Two of three sessions with the
+     fewest output frames (5 and 4 fps of 10) carried a volume re-drape inside the 5s window - one more full reference upload
+     on the uplink the camera rides, for a fit the two swaps re-condition anyway. A single-view garment re-drapes as before. */
+  if (step && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE) {
+    if (typeof traceOrient === "function") traceOrient("redrape-skip", { reason: step.reason });
     return;
   }
   if (typeof traceOrient === "function") traceOrient("redrape", { reason: step && step.reason });
