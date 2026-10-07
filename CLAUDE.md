@@ -1167,6 +1167,35 @@ their records, the first had three causes the second did not:
   degrees at p10 (261 / 262 / 268), nothing else. A smaller lead (`LEAD_BASE_MS` 400) was tried and rejected: the back on a
   chest 116 / 290 / 342ms in the model, and the 05:55 / 18:22 returns a reading later.
 
+### 2.36 The landing, measured on the clips - every aim had been tuned on a delay ~0.2s too late (2026-10-07)
+"Now the angles are not accurate, it disappears too fast." The 13:53 clip: the back print gone at ~250 degrees, the front
+aimed at 290 by the projection. Until now a landing was read off a clip by eye and the clip's body angle guessed; this time
+the room's own lite pose model ran over every presented frame of eight of the user's clips (10-04 to 10-07; scratch
+`pose-clip.mjs`), each clip's shoulder-order curve lined up with its record's readings (least squares), and the frame the
+back print left the body found frame by frame:
+- **The engine's swap reaches frames taken BEFORE the send:** -0.31 to +0.02s across the eight, median -0.10s, where
+  `LEAD_BASE_MS` assumed (ack - 350ms) - ~80ms after it. The send-to-screen time stayed ~1.0s in every clean session; what
+  moved was how old the body on screen was (1.02s in some sessions, 1.14s in others) - the engine renders frames it already
+  holds with a reference it has just received. Across acks it follows the old rule's slope (a ~200ms ack lands ~0.33s
+  before the send - the 2026-09-27 sessions; ~550ms at the send), so it is still keyed on `lat`.
+- **The projection now leads by (lat - `LAND_BASE_MS` 530), negative on a usual engine** (bounded by `LAND_LEAD_MIN_MS`), and
+  runs whenever the room sends a pace, a fast engine included (§4b.1: never sooner than the side rule). Past the side it
+  HOLDS the side/chest rules while the front would still land on the back, up to order 0.5 (`PAST_SIDE_HOLD`). Its speed is
+  the faster of the last step and the turn's average (05:55 read one 86 deg/s step on a 154 deg/s turn and waited a
+  reading too long). `RETURN_TARGET` 290 -> 280. `?lead_project=0` (the 2026-10-04 rule) keeps `LEAD_BASE_MS`.
+- **Measured, not modelled (`return-side` §3f, `test/return-side-clips.json`):** each session replayed, its observed vanish
+  moved by the change in send time, read off its own clip: median 266 -> 277.5, none before 250 (was 211 and 249), the two
+  fast turns that put the back on the chest 294 -> 282 and 305 -> 292. The 13:53 report itself only 251 -> 253: its engine
+  held the most frames of the eight AND its output stood still ~0.15s at ~255 degrees. 18:22 (the perfect one) 270 -> 287:
+  it held the fewest. That spread (+-0.1s, +-15 degrees) is what a fixed rule cannot take out.
+- **The landing model (§4c) now counts every turn once per measured (ack, delay) pair** instead of the assumed delay: median
+  271 / 270 / 273 at 0.8x / 1x / 1.3x, before 255 in 18-24% of turns, past 295 in 4-9%. On it the previous engine landed
+  median ~255-258 with nearly half before 255 - the reports since 18:10 ("too fast", "a little before") were that bias.
+- **THE RENDER'S LAG, MEASURED IN THE SESSION (`app.js`, recorder span, TEST sessions only):** the 2026-09-27 grid probe is
+  back, passive - each sent and each rendered frame as a 24x14 luma grid, matched; `lag` events and a `lag-sum` per record.
+  If it agrees with the clips, the session's own lag can time its return (the spread above). Nothing decides on it.
+  `orient-link` §5. **Worker deploy** for the engine; the probe ships with the room.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

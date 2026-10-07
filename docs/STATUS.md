@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
+_Last updated: 2026-10-07 · main: THE LANDING, MEASURED ON THE CLIPS_
 
 ## At a glance
 
@@ -280,7 +280,14 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
   front at the side and the good one keeps its timing.
 - **Three sessions the next night - "almost perfect, a tiny bit later; no stutters":** the return's
   aim 280 -> 290 (model median 275-278, p10 259+), and no re-drape inside the window in AI Auto.
-  **Next: your measurement.**
+- **2026-10-07 13:53 report - "the angles are not accurate, it disappears too fast" (CLAUDE.md §2.36):** eight of your
+  clips through the pose model, each lined up with its record: the engine puts a swap on frames taken ~0.1s BEFORE the
+  send (0.31s before to 0.02s after, by session) - every aim since 10-05 was tuned on ~80ms after. Recalibrated (the
+  projection's lead from the measured delay, aim 280, it may wait past the side): on your own clips the landing median
+  266 -> 277.5, the two fast turns that put the back on the chest 294 -> 282 and 305 -> 292. Today's session moves only
+  251 -> 253 (its engine held the most frames, and its output stood still at ~255). That session-to-session spread needs
+  the lag measured live: TEST records now carry it (`lag`, passive). No Decart credit used.
+  **Next: your measurement - 2-3 sessions calibrate the live lag.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
