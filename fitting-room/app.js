@@ -5757,6 +5757,7 @@ function createThrottledInputStream(srcStream, {
       drawFrame();
       if (outTrack && typeof outTrack.requestFrame === "function") outTrack.requestFrame();
       lastFrameAt = clock();
+      if (typeof traceInputFrame === "function") traceInputFrame(canvas);   // a TEST session's lag probe; a no-op otherwise
     } catch (_) {}
   };
 
@@ -8774,7 +8775,12 @@ function startStreamContinuity() {
   const model = makeStreamContinuity();
   const t0 = performance.now();
   let stopped = false, raf = 0, aiFrames = 0, camFrames = 0, shownAlpha = -1;
-  const onAi = (now) => { if (stopped) return; aiFrames++; model.frame(now); ai.requestVideoFrameCallback(onAi); };
+  const onAi = (now) => {
+    if (stopped) return;
+    aiFrames++; model.frame(now);
+    if (typeof traceOutputFrame === "function") traceOutputFrame(ai);   // a TEST session's lag probe; a no-op otherwise
+    ai.requestVideoFrameCallback(onAi);
+  };
   ai.requestVideoFrameCallback(onAi);
   const camTimed = typeof cam.requestVideoFrameCallback === "function";
   const onCam = () => { if (stopped) return; camFrames++; cam.requestVideoFrameCallback(onCam); };
@@ -10788,6 +10794,7 @@ function traceSessionBegin(ctx) {
     n: _traceSessions, build: typeof PEAR_BUILD !== "undefined" ? PEAR_BUILD : null,
     at: new Date().toISOString(), t0: Date.now(), ua, ctx: ctx || null, ev: [], over: 0,
   };
+  lagProbeStart();
 }
 
 /** One event, stamped in ms since go-live. A no-op outside a recorded session. */
@@ -10802,6 +10809,7 @@ function traceOrient(type, data) {
 function traceSessionEnd(why) {
   const tr = _trace;
   if (!tr) return;
+  lagProbeStop();
   _trace = null;
   tr.end = why;
   tr.dur = Date.now() - tr.t0;
@@ -10821,6 +10829,93 @@ function traceSessionEnd(why) {
    harness's PEAR_VISUAL_TRACE=1, the support view). Folded away in the production build. */
 if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
   window.__pearDebugTrace = () => _trace || window.__pearDebugLastTrace || null;
+}
+/* ── THE RENDER'S LAG, MEASURED IN THE SESSION (2026-10-07) - recorded, not yet acted on ──────────────
+   THE LANDING, MEASURED ON THE CLIPS (lib/orient-engine.js): eight of the user's clips put the engine's swap on frames
+   from 0.31s before its send to 0.02s after it, from session to session, while the send-to-screen time stayed ~1.0s - what
+   moved was how old the body on screen was (1.02s in some sessions, 1.14s in others). Read live, that age would time the
+   return per session; until real sessions show this reading agrees with the clips, nothing decides on it - a TEST session
+   records it. Each frame handed to the render and each frame it renders is reduced to a 24x14 luma grid (z-scored, so
+   exposure does not matter); a rendered frame is matched against the last 2.5s of sent ones, and when the body moved enough
+   for one to stand out, the time between them is the lag ('lag' events; 'lag-sum' at the end). ~15-20 tiny readbacks a
+   second while the record is open, never in a shopper's session, never throwing out of go-live. (The same probe ran on
+   2026-09-27 and went out with every other change in the "main one to one" revert, CLAUDE.md §2.17.) */
+const LAG_GRID_W = 24, LAG_GRID_H = 14, LAG_HISTORY_MS = 2500, LAG_MAX_MS = 2000, LAG_MIN_CONTRAST = 0.05;
+let _lagProbe = null;
+
+function lagProbeStart() {
+  lagProbeStop();
+  if (!_trace || typeof document === "undefined" || !document || typeof document.createElement !== "function") return;
+  try {
+    const grid = () => {
+      const c = document.createElement("canvas");
+      c.width = LAG_GRID_W; c.height = LAG_GRID_H;
+      return c.getContext("2d", { willReadFrequently: true });
+    };
+    const ctxIn = grid(), ctxOut = grid();
+    if (!ctxIn || !ctxOut) return;
+    _lagProbe = { inputs: [], ctxIn, ctxOut, n: 0, lags: [] };
+  } catch (_) { _lagProbe = null; }
+}
+
+function lagProbeStop() {
+  const p = _lagProbe;
+  _lagProbe = null;
+  if (!p || !_trace) return;
+  const s = p.lags.slice().sort((a, b) => a - b);
+  traceOrient("lag-sum", { out: p.n, matched: s.length, med: s.length ? s[s.length >> 1] : null,
+    p25: s.length ? s[Math.floor(s.length * 0.25)] : null, p75: s.length ? s[Math.floor(s.length * 0.75)] : null });
+}
+
+/** A frame, reduced to a z-scored 24x14 luma grid. Throws on a tainted or empty source. */
+function lagGrid(ctx, src) {
+  ctx.drawImage(src, 0, 0, LAG_GRID_W, LAG_GRID_H);
+  const d = ctx.getImageData(0, 0, LAG_GRID_W, LAG_GRID_H).data;
+  const n = LAG_GRID_W * LAG_GRID_H, g = new Float32Array(n);
+  let mean = 0;
+  for (let i = 0; i < n; i++) { g[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2]; mean += g[i]; }
+  mean /= n;
+  let v = 0;
+  for (let i = 0; i < n; i++) { g[i] -= mean; v += g[i] * g[i]; }
+  const sd = Math.sqrt(v / n) || 1;
+  for (let i = 0; i < n; i++) g[i] /= sd;
+  return g;
+}
+
+/** The input throttle, after each frame it hands the render. A no-op outside a recorded session. */
+function traceInputFrame(canvas) {
+  const p = _lagProbe;
+  if (!p || !canvas) return;
+  const now = performance.now();
+  try { p.inputs.push({ t: now, g: lagGrid(p.ctxIn, canvas) }); } catch (_) { return; }
+  while (p.inputs.length && p.inputs[0].t < now - LAG_HISTORY_MS) p.inputs.shift();
+}
+
+/** Each frame the render presents in #aiVideo. A no-op outside a recorded session. */
+function traceOutputFrame(video) {
+  const p = _lagProbe;
+  if (!p || !video || !video.videoWidth) return;
+  const now = performance.now();
+  let g;
+  try { g = lagGrid(p.ctxOut, video); } catch (_) { return; }
+  p.n++;
+  let best = Infinity, bestAt = null;
+  const all = [];
+  for (const x of p.inputs) {
+    if (now - x.t > LAG_MAX_MS) continue;
+    let sum = 0;
+    for (let i = 0; i < g.length; i++) sum += Math.abs(g[i] - x.g[i]);
+    const dist = sum / g.length;
+    all.push(dist);
+    if (dist < best) { best = dist; bestAt = x.t; }
+  }
+  if (all.length < 6 || bestAt === null) return;
+  all.sort((a, b) => a - b);
+  const contrast = all[all.length >> 1] - best;
+  if (contrast < LAG_MIN_CONTRAST) return;   // a still scene: every sent frame matches, the lag is unreadable
+  const ms = Math.round(now - bestAt);
+  p.lags.push(ms);
+  traceOrient("lag", { ms, c: Math.round(contrast * 100) / 100 });
 }
 /* ── end flight recorder ── */
 
