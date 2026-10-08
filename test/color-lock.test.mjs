@@ -234,10 +234,8 @@ console.log("\n── §4 IT RIDES AT P.CORE - PROMOTED, AND THAT REVERSES AN EA
     /\[P\.MED, fitSentence\(/.test(resolver) &&
     resolver.indexOf("P.CORE, identityLockSentence") < resolver.indexOf("P.MED, fitSentence"),
     "fitPrompt() breaks priority ties by array position, so the order is part of the guarantee");
-  /* FRONT_CLEAR (2026-10-08, "it put a necklace on me") is the one P.LOW part, and it is not a leftover of
-     this promotion: a separate clause, opt-in per request (clearFront), asserted in prompt-engine. */
   check("...and nothing was left at P.LOW or P.TRIM on this branch",
-    !/\[P\.LOW, (?!FRONT_CLEAR\])/.test(resolver) && !/\[P\.TRIM,/.test(resolver),
+    !/\[P\.LOW,/.test(resolver) && !/\[P\.TRIM,/.test(resolver),
     "a leftover lower tier would mean the promotion was partial");
 }
 

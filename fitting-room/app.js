@@ -12398,16 +12398,12 @@ const _wirePrompts = new Map();
  * @returns {Promise<string>}
  */
 function wirePrompt(item, angle, where, opts = {}) {
-  const front = angle !== "back";
   return requestWirePrompt({
     kind: "single",
     item: promptFactsOf(item),
-    angle: front ? "front" : "back",
+    angle: angle === "back" ? "back" : "front",
     inProfile: opts.inProfile === true,
     delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0,
-    /* FRONT_CLEAR ("it put a necklace on me", 2026-10-08 - see lib/prompts.js): asked for from a TEST
-       session only until the owner has measured it; a shopper's request is exactly as before. */
-    ...(front && typeof traceEnabled === "function" && traceEnabled() ? { clearFront: true } : {}),
   }, where);
 }
 

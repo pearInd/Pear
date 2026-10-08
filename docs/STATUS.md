@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-08 · branch merge/edge-main: rear-photo mask, FRONT_CLEAR (TEST only), the head out of frame (not pushed - waiting on your OK)_
+_Last updated: 2026-10-08 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame; the necklace sentence removed (not on main)_
 
 ## At a glance
 
@@ -300,6 +300,10 @@ _Last updated: 2026-10-08 · branch merge/edge-main: rear-photo mask, FRONT_CLEA
   front is untouched. The necklace is the engine's own (not in any photo, prompt or your shirt): one sentence, sent only
   in TEST sessions until you have measured it. Swap timing untouched. No Decart credit used. Committed on
   `merge/edge-main` (endpoint `b19d697` + the room); **the push to main and the Worker deploy wait on your OK.**
+- **2026-10-08 15:29 preview measurement - "it changed the shirt to the colour of the shirt I'm wearing; the angles are fine"
+  (CLAUDE.md §2.38):** the necklace sentence (TEST sessions only) made the engine keep your own shirt. Removed entirely;
+  the prompts are byte-identical to production again. The back-photo mask and the angle logic are unchanged. The
+  necklace is open again.
 - **2026-10-08 11:45 report - "the front and back of the shorts got mixed up" (CLAUDE.md §2.39):** the shorts session was
   framed from the neck down; without the head the pose model read your back as the front and the FRONT went out with your
   back to the camera. The room now notices a head out of frame (never on the nine head-in sessions on record) and the

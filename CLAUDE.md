@@ -1235,14 +1235,17 @@ necklace on me." Layer B and Layer A, each scoped so the turn timing and the fro
   hint that matches the front fails 4). It ships in two steps - the endpoint first, so the band can be read on the
   real photo before the room relies on it. Intermittent, so one clean session does not prove it; a record whose lag
   stays ~1s through the back view does.
-- **The necklace (Layer A, opt-in).** A gold chain with a pendant over the printed chest - 07:31 after the return,
-  11:41 from the first second, also 10-04 23:57 and faintly 10-05 18:10. Neither store photo has one, no prompt word
-  names one, `enhance` is false, and the shopper's own shirt in a shorts session five minutes later has none: the
-  engine adds it. `FRONT_CLEAR` ("Nothing is worn over the garment's collar or front." - no noun, the tuxedo rule) at
-  P.LOW on the front of a top, only when the request asks (`clearFront`), and the room asks ONLY FROM A TEST SESSION:
-  every shopper request is byte-identical (`trace:prompt` unchanged; `prompt-engine` §1 on its pin, §7). If the owner's
-  sessions lose the chain and keep the print, it goes on for everyone; if not, it comes off. **Worker deploy** (the edge
-  answers /prompt; `lib/api-version.js` regenerated).
+- **The necklace (Layer A) - TRIED AND REVERTED.** A gold chain with a pendant over the printed chest - 07:31 after the
+  return, 11:41 from the first second, also 10-04 23:57 and faintly 10-05 18:10. Neither store photo has one, no prompt
+  word names one, `enhance` is false, and the shopper's own shirt in a shorts session five minutes later has none: the
+  engine adds it. `FRONT_CLEAR` ("Nothing is worn over the garment's collar or front." - no noun, the tuxedo rule) went
+  out at P.LOW on the front of a top, from TEST sessions only (`clearFront`). The FIRST measured session (15:29, record
+  `muzijj7m`, the preview) rendered the PEAK print on the shopper's OWN dark shirt from the first second - "it changed the
+  shirt to the colour of the shirt I am wearing": "the garment" read as what the shopper wears and "nothing over it" as
+  keep it. The front reference was the same 76 KB photo as before, so the sentence was the only change on the front.
+  Reverted whole: `lib/prompts.js` and `lib/api-version.js` are byte-identical to before it again, the room asks for
+  nothing, and `prompt-engine` §7 pins the absence. A sentence naming what the shopper WEARS is the same trap as naming
+  a garment (the tuxedo): the engine draws toward it. The necklace stays open - any next attempt is measured first.
 
 ### 2.39 The head out of frame - the side is counted, not read (2026-10-08)
 "I measured the shorts and the front and back of the shorts got mixed up." The 11:45 session (TEST record `muzajx17`) was
