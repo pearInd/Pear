@@ -304,7 +304,8 @@ the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to
 `\n\n  /* What only the browser measured`, `orient-engine` §4 the tick from
 `  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
 (the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
-`function createOrientationWatcher() {`. `garment-cache-age-group` slices
+`function createOrientationWatcher() {`. `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
+`/** The rows to paint on an image` (the rear band request, run on a fake fetch). `garment-cache-age-group` slices
 `server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
 `/* Per-product view lookup` and `scanner/scan-store.js` from
 `async function saveClassification(` to `/* ── Gemini classification` — keep the
@@ -552,6 +553,7 @@ version, only with the code hidden." Measured against origin/main on the same ma
   4.0s, GPU work 34.6s vs 12.6s. It fixed a real bug (a model-worn store photo's jeans/back bled into
   the render) but main has that bug too; if it comes back, the garment box must come from the server
   (e.g. the classifier that already sees every photo), never from a second MediaPipe in the browser.
+  **It came back on 2026-10-08 that way, as a MASK on the rear photo only (§2.38).**
 - **Server round trips on the critical path**: every /api/size and /api/prompt went to Vercel iad1
   (~350ms from Israel, 620ms cold) where the in-browser original took 0ms - Continue locked for two
   (+~720ms), go-live waited on two (+~750ms). The Worker behind the orientation link answers POST
@@ -1214,6 +1216,33 @@ reading was -0.52. Three rules, each only where the room measures the order (a r
 Replayed on its own clip (`return-side` §3f.6, `k-0731`): the front lands 209 -> ~308 - the back stays through the back
 view; the return goes out on the first order reading past the side, which was 144ms old in a session whose engine put the
 swap ~0.07s after the send. The other eight sessions and the landing model (§4c) are unchanged. **Worker deploy.**
+
+### 2.38 The store's model painted out of the rear photo; FRONT_CLEAR for TEST sessions (2026-10-08)
+"Front and back work perfectly - don't touch it. Two small things: in the first measurement it just added the guy who
+models the shirt, with his back to the camera, in the middle of the measurement (the second was fine); and it put a
+necklace on me." Layer B and Layer A, each scoped so the turn timing and the front reference are untouched.
+- **The model (Layer B).** Two PEAK sessions 40s apart; the first one's TEST record (`muzadbir`) shows the render-lag probe
+  (§2.16) losing the camera for ~1.4s of the back view (1.76s / 1.43s / 2.0s on matches of 0.05-0.06; clean sessions read
+  ~1.0-1.1s on 0.1-0.4), then a 0.37s stall until the FRONT landed - the output was the store's rear photo, a man with his
+  back to the camera, not the shopper. The mechanism of 479cdfd and 30a7710 (§2.15), both reverted. Now: `GET
+  /api/garment-box` (`lib/garment-box.js`, the classifier's model, one call per photo, cached in memory + CDN) answers the
+  band to keep, collar to hem; the room (`referenceBackBand()` / `maskReferenceBand()`, inside `garmentBlobCached()`)
+  PAINTS the photo above and below it with the photo's own backdrop - a MASK, not a crop: same size, the garment at the
+  same place and scale - on the garment's DISTINCT REAR photo only. The front goes exactly as before. It abstains (the photo
+  goes whole) on no person, an unsure/tiny box, a band that fills the photo, no answer in 3.5s, a heavy re-encode, or any
+  failure; `?ref_mask=0` is off; a TEST record's `ctx.ref` says what was done. On the PEAK rear photo (by-eye box): 34%
+  above the collar and 10% below the hem painted, 84 -> 67 KB. `garment-box` (a padding that keeps the head fails 3; a
+  hint that matches the front fails 4). It ships in two steps - the endpoint first, so the band can be read on the
+  real photo before the room relies on it. Intermittent, so one clean session does not prove it; a record whose lag
+  stays ~1s through the back view does.
+- **The necklace (Layer A, opt-in).** A gold chain with a pendant over the printed chest - 07:31 after the return,
+  11:41 from the first second, also 10-04 23:57 and faintly 10-05 18:10. Neither store photo has one, no prompt word
+  names one, `enhance` is false, and the shopper's own shirt in a shorts session five minutes later has none: the
+  engine adds it. `FRONT_CLEAR` ("Nothing is worn over the garment's collar or front." - no noun, the tuxedo rule) at
+  P.LOW on the front of a top, only when the request asks (`clearFront`), and the room asks ONLY FROM A TEST SESSION:
+  every shopper request is byte-identical (`trace:prompt` unchanged; `prompt-engine` §1 on its pin, §7). If the owner's
+  sessions lose the chain and keep the print, it goes on for everyone; if not, it comes off. **Worker deploy** (the edge
+  answers /prompt; `lib/api-version.js` regenerated).
 
 
 These have **no shared module system**. Copies must be edited together, in the

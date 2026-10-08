@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-08 · main: one mirrored reading no longer pulls the back off_
+_Last updated: 2026-10-08 · branch merge/edge-main: the store's model painted out of the rear photo; FRONT_CLEAR for TEST sessions (not pushed - waiting on your OK)_
 
 ## At a glance
 
@@ -293,6 +293,13 @@ _Last updated: 2026-10-08 · main: one mirrored reading no longer pulls the back
   shoulder order arms the return at the side: replayed on its own clip, the front lands ~308 instead of ~210. Its record
   also carries the first live lag reading (median 1,081ms). No Decart credit used.
   **Next: your measurement - 2-3 sessions calibrate the live lag.**
+- **2026-10-08 11:40-11:41 report - "front and back work perfectly; the model from the store photo appeared in the first
+  measurement, and it put a necklace on me" (CLAUDE.md §2.38):** the 11:40 record shows the output leaving the camera for
+  ~1.4s of the back view - the store's rear photo (a man with his back to the camera) drawn instead of you. The rear photo
+  is now sent with the model painted out above the collar and below the hem (same size, the print in the same place); the
+  front is untouched. The necklace is the engine's own (not in any photo, prompt or your shirt): one sentence, sent only
+  in TEST sessions until you have measured it. Swap timing untouched. No Decart credit used. Committed on
+  `merge/edge-main` (endpoint `b19d697` + the room); **the push to main and the Worker deploy wait on your OK.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
