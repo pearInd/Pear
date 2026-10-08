@@ -142,9 +142,30 @@ console.log("\n── §1 the trigger ──");
     { vote: "front", lock: "front", yawAbs: 5, at: 0, ord: 1, ordAt: 0 },
     { vote: null, lock: "front", yawAbs: 49, at: 240, ord: 0.67, ordAt: 240 },
     { vote: "front", lock: "back", yawAbs: 20, at: 480, ord: 0.93, ordAt: 480 },          // a look that came back
+    { vote: "front", lock: "back", yawAbs: 12, at: 720, ord: 0.98, ordAt: 720 },          // ...and still reads the front
   ]);
-  check("§1.15 ...and a look that really came back (the order back on the front) is withdrawn as before",
-    look[2].withdraw === "front", JSON.stringify(look));
+  /* Withdrawn on the SECOND such reading since 2026-10-07 (the 07:31 session - one mirrored +1.0 on a back-facing body). */
+  check("§1.15 ...and a look that really came back (the order back on the front) is withdrawn - on its second reading",
+    !look[2].withdraw && look[3].withdraw === "front", JSON.stringify(look));
+  /* THE 07:31 SESSION, on literals: the early BACK at the side, then the pose model reads the BACK as a full-width FRONT once
+     (+1.0, |yaw| 7, the shoulders voting FRONT) and the same reading again on the next tick, then the back half (-0.52, the
+     vote abstaining), the side, the chest. */
+  const m0731 = run(trig(0.2), [
+    { vote: "front", lock: "front", yawAbs: 5, at: 0, ord: 1, ordAt: 0 },
+    { vote: null, lock: "front", yawAbs: 84, at: 240, ord: 0.1, ordAt: 240 },             // the early BACK, at the side
+    { vote: "front", lock: "back", yawAbs: 7, at: 480, ord: 1, ordAt: 480 },              // the mirrored skeleton
+    { vote: "front", lock: "back", yawAbs: 7, at: 730, ord: 1, ordAt: 480 },              // ...the same reading again
+    { vote: null, lock: "back", yawAbs: 57, at: 980, ord: -0.52, ordAt: 980 },            // the back half, no vote
+    { vote: "front", lock: "back", yawAbs: 85, at: 1230, ord: 0.03, ordAt: 1230 },        // the side, on the way back
+  ]);
+  check("§1.15b one mirrored reading (the same one voted twice) never withdraws the early BACK",
+    m0731[1].fire === "back" && !m0731[2].withdraw && !m0731[3].withdraw, JSON.stringify(m0731));
+  check("§1.15c ...the back half confirms the turn though no vote did, and the FRONT goes out AT THE SIDE",
+    !m0731[4].fire && !m0731[4].withdraw && m0731[5].fire === "front" && m0731[5].via === "order", JSON.stringify(m0731));
+  const m0731NoOrd = run(trig(0.2), m0731.length ? [
+    { vote: "front", lock: "front", yawAbs: 5, at: 0 }, { vote: null, lock: "front", yawAbs: 84, at: 240 },
+    { vote: "front", lock: "back", yawAbs: 7, at: 480 }] : []);
+  check("§1.15d a room that sends no order withdraws on the first reading, as main does", m0731NoOrd[2].withdraw === "front", JSON.stringify(m0731NoOrd));
   const noOrdFold = run(trig(0.2), [
     { vote: "front", lock: "front", yawAbs: 5, at: 0 }, { vote: null, lock: "front", yawAbs: 49, at: 240 },
     { vote: "front", lock: "back", yawAbs: 36, at: 480 }]);
@@ -460,7 +481,7 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
     /Math\.max\(0, Math\.min\(400, Number\(a\.delay\) \|\| 0\)\)/.test(APP));
 }
 
-console.log("\n── §3f THE LANDING, MEASURED ON THE CLIPS - eight of the user's sessions, each against its own clip (2026-10-07) ──");
+console.log("\n── §3f THE LANDING, MEASURED ON THE CLIPS - nine of the user's sessions, each against its own clip (2026-10-07, 07:31 added 10-08) ──");
 {
   /* "Now the angles are not accurate, it disappears too fast." Each clip (the rendered output) went through the room's own
      pose model frame by frame (test/return-side-clips.json): its shoulder-order curve, and the moment the back print left the
@@ -502,11 +523,13 @@ console.log("\n── §3f THE LANDING, MEASURED ON THE CLIPS - eight of the use
   console.log("        " + rows.map((r) => `${r.key}: ${r.was} -> ${r.now} (${r.shift >= 0 ? "+" : ""}${r.shift}ms)`).join(", "));
   const med = (a) => { const s = a.slice().sort((x, y) => x - y); return (s[(s.length - 1) >> 1] + s[s.length >> 1]) / 2; };
   const was = rows.map((r) => r.was), now = rows.map((r) => r.now);
-  check(`§3f.1 the measurement: as the user saw them, the eight landed median ${med(was)} - the reports ("too fast", "a little before")`,
+  check(`§3f.1 the measurement: as the user saw them, the sessions landed median ${med(was)} - the reports ("too fast", "a little before")`,
     med(was) <= 266 && was.filter((x) => x < 265).length >= 4, JSON.stringify(rows));
   check(`§3f.2 every session's return is still sent, once`, now.every((x) => x !== null), JSON.stringify(rows));
-  check(`§3f.3 the landing now: median ${med(now)} (the side view and just past it), none before 250, at most two past 288 and none past 300`,
-    med(now) >= 270 && med(now) <= 285 && now.every((x) => x >= 250 && x <= 300) && now.filter((x) => x > 288).length <= 2, JSON.stringify(rows));
+  /* "None past 310" (was 300 for the first eight): the 07:31 session's return can only go out on the first order reading past
+     the side, and it was 144ms old with its engine putting the swap ~0.07s AFTER the send - ~308 (§3f.6). */
+  check(`§3f.3 the landing now: median ${med(now)} (the side view and just past it), none before 250, at most three past 288 and none past 310`,
+    med(now) >= 270 && med(now) <= 285 && now.every((x) => x >= 250 && x <= 310) && now.filter((x) => x > 288).length <= 3, JSON.stringify(rows));
   /* The 13:53 report itself lands only a little later (251 -> ~253): that session's engine held the most frames of the eight
      (~0.21s) and its output stood still for ~0.15s right at ~255 degrees - the spread a fixed rule cannot take out. */
   const d = rows.find((r) => r.key === "d-1353");
@@ -514,6 +537,12 @@ console.log("\n── §3f THE LANDING, MEASURED ON THE CLIPS - eight of the use
   const fast = rows.filter((r) => r.key === "f-0609" || r.key === "m2-0555");
   check(`§3f.5 the two fast turns that put the back on the chest land earlier than they did (${fast.map((r) => r.was + " -> " + r.now).join(", ")})`,
     fast.every((r) => r.now < r.was), JSON.stringify(fast));
+  /* 07:31 (2026-10-08): "almost perfect - the back disappears too early, many frames with nothing on the back". The pose model
+     read the shopper's BACK as a full-width FRONT once (+1.0, |yaw| 7, voted twice on the same reading); the early BACK was
+     withdrawn on it and the back print was gone at ~210. ONE READING, ONE VOTE and the two-reading withdrawal keep the BACK;
+     THE BACK HALF CONFIRMS THE TURN (-0.52, no vote) arms the return, and the FRONT goes out at the side reading. */
+  const k = rows.find((r) => r.key === "k-0731");
+  check(`§3f.6 the 07:31 mirrored back: the back print stays through the back view - the front lands ${k.was} -> ${k.now}`, k.now >= 270, JSON.stringify(k));
 }
 
 console.log("\n── §3d THE BACK WAITS FOR AN ENGINE THAT CAN KEEP UP - the three PEAK sessions of 2026-10-04 ──");

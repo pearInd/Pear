@@ -706,7 +706,9 @@ const MEASURED = { front: 0.76, back: -0.68, frontMirrored: 0.78, backMirrored: 
     !/if \(poseVote\) \{[^}]*faceSeen = true/.test(watcher));
   check("the tick counts consecutive shoulder votes per side into poseStreak",
     /lastPoseVoted = posed;/.test(watcher) &&
-    /if \(s\.poseVoted\) \{ poseStreak = vote === poseSide \? poseStreak \+ 1 : 1; poseSide = vote; \}/.test(watcher));
+    /* ONE READING, ONE VOTE (2026-10-07): where the room measures the order, a vote on the same pose reading adds nothing */
+    /const samePose = s\.ord !== null && s\.ord !== undefined && Number\.isFinite\(s\.yawAt\) && s\.yawAt > 0 &&\s*poseVoteAt !== null && Math\.abs\(s\.yawAt - poseVoteAt\) <= 5 && vote === poseSide;/.test(watcher) &&
+    /if \(s\.poseVoted\) \{ if \(!samePose\) \{ poseStreak = vote === poseSide \? poseStreak \+ 1 : 1; poseSide = vote; \} poseVoteAt = s\.yawAt; \}/.test(watcher));
   check("...and hands it to orientFlipDecision()", /orientFlipDecision\(\{[^}]*poseStreak[^}]*\}\)/.test(watcher));
   check("the watcher names the engine it armed", /MediaPipe shoulder order/.test(watcher));
   const p0 = SRC.indexOf("function startPresenceWatcher");

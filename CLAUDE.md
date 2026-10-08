@@ -1196,7 +1196,25 @@ back print left the body found frame by frame:
   If it agrees with the clips, the session's own lag can time its return (the spread above). Nothing decides on it.
   `orient-link` §5. **Worker deploy** for the engine; the probe ships with the room.
 
-## 3. Cross-file lockstep
+### 2.37 One mirrored reading no longer pulls the back off (2026-10-08)
+"Almost perfect - the back disappears too early, many frames with nothing on the back." The 07:31 record: the early BACK
+went out at the side (|yaw| 84), then the pose model read the shopper's BACK as a full-width FRONT (+1.0, |yaw| 7 - a
+mirrored skeleton) and the early BACK was WITHDRAWN on that one reading (the order said "front half", so ORDER_CONFIRMS
+let it through); the clip, through the pose model, shows the back print gone at ~210 and a plain back to ~270. The next
+reading was -0.52. Three rules, each only where the room measures the order (a room that sends none is main's exactly):
+- **The two-reading withdrawal (`makeEarlyTurnTrigger`):** an early BACK is withdrawn by the order only on two such
+  readings IN A ROW. A look that really came back reads the front again on the next one (`return-side` §1.15: it costs
+  that look one reading, ~250ms).
+- **ONE READING, ONE VOTE (`step()`, `poseStreak`):** the pose loop reads every ~240ms and the tick runs every 250ms, so one
+  reading was voted twice and made a two-vote "pose flip" by itself; a vote on the reading the last one came from (the same
+  `yawAt`) adds nothing.
+- **THE BACK HALF CONFIRMS THE TURN:** the shoulders' vote abstained through that whole back (the separation never reached
+  its margin), so the early BACK stayed "pending" and the return leg never armed; a new order reading at or past
+  -ORDER_CONFIRMS ends it as a back vote would and arms the return there.
+Replayed on its own clip (`return-side` §3f.6, `k-0731`): the front lands 209 -> ~308 - the back stays through the back
+view; the return goes out on the first order reading past the side, which was 144ms old in a session whose engine put the
+swap ~0.07s after the send. The other eight sessions and the landing model (§4c) are unchanged. **Worker deploy.**
+
 
 These have **no shared module system**. Copies must be edited together, in the
 same commit. Whichever is wrong is the one that wins.

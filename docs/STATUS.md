@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-07 · main: THE LANDING, MEASURED ON THE CLIPS_
+_Last updated: 2026-10-08 · main: one mirrored reading no longer pulls the back off_
 
 ## At a glance
 
@@ -287,6 +287,11 @@ _Last updated: 2026-10-07 · main: THE LANDING, MEASURED ON THE CLIPS_
   266 -> 277.5, the two fast turns that put the back on the chest 294 -> 282 and 305 -> 292. Today's session moves only
   251 -> 253 (its engine held the most frames, and its output stood still at ~255). That session-to-session spread needs
   the lag measured live: TEST records now carry it (`lag`, passive). No Decart credit used.
+- **2026-10-08 07:31 report - "almost perfect; the back disappears too early, frames with nothing on the back"
+  (CLAUDE.md §2.37):** the pose model read your back as facing the camera for one reading and the back was withdrawn on
+  it. Now one reading can't do that (two in a row are needed, a reading is voted once), and a back confirmed by the
+  shoulder order arms the return at the side: replayed on its own clip, the front lands ~308 instead of ~210. Its record
+  also carries the first live lag reading (median 1,081ms). No Decart credit used.
   **Next: your measurement - 2-3 sessions calibrate the live lag.**
 
 ## Hebrew/English i18n
