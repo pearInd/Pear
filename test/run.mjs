@@ -347,6 +347,13 @@
                       prompts are prefetched before go-live, and the recorder draws only a
                       new picture. Pins the edge URL derivation, the fallback and its back-off,
                       the prefetch keys, and the recorder's gate.
+     head-frame
+                      "The front and back of the shorts got mixed up" (2026-10-08): framed from the
+                      neck down, the pose model read the back as the front. The room marks a reading
+                      whose head is out of the frame (headRoomStep - sticky; never on the nine head-in
+                      clips, from the second reading on the shorts clip) and the engine counts the side
+                      instead of reading it. The reported record replayed both ways, scripted 360 /
+                      look / noise / step-in, and untouched without the flag.
      garment-box
                       "It just added the guy who models the shirt, with his back to the camera"
                       (FOX PEAK, 2026-10-08): the store's model is painted out of the REAR
@@ -524,6 +531,7 @@ const SUITES = [
   ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
   ["engine-exp", "engine-exp.test.mjs"],
   ["garment-box", "garment-box.test.mjs"],
+  ["head-frame", "head-frame.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

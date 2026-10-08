@@ -6746,6 +6746,7 @@ function resetTryOnSession() {
   _torsoYawAbs = null; _torsoYawAt = 0; _torsoYawRise = 0;
   _poseFacingSep = null; _poseFacingAt = 0; _poseTorsoLostAt = 0;
   _poseOrd = null; _poseOrdAt = 0;
+  if (typeof _poseHeadOut !== "undefined") _poseHeadOut = false;
   if (retired.length) {
     console.warn(`[PEAR] try-on reset: the previous session left ${retired.join(" + ")} running - retired before this one starts`);
   }
@@ -8415,7 +8416,7 @@ function poseTorsoWidths(result, aspect = 1) {
   const th = Math.abs((lh.y + rh.y) / 2 - (ls.y + rs.y) / 2);
   if (!(th > 1e-3)) return null;
   const k = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
-  return { sh: (ls.x - rs.x) * k / th, hip: (lh.x - rh.x) * k / th, th };
+  return { sh: (ls.x - rs.x) * k / th, hip: (lh.x - rh.x) * k / th, th, top: (ls.y + rs.y) / 2 };
 }
 /** One reading into the state. Pure over (state, reading) - torso-twist drives it with literals.
  *  @param {{sh:number, hip:number, th:number}|null} w  poseTorsoWidths()
@@ -8499,9 +8500,32 @@ function torsoYawGuard(s, w, worldYawAbs, enabled = YAW_GUARD_ENABLED) {
   const imageDeg = Math.acos(Math.max(0, Math.min(1, Math.abs(w.sh) / s.sh0))) * 180 / Math.PI;
   return Math.min(worldYawAbs, imageDeg + YAW_IMAGE_MARGIN);
 }
+/* ── THE HEAD OUT OF FRAME (2026-10-08) - "the front and back of the shorts got mixed up" ─────────────────────────
+   The 11:45 shorts session was framed from the neck down (the presence gate timed out at 12s): the pose model reads front
+   from back by the face, and without one it read the back as the front and the front as the back. The engine
+   (lib/orient-engine.js, THE HEAD OUT OF FRAME) counts the side instead of reading it when the sample says headOut; this
+   is the measurement. HEADROOM is the shoulder line's height in the frame in torso heights - a head needs about half a
+   torso above the shoulders. Measured through the room's lite model on ten recorded sessions: every one with the head in
+   view stays at 0.35 or more (the lowest, 10-04 05:55, has the head touching the top edge); the shorts session sits at
+   0.10-0.23 facing the lens or away, and climbs to 0.4-0.55 at the side views and the end with the head still out (the
+   model drops the shoulders when it cannot see above them). So it is STICKY: out after HEAD_OUT_READINGS readings in a row
+   under HEAD_ROOM_OUT, back in only after HEAD_IN_READINGS over HEAD_ROOM_IN - a shopper who really steps back. Pure over
+   (state, reading); torso-twist drives it with literals. */
+const HEAD_ROOM_OUT = 0.3, HEAD_ROOM_IN = 0.6, HEAD_OUT_READINGS = 2, HEAD_IN_READINGS = 3;
+/** @returns {boolean} whether the head is out of the frame, after this reading */
+function headRoomStep(s, w) {
+  if (!w || !(w.th > 0) || typeof w.top !== "number") return s.headOut === true;
+  const room = w.top / w.th;
+  s.headRoom = room;
+  if (!s.headOut) { s.hoN = room < HEAD_ROOM_OUT ? (s.hoN || 0) + 1 : 0; if (s.hoN >= HEAD_OUT_READINGS) { s.headOut = true; s.hiN = 0; } }
+  else { s.hiN = room > HEAD_ROOM_IN ? (s.hiN || 0) + 1 : 0; if (s.hiN >= HEAD_IN_READINGS) { s.headOut = false; s.hoN = 0; } }
+  return s.headOut === true;
+}
 let _poseTwist = makeTwistState();
 /* The latest shoulder order as a share of square-on (torsoOrder) and when it was read - the sample carries both. */
 let _poseOrd = null, _poseOrdAt = 0;
+/* Whether the head is out of the frame (headRoomStep), sent with the order (THE HEAD OUT OF FRAME). */
+let _poseHeadOut = false;
 /** The pose loop's hook: one inference in, the published |yaw| out (the world one unless a torso-only
  *  turn is being read). Logs and records the on/off edges. */
 function torsoTwistObserve(result, worldYawAbs, now) {
@@ -8525,6 +8549,11 @@ function torsoTwistObserve(result, worldYawAbs, now) {
   }
   const ord = torsoOrder(_poseTwist, widths);
   if (ord !== null) { _poseOrd = ord; _poseOrdAt = now; }
+  const headWas = _poseHeadOut;
+  _poseHeadOut = headRoomStep(_poseTwist, widths);
+  if (_poseHeadOut !== headWas && typeof traceOrient === "function") {
+    traceOrient("head-frame", { out: _poseHeadOut, room: Math.round((_poseTwist.headRoom || 0) * 100) / 100 });
+  }
   if (on !== was) {
     const r2 = (x) => (x === null ? null : Math.round(x * 100) / 100);
     if (ORIENT_DEBUG) {
@@ -10616,6 +10645,8 @@ function createOrientationWatcher() {
         /* The shoulder order as a share of square-on - the engine's return leg waits for the chest (THE CHEST COMES
            ROUND). typeof-guarded: the replay harnesses run this tick without the pose loop around it. */
         ord: typeof _poseOrd === "number" ? _poseOrd : null, ordAt: typeof _poseOrdAt === "number" ? _poseOrdAt : 0,
+        /* THE HEAD OUT OF FRAME: the engine counts the side instead of reading the order's sign. Sent only when true. */
+        ...(typeof _poseHeadOut !== "undefined" && _poseHeadOut === true ? { headOut: true } : {}),
         /* The engine's pace (THE ENGINE'S PACE): the return to the front goes out earlier on a slow engine. */
         lat: typeof engineAckEstimate === "function" ? engineAckEstimate() : null,
         latHi: typeof engineAckHigh === "function" ? engineAckHigh() : null,
@@ -10856,6 +10887,7 @@ function openOrientChannel() {
     /* The order the engine's return leg reads, with its age at this tick (THE CHEST COMES ROUND). */
     o: typeof s.ord === "number" ? Math.round(s.ord * 100) / 100 : null, oa: typeof s.ord === "number" && s.ordAt ? s.t - s.ordAt : null,
     lt: typeof s.lat === "number" ? s.lat : null, lh: typeof s.latHi === "number" ? s.latHi : null,
+    ho: s.headOut === true ? 1 : undefined,
     a: Array.isArray(acts) ? acts.filter((x) => x && x.do !== "log") : null,
   });
   return {

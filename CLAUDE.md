@@ -286,8 +286,8 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 `pose-focus` slices `app.js` from `let _lastPoseTimestamp = 0;` to
 `/* The loaded PoseLandmarker, as a memoized PROMISE` (the pose call and its focus window, §2.19).
 `torso-twist` slices `app.js` from `const TWIST_SHOULDER_MAX` to `let _poseTwist = makeTwistState();`
-(the torso-only turn rule and the yaw guard, §2.20/§2.22) and runs it standalone - keep the block
-self-contained. `back-prime` slices `let _primedBackGen = -1;` to `function armFirstFrameBilling(video, gen) {`
+(the torso-only turn rule, the yaw guard and the head-out-of-frame measurement, §2.20/§2.22/§2.39) and runs it
+standalone - keep the block self-contained (`head-frame` takes `const HEAD_ROOM_OUT` to the same end). `back-prime` slices `let _primedBackGen = -1;` to `function armFirstFrameBilling(video, gen) {`
 (the back sent before the reveal, §2.22). `return-side` takes the same torso-twist slice (for `torsoOrder()`,
 §2.23) and pins the tick's `ord: typeof _poseOrd === …` line by text.
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
@@ -1243,6 +1243,33 @@ necklace on me." Layer B and Layer A, each scoped so the turn timing and the fro
   every shopper request is byte-identical (`trace:prompt` unchanged; `prompt-engine` §1 on its pin, §7). If the owner's
   sessions lose the chain and keep the print, it goes on for everyone; if not, it comes off. **Worker deploy** (the edge
   answers /prompt; `lib/api-version.js` regenerated).
+
+### 2.39 The head out of frame - the side is counted, not read (2026-10-08)
+"I measured the shorts and the front and back of the shorts got mixed up." The 11:45 session (TEST record `muzajx17`) was
+framed from the neck down - the presence gate showed its step-back guide and timed out at 12s. The pose model tells front
+from back by the face; without one it read the shopper's BACK as a full-width FRONT three readings in a row (order 0.87,
+1.05, 1.19 - camera 1.97-2.49s), the early BACK was withdrawn on the two-reading rule (§2.37) and the FRONT sent at 2.23s
+with the back to the camera; on the way round it read the front as a back (-0.56). Through the room's lite model the clip
+itself reads -0.6 on a body square to the lens at its end; neither the nose (guessed on the frame's edge) nor the feet
+(heel vs toe) tell the two apart there. What a headless reading still says truly is HOW FAR from the side it is.
+- **The measurement (`headRoomStep()`, app.js, inside the torso-twist slice):** headroom = the shoulder line's height in the
+  frame over the torso height. Ten recorded clips through the room's lite model: the nine with the head in view never go
+  under 0.35 (10-04 05:55, the head touching the top edge); the shorts clip sits at 0.10-0.23 and climbs to 0.4-0.55 at the
+  side views and its end with the head still out. So it is sticky: out after 2 readings under 0.30, in again after 3 over
+  0.60. Learned in the presence gate too, so it is set before the reveal. The sample carries `headOut: true` (only when
+  true); a TEST record carries `ho` per tick and a `head-frame` event on each change.
+- **The decision (`headlessReading()`, lib/orient-engine.js, before `step()` and typeof-guarded in it):** for a headOut
+  reading the side the body faces is COUNTED: it starts facing the lens, a pass through the side view (|order| <= 0.25 on a
+  |yaw| of 45+, then out past 0.45) turns it over, and the reading goes on to every rule with that sign - the pose vote too;
+  nothing that reads a head votes. A head-in reading keeps its sign and sets the count (a shopper who steps back). A look
+  that comes back reads, headless, like a turn: a back that lasts HEADLESS_BACK_MAX_MS (2.5s - longer than the back of any
+  recorded 360) with no side view is read as the front again, and that reading goes on as the side view (order 0), so the
+  return rules send the FRONT on it (scripted: 2.75s after leaving the side, not ~5s).
+- **Measured:** the record replayed (`head-frame` §3): as sent, BACK 1.72s then FRONT 2.23s (the report); headOut, the same
+  BACK, no FRONT through the back, FRONT at the return's side view (2.69s, |order| 0.17, |yaw| 83), two swaps in all.
+  Without the flag nothing changes (§5; `orient-engine` §1 on its pin). Mutations: the engine ignoring the flag fails 4;
+  a 0.40 threshold marks a head-in clip and fails 2. **Worker deploy** (the engine).
+- **Not covered:** a session whose head leaves the frame only mid-turn (no record of one), and the look rule on a real body.
 
 
 These have **no shared module system**. Copies must be edited together, in the
