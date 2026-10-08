@@ -7283,6 +7283,9 @@ function garmentBlobCached(url) {
   console.log('[PEAR] garmentBlobCached result:', 'miss');
   const job = (async () => {
     try {
+      /* Where the garment is in a REAR store photo, asked NOW so the answer overlaps the download -
+         see maskReferenceBand(). null for anything else. typeof-guarded (CLAUDE.md §2.7). */
+      const bandJob = typeof referenceBackBand === "function" ? referenceBackBand(url) : null;
       // data:/blob: URLs (custom uploads) decode locally; http(s) rides the same-origin
       // proxy with a raw-CDN fallback and retries. This is the path AI Auto uses for
       // EVERY orientation swap, so a single transient proxy failure here is exactly
@@ -7292,7 +7295,12 @@ function garmentBlobCached(url) {
         : await fetchWithFallback(url);
       if (!raw) { _assetBlobCache.delete(url); return null; }   // never cache a failure - allow a retry
       // These bytes go straight to rtClient.set({ image }) in AI Auto mode.
-      const normalized = await normalizeToSupportedImage(raw);
+      let normalized = await normalizeToSupportedImage(raw);
+      /* The store's model painted out of a rear photo before anything else sees it - the engine drew
+         him on the shopper otherwise ("the guy who models the shirt", 2026-10-08). */
+      if (normalized && bandJob && typeof maskReferenceBand === "function") {
+        normalized = await maskReferenceBand(normalized, url, await bandJob);
+      }
       /* THE ENGINE-SPEED EXPERIMENT's "small" mode (TEST sessions only). typeof-guarded: suites run this standalone. */
       const blob = typeof EXP_SMALL !== "undefined" && EXP_SMALL && typeof expDownscale === "function" ? await expDownscale(normalized) : normalized;
       /* Encoded NOW, while nothing is waiting on it, so a swap that sends this Blob later does no
@@ -7385,6 +7393,164 @@ function garmentBlobIfWarm(url) {
   if (!url) return null;
   const job = _assetBlobCache.get(url);
   return (job && job.settled) || null;
+}
+
+/* ── THE STORE'S MODEL IS PAINTED OUT OF THE REAR REFERENCE (2026-10-08) ──────────────────────────
+   REPORTED: "in the first measurement it just added the guy who models the shirt, with his back to
+   the camera, in the middle of the measurement; the second was fine" (FOX PEAK, two sessions 40s
+   apart). The first one's TEST record: the render-lag probe lost the camera for ~1.4s of the back
+   view (1.76s / 1.43s / 2.0s on matches of 0.05-0.06, where every clean session reads ~1.0-1.1s) -
+   the output was not the shopper. The rear reference was the store's photo whole: a man standing
+   with his back to the camera, head, arms and jeans - the shopper's own pose - and the engine drew
+   him. Same mechanism as 479cdfd (2026-09-27) and 30a7710 (2026-09-29); lib/garment-box.js records
+   what those did and why they were reverted.
+
+   THE FIX: the REAR photo only (the front works and is not touched), and a MASK, not a crop: the
+   photo above the collar and below the hem is painted with its own backdrop, so the picture keeps
+   its size and the garment its exact place and scale - the engine gets the back print it renders
+   today, minus the person. The band comes from the server (GET /api/garment-box - never a pose model
+   in the browser, CLAUDE.md §2.15), asked when the garment is chosen so it overlaps the download.
+   IT ABSTAINS - the photo goes exactly as before - on no person (a packshot), an unsure box, a band
+   that fills the photo, no answer within REF_BAND_TIMEOUT_MS, a re-encode over 1.25x the photo, or
+   any failure. ?ref_mask=0 is the old behaviour; a TEST record carries what was done (ctx.ref). */
+const REF_BAND_TIMEOUT_MS = 3500;
+const _refBandJobs = new Map();   // `${canonical url}|${region}` -> Promise<{y0,y1}|null>
+const _refMaskLog = [];           // what the mask did, numbers only - read into a TEST record's ctx
+
+function refMaskNote(o) {
+  _refMaskLog.push(o);
+  if (_refMaskLog.length > 6) _refMaskLog.shift();
+}
+
+/* The body region of the garment whose DISTINCT REAR photo this URL is - or null: a front, an
+   upload (data:/blob:), an owner we cannot find. NOT `it.custom` - every garment the store widget
+   hands over is custom:true (479cdfd's first cut skipped every store product that way). */
+function referenceBackHint(url) {
+  if (!url || /^(data:|blob:)/i.test(url)) return null;
+  try { if (new URLSearchParams(location.search).get("ref_mask") === "0") return null; } catch (_) { /* no location */ }
+  const look = typeof resolveLook === "function" ? resolveLook() : null;
+  const items = look ? [look.top, look.bottom] : [typeof activeItem !== "undefined" ? activeItem : null];
+  for (const it of items) {
+    if (!it) continue;
+    const back = typeof distinctBackOf === "function" ? distinctBackOf(it) : null;
+    if (back && sameImage(back, url)) return { region: isBottomsGarment(it) ? "bottom" : "top" };
+  }
+  return null;
+}
+
+/** The server's band for this rear photo, or null. Never rejects; memoised per photo and region,
+    except a timeout or a network failure, which is re-asked next time. */
+function referenceBackBand(url) {
+  const hint = referenceBackHint(url);
+  if (!hint || typeof fetch !== "function" || typeof location === "undefined") return null;
+  const key = `${(typeof canonicalImageUrl === "function" && canonicalImageUrl(url)) || url}|${hint.region}`;
+  if (_refBandJobs.has(key)) return _refBandJobs.get(key);
+  const job = (async () => {
+    try {
+      const q = `image_url=${encodeURIComponent(url)}&region=${hint.region}&v=1`;
+      const r = await fetch(`${location.origin}/api/garment-box?${q}`,
+        typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(REF_BAND_TIMEOUT_MS) } : {});
+      if (!r.ok) { _refBandJobs.delete(key); refMaskNote({ did: "whole", why: "http-" + r.status }); return null; }
+      const j = await r.json();
+      const b = j && j.band;
+      const ok = b && [b.y0, b.y1].every((v) => typeof v === "number" && v >= 0 && v <= 1) && b.y1 - b.y0 > 0.1;
+      if (!ok) {
+        refMaskNote({ did: "whole", why: String((j && j.reason) || "no-band").slice(0, 24) });
+        console.log(`[PEAR] rear reference: sent whole (${(j && j.reason) || "no band"}) -`, abbrevImg(url));
+        return null;
+      }
+      const xs = [b.x0, b.x1].every((v) => typeof v === "number" && v >= 0 && v <= 1) && b.x1 - b.x0 > 0.1;
+      return xs ? { y0: b.y0, y1: b.y1, x0: b.x0, x1: b.x1 } : { y0: b.y0, y1: b.y1 };
+    } catch (e) {
+      _refBandJobs.delete(key);   // not an answer - the next fetch asks again
+      refMaskNote({ did: "whole", why: "no-answer" });
+      console.log("[PEAR] rear reference: no band in time - the photo goes whole:", e?.message || e);
+      return null;
+    }
+  })();
+  _refBandJobs.set(key, job);
+  return job;
+}
+
+/** The rows to paint on an image `h` tall - [0, top) and [bottom, h) - or null when there is
+    nothing worth painting. Pure. */
+function refMaskRows(band, h) {
+  if (!band || !(h > 0)) return null;
+  const top = Math.max(0, Math.min(h, Math.round(band.y0 * h)));
+  const bottom = Math.max(0, Math.min(h, Math.round(band.y1 * h)));
+  if (!(bottom - top > 0.1 * h)) return null;
+  if (top < 2 && h - bottom < 2) return null;
+  return { top, bottom };
+}
+
+/** The rear reference with the store's model painted out above and below `band`, or the SAME Blob
+    untouched. Never rejects. */
+async function maskReferenceBand(blob, url, band) {
+  if (!band || !blob || typeof createImageBitmap !== "function") return blob;
+  let bmp = null;
+  try {
+    bmp = await createImageBitmap(blob);
+    const W = bmp.width, H = bmp.height, rows = refMaskRows(band, H);
+    if (!rows || W < 64 || H < 64) return blob;
+    /* A PNG stays a PNG, alpha and all - normalizeToSupportedImage() keeps PNGs for the same reason
+       (a transparent cut-out flattened to JPEG turns its background black). */
+    const png = /^image\/png$/i.test(blob.type || "");
+    const off = typeof OffscreenCanvas !== "undefined"
+      ? new OffscreenCanvas(W, H)
+      : Object.assign(document.createElement("canvas"), { width: W, height: H });
+    const ctx = off.getContext("2d", { alpha: png, willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    /* The backdrop just inside the painted side of the band's edge, at the photo's own left and right
+       margins - where a studio photo has nothing but backdrop - and, when the garment's width is
+       known, right beside it too (a studio light leaves the backdrop lighter there; edge colours
+       alone left a faint seam at the collar line), joined by a gradient across. */
+    const side = Math.max(2, Math.round(W * 0.03)), inset = Math.max(1, Math.round(W * 0.01));
+    const gap = Math.round(W * 0.03);
+    const innerL = typeof band.x0 === "number" ? Math.round(band.x0 * W) - gap - side : -1;
+    const innerR = typeof band.x1 === "number" ? Math.round(band.x1 * W) + gap : -1;
+    const inner = innerL > inset + side && innerR + side < W - inset - side && innerR > innerL + side;
+    const fillFor = (ya, yb) => {
+      const y = Math.max(0, Math.min(H - 1, ya)), hgt = Math.max(1, Math.min(H, yb) - y);
+      const mean = (x) => {
+        const d = ctx.getImageData(x, y, side, hgt).data;
+        let r = 0, g = 0, b = 0, a = 0;
+        for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; a += d[i + 3]; }
+        const n = d.length / 4;
+        return `rgba(${Math.round(r / n)},${Math.round(g / n)},${Math.round(b / n)},${(a / n / 255).toFixed(3)})`;
+      };
+      const grad = ctx.createLinearGradient(0, 0, W, 0);
+      grad.addColorStop(0, mean(inset));
+      if (inner) {
+        grad.addColorStop((innerL + side / 2) / W, mean(innerL));
+        grad.addColorStop((innerR + side / 2) / W, mean(innerR));
+      }
+      grad.addColorStop(1, mean(W - inset - side));
+      return grad;
+    };
+    const strip = Math.max(2, Math.round(H * 0.015));
+    const paint = (y0, y1, fill) => { ctx.clearRect(0, y0, W, y1 - y0); ctx.fillStyle = fill; ctx.fillRect(0, y0, W, y1 - y0); };
+    if (rows.top > 0) paint(0, rows.top, fillFor(rows.top - strip, rows.top));
+    if (rows.bottom < H) paint(rows.bottom, H, fillFor(rows.bottom, rows.bottom + strip));
+    const type = png ? "image/png" : "image/jpeg";
+    const encode = (q) => (off.convertToBlob
+      ? off.convertToBlob({ type, quality: q })
+      : new Promise((res) => off.toBlob(res, type, q)));
+    let out = await encode(0.92);
+    if (!png && out && out.size > blob.size) out = await encode(0.85);
+    if (!out || !out.size || out.size > blob.size * 1.25) { refMaskNote({ did: "whole", why: "heavy" }); return blob; }
+    const pct = (v) => Math.round(v * 100);
+    refMaskNote({ did: "masked", top: pct(rows.top / H), bottom: pct((H - rows.bottom) / H),
+      kb: [Math.round(blob.size / 1024), Math.round(out.size / 1024)] });
+    console.log(`[PEAR] rear reference: the store's model painted out - ${pct(rows.top / H)}% above the collar,` +
+      ` ${pct((H - rows.bottom) / H)}% below the hem (${W}x${H}, ${Math.round(blob.size / 1024)} -> ${Math.round(out.size / 1024)} KB) -`, abbrevImg(url));
+    return out;
+  } catch (e) {
+    refMaskNote({ did: "whole", why: "failed" });
+    console.warn("[PEAR] rear reference mask failed - sending the photo whole:", e?.message || e);
+    return blob;
+  } finally {
+    try { bmp && bmp.close && bmp.close(); } catch (_) { /* already closed */ }
+  }
 }
 
 /* Warm the cache with the front AND back assets of the active subject (both halves of a
@@ -16515,6 +16681,8 @@ async function goLive() {
       pageMs: typeof performance !== "undefined" ? Math.round(performance.now()) : null,
       link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
       exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP ? PEAR_EXP : undefined,
+      /* What the rear reference's mask did before go-live (maskReferenceBand) - numbers and reasons only. */
+      ref: typeof _refMaskLog !== "undefined" && _refMaskLog.length ? _refMaskLog.slice(-3) : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the

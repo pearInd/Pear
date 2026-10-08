@@ -10,6 +10,9 @@
    §4  THE MODEL CALL: the region reaches the prompt, only a real answer is a verdict, a 429 throws
        (so it is never cached), a non-image or a failed fetch is an error, no key is "unconfigured".
    §5  THE ENDPOINT: a public http(s) photo only, and only a verdict is cached (memory + CDN).
+   §6  THE ROOM: only the distinct REAR photo is asked about (the front goes as before), before the
+       download; the mask sits between normalisation and the pre-encode; the picture keeps its size
+       (a mask, never a crop); every abstain and failure sends the photo whole; ?ref_mask=0 is off.
    What this cannot see: whether the model's box is GOOD on a given photo. That is checked by eye on
    the deployed endpoint for the store photo in the report before the room relies on it. */
 import { readFileSync } from "node:fs";
@@ -122,6 +125,90 @@ const SERVER = readFileSync(new URL("../server.js", import.meta.url), "utf8").re
   check("the memo is keyed by the CANONICAL photo (CLAUDE.md §2.2) and the region",
     /const key = `\$\{canonicalImageUrl\(imageUrl\) \|\| imageUrl\}\|\$\{region\}`;/.test(route));
   check("the answer names no vendor (§2.24: source is \"ai\")", !/gemini/i.test(route.replace(/GEMINI_API_KEY/g, "")));
+}
+
+console.log("\n── §6 the room ──");
+const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : APP.slice(i, APP.indexOf("\n}\n", i) + 3); };
+{
+  const blobFn = fnSrc("function garmentBlobCached(url) {");
+  const iBand = blobFn.indexOf("referenceBackBand(url)"), iFetch = blobFn.indexOf("await fetchWithFallback(url)");
+  const iNorm = blobFn.indexOf("normalizeToSupportedImage(raw)"), iMask = blobFn.indexOf("maskReferenceBand(normalized, url, await bandJob)");
+  const iEnc = blobFn.indexOf("preEncodeReference(blob)");
+  check("the band is asked for BEFORE the download starts, so the two overlap", iBand !== -1 && iBand < iFetch);
+  check("the mask sits between normalisation and the pre-encode - what is encoded is what is sent (the prime too)",
+    iNorm !== -1 && iNorm < iMask && iMask < iEnc);
+  check("typeof-guarded (§2.7)", /typeof referenceBackBand === "function"/.test(blobFn) && /typeof maskReferenceBand === "function"/.test(blobFn));
+
+  const hintFn = fnSrc("function referenceBackHint(url) {");
+  check("only the garment's DISTINCT REAR photo, matched with sameImage(), never === (§2.2)",
+    /distinctBackOf\(it\)/.test(hintFn) && /sameImage\(back, url\)/.test(hintFn) && !/===\s*url|url\s*===/.test(hintFn));
+  check("a store-widget garment (custom:true) is NOT skipped", !/\.custom\b/.test(hintFn.replace(/\/\*[\s\S]*?\*\//g, "")));
+
+  /* Run the band request for real, on a fake fetch and a fake room. */
+  const bandBlock = APP.slice(APP.indexOf("const REF_BAND_TIMEOUT_MS"), APP.indexOf("/** The rows to paint on an image"));
+  const make = (fetchImpl, item, search = "") => new Function("fetch", "location", "activeItem", "resolveLook", "distinctBackOf", "sameImage",
+    "isBottomsGarment", "canonicalImageUrl", "abbrevImg", "AbortSignal", "console",
+    bandBlock + "\nreturn { referenceBackBand, referenceBackHint, _refMaskLog };")(
+    fetchImpl, { origin: "https://app.example", search }, item, () => null, (it) => it.back || null,
+    (a, b) => String(a).split("?")[0] === String(b).split("?")[0], (it) => it.bottoms === true,
+    (u) => String(u).split("?")[0], (u) => String(u).slice(0, 40), { timeout: () => undefined }, { log() {}, warn() {} });
+  const item = { img: "https://cdn.example.com/tee-1.jpg", back: "https://cdn.example.com/tee-3.jpg" };
+  let asked = [];
+  const ANSWER = { band: { y0: 0.3419, y1: 0.8954, x0: 0.17, x1: 0.805 }, reason: "band" };
+  const good = make(async (u) => { asked.push(u); return { ok: true, json: async () => ANSWER }; }, item);
+  const c1 = await good.referenceBackBand("https://cdn.example.com/tee-3.jpg?width=1000");
+  const c2 = await good.referenceBackBand("https://cdn.example.com/tee-3.jpg");
+  check("a good answer comes back as the band, asked for with the photo and its region",
+    c1 && c1.y0 === 0.3419 && c1.y1 === 0.8954 && c1.x0 === 0.17 &&
+      /\/api\/garment-box\?image_url=https%3A%2F%2Fcdn\.example\.com%2Ftee-3\.jpg%3Fwidth%3D1000&region=top&v=1$/.test(asked[0]),
+    asked[0]);
+  check("...once per photo: another spelling of the same photo is the memo (canonical key)", asked.length === 1 && c2 === c1);
+  check("THE FRONT IS NEVER ASKED ABOUT - it is sent exactly as before", good.referenceBackBand(item.img) === null && asked.length === 1);
+  check("a photo the active garment does not own is not asked about", good.referenceBackBand("https://cdn.example.com/other.jpg") === null);
+  check("an upload (data:/blob:) is not asked about", good.referenceBackBand("data:image/png;base64,AAAA") === null &&
+    good.referenceBackBand("blob:https://app.example/1") === null);
+  const off = make(async (u) => { asked.push(u); return { ok: true, json: async () => ANSWER }; }, item, "?ref_mask=0");
+  check("?ref_mask=0 is the old behaviour - nothing is asked", off.referenceBackBand(item.back) === null);
+  const whole = make(async () => ({ ok: true, json: async () => ({ band: null, reason: "no-person" }) }), item);
+  check("'no band' from the server means the photo goes whole, and the record says why",
+    (await whole.referenceBackBand(item.back)) === null && whole._refMaskLog.at(-1).why === "no-person");
+  const bad = make(async () => ({ ok: true, json: async () => ({ band: { y0: -1, y1: 2 } }) }), item);
+  check("a malformed band is refused", (await bad.referenceBackBand(item.back)) === null);
+  const noX = make(async () => ({ ok: true, json: async () => ({ band: { y0: 0.3, y1: 0.9, x0: "a" } }) }), item);
+  const nx = await noX.referenceBackBand(item.back);
+  check("a band without a usable x still paints (edge colours only)", nx && nx.y0 === 0.3 && !("x0" in nx));
+  let n = 0;
+  const flaky = make(async () => { n++; throw new Error("timeout"); }, item);
+  const f1 = await flaky.referenceBackBand(item.back);
+  const f2 = await flaky.referenceBackBand(item.back);
+  check("a timeout or network failure is 'send whole' AND is re-asked next time (never memoised)", f1 === null && f2 === null && n === 2);
+  const e500 = make(async () => { n++; return { ok: false, status: 500 }; }, item);
+  n = 0; await e500.referenceBackBand(item.back); await e500.referenceBackBand(item.back);
+  check("...an HTTP error too", n === 2);
+  asked = [];
+  const pants = make(async (u) => { asked.push(u); return { ok: true, json: async () => ({ band: null }) }; }, { ...item, bottoms: true });
+  await pants.referenceBackBand(item.back);
+  check("a bottoms garment asks for the lower body", /region=bottom/.test(asked[0]));
+
+  const rowsFn = new Function(fnSrc("function refMaskRows(band, h) {") + "\nreturn refMaskRows;")();
+  const r = rowsFn({ y0: 0.3419, y1: 0.8954 }, 1499);
+  check("the PEAK rear photo: rows 0-512 (the head) and 1342-1499 (the jeans) are painted", r && r.top === 513 && r.bottom === 1342, JSON.stringify(r));
+  check("nothing worth painting -> null (the photo goes whole)", rowsFn({ y0: 0.001, y1: 0.999 }, 1499) === null &&
+    rowsFn({ y0: 0.5, y1: 0.55 }, 1499) === null && rowsFn(null, 1499) === null && rowsFn({ y0: 0.3, y1: 0.9 }, 0) === null);
+  check("one side only is still painted", !!rowsFn({ y0: 0.3, y1: 1 }, 1499) && !!rowsFn({ y0: 0, y1: 0.8 }, 1499));
+
+  const maskFn = fnSrc("async function maskReferenceBand(blob, url, band) {");
+  check("every abstain and every failure returns the ORIGINAL Blob",
+    (maskFn.match(/return blob;/g) || []).length >= 3 && /catch \(e\) \{[\s\S]*?return blob;/.test(maskFn));
+  check("the picture keeps its size - a mask, never a crop (new canvas W x H, drawn at 0,0)",
+    /new OffscreenCanvas\(W, H\)/.test(maskFn) && /ctx\.drawImage\(bmp, 0, 0\);/.test(maskFn) && !/drawImage\(bmp, s?x/.test(maskFn));
+  check("the painted rows are cleared first, so a PNG's alpha cannot show the model through the fill",
+    /ctx\.clearRect\(0, y0, W, y1 - y0\); ctx\.fillStyle = fill; ctx\.fillRect\(0, y0, W, y1 - y0\);/.test(maskFn));
+  check("a re-encode heavier than 1.25x the photo is not sent", /out\.size > blob\.size \* 1\.25\) \{ refMaskNote\(\{ did: "whole", why: "heavy" \}\); return blob; \}/.test(maskFn));
+  check("a PNG stays a PNG with its alpha", /const png = \/\^image\\\/png\$\/i\.test/.test(maskFn) && /alpha: png/.test(maskFn));
+  check("a TEST record carries what the mask did (ctx.ref)", /ref: typeof _refMaskLog !== "undefined" && _refMaskLog\.length \? _refMaskLog\.slice\(-3\) : undefined,/.test(APP));
+  check("no second pose model in the browser (CLAUDE.md §2.15)", !/runningMode: "IMAGE"/.test(APP));
 }
 
 console.log(fails === 0 ? "\ngarment-box: OK" : `\ngarment-box: ${fails} FAILED`);
