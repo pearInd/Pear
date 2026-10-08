@@ -347,6 +347,14 @@
                       prompts are prefetched before go-live, and the recorder draws only a
                       new picture. Pins the edge URL derivation, the fallback and its back-off,
                       the prefetch keys, and the recorder's gate.
+     garment-box
+                      "It just added the guy who models the shirt, with his back to the camera"
+                      (FOX PEAK, 2026-10-08): the store's model is painted out of the REAR
+                      reference. The band to keep (collar to hem) comes from the server
+                      (GET /api/garment-box, lib/garment-box.js) - never a second pose model in
+                      the browser. The margins (collar and hem in; head and jeans out), every
+                      abstain (no person, unsure, tiny, fills the height), the model call (429
+                      throws, only a verdict is cached) and the endpoint's host guard.
      live-timer
                       "If the camera doesn't see the whole body it isn't the best result"
                       (2026-09-29): the camera guide and the 3/5/10s self-timer. The timer
@@ -515,6 +523,7 @@ const SUITES = [
   ["ready-signal-signals", "ready-signal-signals.test.mjs"],
   ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
   ["engine-exp", "engine-exp.test.mjs"],
+  ["garment-box", "garment-box.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

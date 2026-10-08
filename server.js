@@ -32,6 +32,9 @@ import { supabase } from "./lib/supabase.js";
    field on classifyFrontBackDetailed() (short version: that one is stamped with
    CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
 import { classifyGarmentFull } from "./lib/garment-category.js";
+/* Where the garment is in a store photo, so the room can paint the store's model out of the rear
+   reference before it is sent (2026-10-08 - see lib/garment-box.js and GET /api/garment-box). */
+import { detectGarmentBand, GARMENT_BOX_VERSION } from "./lib/garment-box.js";
 import { makeStoreSizeChartHandler } from "./lib/store-size-charts.js";
 /* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
 import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
@@ -2902,6 +2905,65 @@ app.get("/api/garment-category", classifyLimiter, async (req, res) => {
     source: verdict.source,
     cached: false,
   });
+});
+
+/* GET /api/garment-box?image_url=…&region=top|bottom&v=N
+     -> { band: {y0,y1,x0,x1} | null, reason, source, v }
+
+   THE REFERENCE MASK'S BAND (2026-10-08). A store photo worn by a model carries the model, and the
+   render engine can draw him: the rear photo's man - head, arms, jeans - replaced the shopper for
+   ~1.4s of a back view (lib/garment-box.js has the report). The room paints the rear photo above the
+   collar and below the hem with its own backdrop before sending it - but it must not find the
+   garment itself (a second pose model in the browser doubled the GPU work and was reverted,
+   CLAUDE.md §2.15), so it asks here. `band: null` always means "send the photo as it is".
+
+   Cached twice, because the same photo is asked for by every shopper of that product: in this
+   instance's memory, and at the CDN (s-maxage) - a verdict only, never an error or a throttle,
+   so a transient failure is re-asked on the next visit instead of pinned for a month. One model
+   call per photo, ever; the room asks while the shopper is still choosing and never waits long. */
+const _garmentBoxMemo = new Map();   // `${canonical}|${region}` -> { at, body }
+const GARMENT_BOX_MEMO_MS = 24 * 60 * 60 * 1000;
+const GARMENT_BOX_MEMO_MAX = 500;
+
+app.get("/api/garment-box", classifyLimiter, async (req, res) => {
+  const imageUrl = typeof req.query?.image_url === "string" ? req.query.image_url.trim() : "";
+  const region = req.query?.region === "bottom" ? "bottom" : "top";
+  if (!imageUrl || imageUrl.length > 2048 || !/^https?:\/\//i.test(imageUrl)) {
+    return res.status(400).json({ error: "missing_image_url", message: "image_url: an http(s) URL is required." });
+  }
+  /* A photo on a public CDN, never this server's own network: the fetch below runs server-side. */
+  let parsed = null;
+  try { parsed = new URL(imageUrl); } catch (_) { /* rejected below */ }
+  if (!parsed || !isProxyHostAllowed(parsed.hostname, parsed.protocol)) {
+    return res.status(400).json({ error: "bad_image_url", message: "image_url must be a public image." });
+  }
+
+  const key = `${canonicalImageUrl(imageUrl) || imageUrl}|${region}`;
+  const hit = _garmentBoxMemo.get(key);
+  if (hit && Date.now() - hit.at < GARMENT_BOX_MEMO_MS) {
+    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");
+    return res.json({ ...hit.body, cached: true });
+  }
+
+  let out;
+  try {
+    out = await detectGarmentBand(imageUrl, region, GEMINI_API_KEY);
+  } catch (e) {
+    /* Only a 429 reaches here. Not cached anywhere - the next visit asks again. */
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({ band: null, reason: "rate-limited", source: "rate_limited", v: GARMENT_BOX_VERSION });
+  }
+  const body = { band: out.band, reason: out.reason, source: out.source, v: GARMENT_BOX_VERSION };
+  if (out.source === "ai") {
+    _garmentBoxMemo.set(key, { at: Date.now(), body });
+    if (_garmentBoxMemo.size > GARMENT_BOX_MEMO_MAX) _garmentBoxMemo.delete(_garmentBoxMemo.keys().next().value);
+    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");
+  } else {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  console.log(`[garment-box] ${region} ${out.band ? "band " + JSON.stringify(out.band) : "whole (" + out.reason + ")"}` +
+    ` raw ${JSON.stringify(out.raw || null)} [${out.source}] ${imageUrl.slice(0, 120)}`);
+  return res.json(body);
 });
 
 app.post("/api/classify-garment", classifyLimiter, async (req, res) => {
