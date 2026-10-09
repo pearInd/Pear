@@ -386,9 +386,11 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      a CORE overflow is hard-sliced from the END - so the anchor must precede the identity
      lock, or a long transcription would slice the anchor instead of itself. Comments are
      permitted between entries (each clause carries its rationale inline), hence [\s\S]*?
-     rather than \s* - the ORDER and the PRIORITIES are pinned, not the whitespace. */
+     rather than \s* - the ORDER and the PRIORITIES are pinned, not the whitespace.
+     The one part allowed after the fit sentence is FRONT_CLEAR (2026-10-08, P.LOW, opt-in per request -
+     prompt-engine §7), and only in exactly that form. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\[P\.CORE, identityLockSentence\(item, angle\)\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\[P\.CORE, identityLockSentence\(item, angle\)\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n(?:\s*\/\*[^*]*\*\/\s*\n\s*\.\.\.\(typeof _requestClearFront !== "undefined" && _requestClearFront && !bottoms && angle !== "back" \? \[\[P\.LOW, FRONT_CLEAR\]\] : \[\]\),\s*\n)?\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
      Whichever of the three the construction/category/angle axes select, it rides at

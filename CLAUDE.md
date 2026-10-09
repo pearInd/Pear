@@ -304,7 +304,8 @@ the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to
 `\n\n  /* What only the browser measured`, `orient-engine` §4 the tick from
 `  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
 (the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
-`function createOrientationWatcher() {`. `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
+`function createOrientationWatcher() {`. `pose-follow` slices `app.js` from `/* ── THE TICK WAITS FOR THE READING (2026-10-09)` to
+`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
 `/** The rows to paint on an image` (the rear band request, run on a fake fetch). `garment-cache-age-group` slices
 `server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
 `/* Per-product view lookup` and `scanner/scan-store.js` from
@@ -1217,7 +1218,7 @@ Replayed on its own clip (`return-side` §3f.6, `k-0731`): the front lands 209 -
 view; the return goes out on the first order reading past the side, which was 144ms old in a session whose engine put the
 swap ~0.07s after the send. The other eight sessions and the landing model (§4c) are unchanged. **Worker deploy.**
 
-### 2.38 The store's model painted out of the rear photo; FRONT_CLEAR for TEST sessions (2026-10-08)
+### 2.38 The store's model painted out of the rear photo; FRONT_CLEAR for TEST sessions (2026-10-08, reworded 2026-10-09)
 "Front and back work perfectly - don't touch it. Two small things: in the first measurement it just added the guy who
 models the shirt, with his back to the camera, in the middle of the measurement (the second was fine); and it put a
 necklace on me." Layer B and Layer A, each scoped so the turn timing and the front reference are untouched.
@@ -1246,6 +1247,16 @@ necklace on me." Layer B and Layer A, each scoped so the turn timing and the fro
   Reverted whole: `lib/prompts.js` and `lib/api-version.js` are byte-identical to before it again, the room asks for
   nothing, and `prompt-engine` §7 pins the absence. A sentence naming what the shopper WEARS is the same trap as naming
   a garment (the tuxedo): the engine draws toward it. The necklace stays open - any next attempt is measured first.
+- **The necklace, second wording (2026-10-09) - TEST sessions only, measuring.** The next session without the sentence
+  (15:43, record `muzj03pc`) had the chain again, a thin chain with a ring pendant, from the first second until the turn,
+  then gone; the shirt was darker than the product until the turn as well (the shopper's own dark shirt showing through a
+  start that has not converged - the turn regenerates the torso). Across the owner's PEAK clips the chain shows in 6 of 17
+  sessions without the sentence (5 from the first second), in 0 of 2 with it: the sentence is the lever, its subject was
+  the fault. `FRONT_CLEAR` is now **"Clean, unadorned neckline."** - the neckline itself, no garment, nothing worn, no
+  object named; it holds for any top's neckline. Same P.LOW, same gate (`clearFront`, TEST sessions only - every shopper
+  request byte-identical, `trace:prompt --json` identical to HEAD); the PEAK front is 533 chars with it (sheds at -2).
+  `prompt-engine` §7 pins it and the first wording's trap (no garment / worn / nothing). If the colour moves again it
+  comes off. `lib/api-version.js` regenerated - until a Worker deploy the room takes /size and /prompt from the origin.
 
 ### 2.39 The head out of frame - the side is counted, not read (2026-10-08)
 "I measured the shorts and the front and back of the shorts got mixed up." The 11:45 session (TEST record `muzajx17`) was
@@ -1274,6 +1285,30 @@ itself reads -0.6 on a body square to the lens at its end; neither the nose (gue
   a 0.40 threshold marks a head-in clip and fails 2. **Worker deploy** (the engine).
 - **Not covered:** a session whose head leaves the frame only mid-turn (no record of one), and the look rule on a real body.
 
+### 2.40 The tick waits for the reading - the back on the reading that calls it, not a tick later (2026-10-09)
+"The back wasn't right at the back, it took time to load." The 15:43 clip, frame by frame: a fast turn (the side to the back
+in ~250ms); the side plain at 2.30-2.58s, an unformed patch at 2.61, the print complete only at 2.84 on a body already
+square away. Its TEST record (`muzj03pc`): BACK went out on the reading at the side (order -0.17, ~100 degrees), where 19
+of the owner's 33 recorded turns send it on one at ~52-69 (order 0.36-0.61). The reading between (shoulders at 39% of
+square-on, ~67 degrees) landed just after its tick had sampled: every tick carried a reading ~200ms old (`oa` 190-215) -
+the pose loop's 240ms timer and the tick's 250ms one at their worst phase, as in about a third of the 33 records - so BACK went out a
+tick (~275ms) later. Not the engine's ack (480ms, as every session: the prime no longer makes the back's ack faster - 33
+records, back 395-1259ms after a prime, front 398-743ms) and not the image size (the shorts' 313 KB acked in 588ms).
+- **`awaitFreshPose()` / `notePoseStep()`** (app.js, beside POSE_SYNC): a tick whose latest reading is over
+  `POSE_FOLLOW_STALE_MS` (100) old waits for the live loop's NEXT one (at most `POSE_FOLLOW_WAIT_MS`, 180) and resumes on a
+  task of its own. No inference in the tick - POSE_SYNC (§2.21's laggy 2026-10-05 attempt) ran one there and cost 2-5 camera
+  fps; this adds none. The same readings reach the engine in the same order, sooner; the engine, its rules and the Worker
+  are untouched (no deploy). No live loop (before the reveal, the replay harnesses): no wait. `?pose_follow=0` is the
+  free-running pair; `?pose_sync=1` keeps its own path.
+- **Measured (`pose-follow` §3, the room's cadence on the 11 full recorded 360s x 4 loop phases x 5 tick phases):** the
+  decision's reading age median 125ms / max 235 -> 1ms; BACK decided on the very same reading in every run, on the wire
+  ~1ms after it instead of up to 235ms - on the body a median 10 degrees sooner (p90 23), never later; the return FRONT
+  unmoved (291 vs 292 degrees, the projection already corrects age); no run swaps more. The landing itself (the engine's
+  ~0.25s to form a new print) is the engine's. **Not measured live yet** - the next TEST session's `oa` should read under ~100.
+
+---
+
+## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
 same commit. Whichever is wrong is the one that wins.

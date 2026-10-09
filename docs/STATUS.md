@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-08 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame; the necklace sentence removed (not on main)_
+_Last updated: 2026-10-09 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading; the necklace sentence reworded, TEST sessions only (not on main)_
 
 ## At a glance
 
@@ -309,6 +309,15 @@ _Last updated: 2026-10-08 · branch merge/edge-main (preview-oct8): rear-photo m
   back to the camera. The room now notices a head out of frame (never on the nine head-in sessions on record) and the
   engine counts which side you face instead of reading it: on that session's own record the back now holds through the
   back view and the front returns at the side. No Decart credit used. Needs the same push + Worker deploy.
+- **2026-10-08 15:43 preview measurement - "the back wasn't right at the back, it took time to load; it put a necklace on
+  me that disappeared after the turn" (CLAUDE.md §2.38, §2.40):** the back went out one pose reading late - every decision
+  of that session ran on a reading ~200ms old (the pose timer and the decision timer at their worst phase; about a third
+  of the 33 records), so it went out at the side instead of at ~60 degrees. The decision now waits for the pose loop's next
+  reading when its own is stale (no extra pose inference - the 10-05 attempt that ran one cost camera fps); modelled on 11
+  recorded 360s: the back on the same reading, a median 10 degrees sooner (up to 23), the return unchanged. Browser only -
+  no Worker deploy for it. The necklace: the first sentence removed it but kept your shirt's colour; the second wording,
+  "Clean, unadorned neckline." (no garment, nothing "worn"), goes out in TEST sessions only. No Decart credit used.
+  On `preview-oct8` only; **nothing on main.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
