@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-09 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading; the necklace sentence reworded, TEST sessions only (not on main)_
+_Last updated: 2026-10-09 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading, each image its own pace, a larger jitter buffer; the necklace sentence reworded, TEST sessions only (not on main)_
 
 ## At a glance
 
@@ -318,6 +318,13 @@ _Last updated: 2026-10-09 · branch merge/edge-main (preview-oct8): rear-photo m
   no Worker deploy for it. The necklace: the first sentence removed it but kept your shirt's colour; the second wording,
   "Clean, unadorned neckline." (no garment, nothing "worn"), goes out in TEST sessions only. No Decart credit used.
   On `preview-oct8` only; **nothing on main.**
+- **2026-10-09 10:51-10:53 preview measurement - "the shirt works well but doesn't feel smooth; the shorts went crazy at the end
+  and went away at the wrong time" (CLAUDE.md §2.41):** the fresh-reading fix works live (every decision on a reading 2-52ms
+  old, was ~200). The shorts' front came back ~130ms late: its image is bigger (316 KB) and slower than the back's, and the
+  timing used the average of both - now each image its own pace (replayed: the front out ~110ms sooner). Smoothness: the
+  render's frames arrive in bursts (two close, then a ~200ms gap); the receiver now buffers 150ms instead of 80 (about 70ms more
+  delay on screen, no change in where the swaps land), and a TEST session records where the bursts come from. No Decart
+  credit used. On `preview-oct8` only; **nothing on main.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).

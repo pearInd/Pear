@@ -591,7 +591,15 @@ export const CONFIG = Object.freeze({
      Raise toward 0.15 if stutter persists on poor networks; drop back to 0 only to
      reproduce the original report. Also applied as jitterBufferTarget (the standard
      API, in ms) - see the track handler in app.js. */
-  PLAYOUT_DELAY_HINT: 0.08,         // seconds of client-side anti-jitter buffering; 0 = render ASAP, and stall on any jitter
+  /* RAISED 0.08 -> 0.15 (2026-10-09) - "the shirt works well, but it doesn't feel smooth". Every presented frame of the
+     owner's clips: the ~10 fps render arrives in bursts - two frames 25-45ms apart, then a 170-230ms gap (p90 140-170ms) -
+     so the picture plays at 10 fps on average and at 5 in the gaps. 80ms holds back less than one of those gaps; 150ms
+     holds the p90 one. The cost is ~70ms more between the camera and the screen (the feed already trails it by ~0.9-1.3s);
+     where a swap lands ON THE BODY does not move - that is the engine's camera time, not the display's. Whether the
+     bursts are the network's (this absorbs them) or come earlier (our camera frames, the engine's own spacing - it cannot)
+     is what a TEST record's out-stats.pace now says (THE PACE OF THE PICTURE, app.js). The top of the range image-first
+     pins. */
+  PLAYOUT_DELAY_HINT: 0.15,         // seconds of client-side anti-jitter buffering; 0 = render ASAP, and stall on any jitter
   PREFER_LOW_LATENCY_CODEC: true,   // SDP munge ON: codec reorder + b=AS / b=TIAS bandwidth injection.
   // H264 is hardware-decoded on virtually all modern devices (iOS, Android, Windows, Mac);
   // VP8 is software-decoded on most mobile - putting H264 first cuts decode CPU + latency.

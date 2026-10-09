@@ -305,7 +305,8 @@ the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to
 `  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
 (the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
 `function createOrientationWatcher() {`. `pose-follow` slices `app.js` from `/* ── THE TICK WAITS FOR THE READING (2026-10-09)` to
-`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
+`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `picture-pace` slices `app.js` from
+`/* ── THE PACE OF THE PICTURE (2026-10-09)` to `/* ── end THE PACE OF THE PICTURE ── */` (§2.41). `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
 `/** The rows to paint on an image` (the rear band request, run on a fake fetch). `garment-cache-age-group` slices
 `server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
 `/* Per-product view lookup` and `scanner/scan-store.js` from
@@ -1305,6 +1306,30 @@ records, back 395-1259ms after a prime, front 398-743ms) and not the image size 
   ~1ms after it instead of up to 235ms - on the body a median 10 degrees sooner (p90 23), never later; the return FRONT
   unmoved (291 vs 292 degrees, the projection already corrects age); no run swaps more. The landing itself (the engine's
   ~0.25s to form a new print) is the engine's. **Not measured live yet** - the next TEST session's `oa` should read under ~100.
+  **Measured live 2026-10-09** (records `mv0o1l3b` shirt, `mv0o42ul` shorts): `oa` 2-52ms on every tick (was 190-215).
+
+### 2.41 Each image its own pace; the picture's pace (2026-10-09)
+"The shirt works well but it doesn't feel smooth - make it smoother; and the shorts went crazy at the end and went away at
+the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0o42ul` basketball shorts, clip 10:53).
+- **The shorts' return (`engineAckEstimate(key)`, app.js THE ENGINE'S PACE):** the FRONT went out on the projection at a pace
+  of 592ms - the session's median, pulled down by the BACK's ack (597ms, 222 KB) - and took 721ms (316 KB), as its own sends
+  at connect had (684-709). It landed ~130ms late: the rear photo's shorts on a body coming round (~314 degrees for a 280
+  aim) - the distorted frames at 3.96-4.03s of the clip, CHICAGO only at 4.06. Acks are now kept per reference side
+  (`applyGarment` passes `paceKey`, its frozen angle) and the tick sends the pace of the image the NEXT swap sends (the front
+  on the back leg); an image with none yet falls back to the session's. Replayed on the record: the FRONT goes out at 2.87-2.91s
+  instead of 3.00. On the PEAK tee (76 vs 70 KB, the same acks) nothing moves. Browser only - the engine reads `lat` as before.
+  `return-side` §5.8-§5.9d.
+- **The picture (`PLAYOUT_DELAY_HINT` 0.08 -> 0.15, config.js):** every presented frame of the owner's clips: the ~10 fps
+  render arrives in bursts - two frames 25-45ms apart, then 170-230ms (p90 140-170) - 10 fps on average, 5 in the gaps; and
+  one 0.5s output stall in the shirt session. 80ms held back less than one gap; 150ms holds the p90 one, at ~70ms more between
+  the camera and the screen (where a swap lands on the BODY is the engine's camera time and does not move). The top of the
+  range `image-first` pins.
+- **THE PACE OF THE PICTURE (app.js, TEST sessions only):** which of four places makes the bursts decides whether the buffer
+  can absorb them - our camera frames (the throttle's setInterval shares the main thread with the pose model), the engine's
+  spacing (RTP timestamps), the network (arrival), or the screen. `out-stats.pace` = { in, rtp, recv, show } as [p10, p50,
+  p90, max] ms, plus `jb` (the buffer). Bursty `in` -> fix our input pacing; bursty `rtp` with even `in` -> the engine's;
+  even `rtp`, bursty `recv` -> the network, which the buffer is for. `picture-pace` (14).
+- **Not measured live yet:** both. The next TEST session's `out-stats.pace` and its return landing are the check.
 
 ---
 
