@@ -354,6 +354,13 @@
                       clips, from the second reading on the shorts clip) and the engine counts the side
                       instead of reading it. The reported record replayed both ways, scripted 360 /
                       look / noise / step-in, and untouched without the flag.
+     pose-follow
+                      "The back wasn't right at the back, it took time to load" (2026-10-09): the
+                      orientation tick waits for the pose loop's next reading when its latest is
+                      stale - no inference of its own (POSE_SYNC cost camera fps). On a fake clock
+                      (bounded, a task of its own, ?pose_follow=0), wired in POSE_SYNC's place, and
+                      at the room's cadence on the recorded 360s: the same readings, the outbound
+                      BACK on the same reading but sooner, the return unmoved.
      garment-box
                       "It just added the guy who models the shirt, with his back to the camera"
                       (FOX PEAK, 2026-10-08): the store's model is painted out of the REAR
@@ -532,6 +539,7 @@ const SUITES = [
   ["engine-exp", "engine-exp.test.mjs"],
   ["garment-box", "garment-box.test.mjs"],
   ["head-frame", "head-frame.test.mjs"],
+  ["pose-follow", "pose-follow.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

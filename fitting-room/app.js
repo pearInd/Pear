@@ -10633,6 +10633,10 @@ function createOrientationWatcher() {
       if (typeof POSE_SYNC !== "undefined" && POSE_SYNC && typeof _poseInferNow === "function" && _poseInferNow) {
         _poseSyncAt = Date.now();
         await Promise.race([_poseInferNow().catch(() => {}), new Promise((r) => setTimeout(r, POSE_SYNC_WAIT_MS))]);
+      } else if (typeof awaitFreshPose === "function") {
+        /* ...or, without it, the loop's NEXT reading when the latest is stale (THE TICK WAITS FOR THE READING) - no inference here. */
+        const fresh = awaitFreshPose();
+        if (fresh) await fresh;
       }
       const vote = await classify();
       /* THE DECISION IS REMOTE (lib/orient-engine.js - see THE ORIENTATION DECISION IS
@@ -18140,6 +18144,51 @@ const POSE_SYNC = (() => {
 const POSE_SYNC_WAIT_MS = 120;
 let _poseInferNow = null;   // the live loop's inference, for the tick to run (startPresenceWatcher)
 let _poseSyncAt = 0;        // when the tick last ran it
+/* ── THE TICK WAITS FOR THE READING (2026-10-09) - "the back wasn't right at the back, it took time to load" ──────────────
+   The 15:43 PEAK session, read frame by frame against its TEST record: the shopper turned fast (the side to the back in
+   ~250ms) and the back print formed over ~0.25s on a body already three-quarters away. The record: the outbound BACK went
+   out on the reading at the side (order -0.17, ~100 degrees), where 19 of the user's 33 recorded turns send it on one at
+   ~52-69 (order 0.36-0.61). The reading in between (the shoulders at 39% of square-on, ~67 degrees) landed just AFTER its tick had
+   sampled: every tick of that session carried a reading ~200ms old (`oa` 190-215) - the pose loop's 240ms timer and the
+   tick's 250ms one had drifted to their worst phase - so the decision on it came a tick (~275ms) later, at the side.
+   POSE_SYNC answered the same thing by running the inference INSIDE the tick, and cost 2-5 camera fps ("it's laggy").
+   This runs no inference: when the tick's latest reading is older than POSE_FOLLOW_STALE_MS it waits for the loop's own
+   next one (at most POSE_FOLLOW_WAIT_MS) and resumes on a task of its own, so a frame due between the two can present.
+   The same readings reach the engine in the same order, only sooner after they were taken - the decision rules, the
+   engine and the Worker are untouched. No live loop (before the reveal, a replay harness): no wait. ?pose_follow=0 is
+   the free-running pair. pose-follow pins it. */
+const POSE_FOLLOW = (() => {
+  try { return new URLSearchParams(location.search).get("pose_follow") !== "0"; } catch (_) { return true; }
+})();
+const POSE_FOLLOW_STALE_MS = 100;   // a reading this old is worth waiting on - the next one is due within ~140ms
+const POSE_FOLLOW_WAIT_MS = 180;    // ...but never longer than this (a stalled loop, a hidden tab)
+let _poseStepAt = 0;                // when the live loop's last inference finished
+let _poseStepWaiters = [];
+/** The live loop's hook: an inference has finished - wake every tick waiting on it. */
+function notePoseStep(now = Date.now()) {
+  _poseStepAt = now;
+  const w = _poseStepWaiters;
+  _poseStepWaiters = [];
+  for (const wake of w) wake();
+}
+/** @returns {Promise<void>|null} a wait for the loop's next reading, or null when the latest is fresh enough (or there is
+ *  no live loop to wait on) */
+function awaitFreshPose(now = Date.now()) {
+  if (!POSE_FOLLOW || typeof _poseInferNow !== "function" || !_poseStepAt) return null;
+  if (now - _poseStepAt <= POSE_FOLLOW_STALE_MS) return null;
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      setTimeout(resolve, 0);   // a task of its own: the inference and the tick never run as one block
+    };
+    const timer = setTimeout(finish, POSE_FOLLOW_WAIT_MS);
+    _poseStepWaiters.push(finish);
+  });
+}
+/* ── end THE TICK WAITS FOR THE READING ── */
 /* The live tracker instance, kept at module scope only so teardown can drop it. Its state
    is per-session by construction: startPresenceWatcher() builds a new one each time. */
 let bodyTopology = null;
@@ -18190,7 +18239,11 @@ function startPresenceWatcher() {
 
   /* One inference at a time: a caller that finds one running gets that one (THE POSE, READ FOR THE DECISION). */
   let inFlightRun = null;
-  const runInference = () => inFlightRun || (inFlightRun = poseLoopStep().finally(() => { inFlightRun = null; }));
+  /* ...and every finished inference wakes a tick waiting on it (THE TICK WAITS FOR THE READING). */
+  const runInference = () => inFlightRun || (inFlightRun = poseLoopStep().finally(() => {
+    inFlightRun = null;
+    if (typeof notePoseStep === "function") notePoseStep();
+  }));
   _poseInferNow = runInference;
   presenceWatcherTimer = setInterval(() => {
     if (POSE_SYNC && Date.now() - _poseSyncAt < tickMs + 120) return;   // the orientation tick is driving it
@@ -18359,6 +18412,7 @@ function startPresenceWatcher() {
 function stopPresenceWatcher() {
   if (presenceWatcherTimer) { clearInterval(presenceWatcherTimer); presenceWatcherTimer = null; }
   _poseInferNow = null;
+  _poseStepAt = 0;            // the next session's first tick waits on nothing until its loop has read once
   bodyTopology = null;        // a new session measures a new body from scratch
   hidePresenceOverlay();
 }
