@@ -328,7 +328,15 @@ _Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo m
 - **2026-10-10 19:13-19:15 preview measurement - "what you did broke it, put it back" (CLAUDE.md §2.38, §2.41):** the shirt
   came back from the turn as a bare chest with the print on the skin (the neckline sentence), and the shorts opened on your
   own shorts for 2.4s. Both 10-09 commits reverted (`44c114a`, `5f50349`); the fresh-reading tick (`77acef0`) stays - it
-  changes no picture. Next: real 360s through the engine on the preview, shirt and shorts, within 80 credits.
+  changes no picture.
+- **2026-10-10 verified through the engine (3 real sessions, owner's cap 80 credits):** a driver opens the FOX product page,
+  injects the preview widget (TEST key; the widget's demo flag only skips the e-mail sign-up), and feeds the room the owner's
+  own recorded 360 as the camera. PEAK shirt (record `mv2m9wyl`): the PEAK front from the first second over a white jersey,
+  the back print from the three-quarter back on, the front back at the end, no bare chest. CHICAGO shorts (`mv2mgezp`): the
+  product from the first second over green shorts, the stripe at the sides, the plain back, the front back at the end. The
+  first session (`mv2m2wmf`) was spent on a driver mistake - the room opened without the widget, so no classifier verdict
+  arrived and after its 30s gate it went live with the gallery's SECOND photo (a three-quarter front) as the back: a real
+  fallback that breaks §2.1 when the classifier never answers - **open, not fixed**.
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
