@@ -152,6 +152,10 @@ console.log("\n── §5 the wiring ──");
     /const tried = typeof triedComplementsFor === "function" \? triedComplementsFor\(currentItem\) : \[\];/.test(store) &&
     /\.reduce\(\(acc, it\) => acc\.concat\(it\), tried\.slice\(\)\)/.test(store) && /return tried\.slice\(0, 4\);/.test(store));
   check("§5.4 a tried card says so", /\$\{r\.tried \? " · מדדת" : ""\}/.test(APP));
+  const rc = between(APP, "async function renderCompleteTheLook(item) {", "\n}\n");
+  check("§5.5 a garment shown with an already-verified gallery is remembered too (the widget sends no correction then)",
+    /_galleryValidated &&\s*\n\s*typeof activeItem !== "undefined" && item === activeItem && typeof resolveLook === "function" && !resolveLook\(\)\) \{\s*\n\s*const g = galleryOf\(item\);\s*\n\s*rememberTriedGarment\(item, g\.front \|\| item\.img, distinctBackOf\(item, g\)\);/.test(rc) &&
+    rc.indexOf("rememberTriedGarment") < rc.indexOf("await "));
 }
 
 console.log(`\n${failed ? "✗" : "✓"} full-look: ${passed} passed, ${failed} failed`);

@@ -19664,6 +19664,14 @@ let _lookRenderToken = 0;
 
 async function renderCompleteTheLook(item) {
   const myToken = ++_lookRenderToken;
+  /* A garment shown with a VERIFIED gallery is remembered here too (THE GARMENTS YOU TRIED): when the server already holds the
+     classifier's verdict the widget opens the room on the sorted gallery and sends no correction - the common case, and the
+     one the first cut missed (the PEAK room never remembered its shirt). Only the active single garment; typeof: sliced suites. */
+  if (typeof rememberTriedGarment === "function" && typeof _galleryValidated !== "undefined" && _galleryValidated &&
+      typeof activeItem !== "undefined" && item === activeItem && typeof resolveLook === "function" && !resolveLook()) {
+    const g = galleryOf(item);
+    rememberTriedGarment(item, g.front || item.img, distinctBackOf(item, g));
+  }
   const recs = window.__pearStoreDomain ? await fetchStoreLookItems(item) : recommendFor(item);
   if (myToken !== _lookRenderToken) return;   // a newer item took over while this was in flight
 

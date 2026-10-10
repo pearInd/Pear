@@ -1360,7 +1360,8 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   rear-photo MASK (§2.38) uses the same bottom band - on the shorts' back photo it paints most of the shorts out; the
   shorts still rendered right in a real session (record `mv2mgezp`), so it was left alone.
 - **THE GARMENTS YOU TRIED (localStorage `pear_tried_garments`, room origin):** a garment is remembered with its classifier
-  verdict (front + distinct back - never the unclassified guess the room opens on), per store, 6 at most; "Complete the
+  verdict (front + distinct back - never the unclassified guess the room opens on) or when the room opens on an already
+  classified gallery (no correction is sent then - the common case), per store, 6 at most; "Complete the
   Look" lists those of the other region first ("· מדדת"), then the store's. Measure the shirt, open the shorts, add it.
 - `full-look` (31). The look prompt (`lookAnchorPrompt`, "the top above the bottom") is unchanged - `trace:prompt` identical.
 
