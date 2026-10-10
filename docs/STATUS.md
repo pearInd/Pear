@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading; the 10-09 changes (necklace sentence, per-image pace, jitter buffer) REVERTED (not on main)_
+_Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading, the full look in AI Auto; the 10-09 changes REVERTED (not on main)_
 
 ## At a glance
 
@@ -337,6 +337,10 @@ _Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo m
   first session (`mv2m2wmf`) was spent on a driver mistake - the room opened without the widget, so no classifier verdict
   arrived and after its 30s gate it went live with the gallery's SECOND photo (a three-quarter front) as the back: a real
   fallback that breaks §2.1 when the classifier never answers - **open, not fixed**.
+- **2026-10-10 "make both work well at the same time" - the full look (CLAUDE.md §2.42):** with garments that have back
+  photos only the shirt's photo reached the engine, and FOX had no way to put two products together. Now: one combined image
+  per side (shirt + shorts front / shirt + shorts back), the shirt cut to its own band, and the room remembers what you tried
+  so the shorts' page offers your shirt under "Complete the Look". Verified on the preview through the engine - see below.
 
 ## Hebrew/English i18n
 - **Stage:** done (core).

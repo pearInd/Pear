@@ -305,7 +305,10 @@ the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to
 `  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
 (the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
 `function createOrientationWatcher() {`. `pose-follow` slices `app.js` from `/* ── THE TICK WAITS FOR THE READING (2026-10-09)` to
-`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
+`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `full-look` slices `app.js` from `function lookHalfFor(item, angle) {`
+to the `Camera + engine bootstrap` banner, from `const LOOK_BAND_TIMEOUT_MS = 3500;` to the `stitchLookBlob` JSDoc, and from
+`/* ── THE GARMENTS YOU TRIED` to `/* ── end THE GARMENTS YOU TRIED ── */` (§2.42); `side-profile` slices `applyLook` from
+`const canStitchLook = !!(topImg && bottomImg);`. `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
 `/** The rows to paint on an image` (the rear band request, run on a fake fetch). `garment-cache-age-group` slices
 `server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
 `/* Per-product view lookup` and `scanner/scan-store.js` from
@@ -1340,6 +1343,26 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   p90, max] ms, plus `jb` (the buffer). Bursty `in` -> fix our input pacing; bursty `rtp` with even `in` -> the engine's;
   even `rtp`, bursty `recv` -> the network, which the buffer is for. `picture-pace` (14).
 - **Not measured live yet:** both. The next TEST session's `out-stats.pace` and its return landing are the check.
+
+### 2.42 The full look in AI Auto - the shirt and the shorts together (2026-10-10)
+"Make sure both work well at the same time" (the owner chose: a full look, the shirt and the shorts in one session).
+- **What was broken:** `applyLook()` skipped the stitch for AI Auto ("the slot is needed for the per-orientation Blob"), so
+  a look of two garments with back photos sent the TOP's photo alone - the shorts had no reference and the engine drew the
+  shopper's own. And a FOX shopper could not assemble one: "Complete the Look" typed the store's cached catalog by words in
+  the image URL, which FOX's numeric file names never carry (on PEAK no pants at all, on the shorts four unrelated photos).
+- **AI AUTO STITCHES TOO (`lookHalfFor`, `prewarmLookComposites`):** one composite per side - both FRONT photos on the front,
+  both BACK photos (`distinctBackOf`, else that half's front) on the back - swapped by the watcher like a single garment's;
+  the halves are frozen before any await (§2.8); both composites are built when the look forms, so a swap never waits.
+- **EACH HALF CROPPED TO ITS GARMENT (`lookGarmentBand`, `drawBandContain`):** the upper half is the top's band from
+  `/api/garment-box` (collar to hem), contained; the LOWER half is the whole photo, contained - drawn over the four
+  PEAK/CHICAGO photos the server's top bands were exact and its bottom bands were the white tee above the waistband
+  ([0, 0.15]; the shorts run 0.08-0.48). The cover fit (the models' middles) only when no band arrives. **Open:** the
+  rear-photo MASK (§2.38) uses the same bottom band - on the shorts' back photo it paints most of the shorts out; the
+  shorts still rendered right in a real session (record `mv2mgezp`), so it was left alone.
+- **THE GARMENTS YOU TRIED (localStorage `pear_tried_garments`, room origin):** a garment is remembered with its classifier
+  verdict (front + distinct back - never the unclassified guess the room opens on), per store, 6 at most; "Complete the
+  Look" lists those of the other region first ("· מדדת"), then the store's. Measure the shirt, open the shorts, add it.
+- `full-look` (31). The look prompt (`lookAnchorPrompt`, "the top above the bottom") is unchanged - `trace:prompt` identical.
 
 ---
 
