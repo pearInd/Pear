@@ -305,8 +305,7 @@ the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to
 `  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
 (the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
 `function createOrientationWatcher() {`. `pose-follow` slices `app.js` from `/* ── THE TICK WAITS FOR THE READING (2026-10-09)` to
-`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `picture-pace` slices `app.js` from
-`/* ── THE PACE OF THE PICTURE (2026-10-09)` to `/* ── end THE PACE OF THE PICTURE ── */` (§2.41). `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
+`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
 `/** The rows to paint on an image` (the rear band request, run on a fake fetch). `garment-cache-age-group` slices
 `server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
 `/* Per-product view lookup` and `scanner/scan-store.js` from
@@ -1248,7 +1247,11 @@ necklace on me." Layer B and Layer A, each scoped so the turn timing and the fro
   Reverted whole: `lib/prompts.js` and `lib/api-version.js` are byte-identical to before it again, the room asks for
   nothing, and `prompt-engine` §7 pins the absence. A sentence naming what the shopper WEARS is the same trap as naming
   a garment (the tuxedo): the engine draws toward it. The necklace stays open - any next attempt is measured first.
-- **The necklace, second wording (2026-10-09) - TEST sessions only, measuring.** The next session without the sentence
+- **The necklace, second wording (2026-10-09) - TRIED AND REVERTED 2026-10-10.** The 10-10 19:15 session (record `mv2lhqwq`):
+  the shirt from the first second, then after the turn back to the front a BARE CHEST with "PEAK" on the skin (4.4-4.9s of the
+  clip) - "unadorned" read as unclothed. Two wordings about the neckline, two failures (the shopper's own shirt; no shirt):
+  no third one without a way to measure it first. Reverted whole (`lib/prompts.js`, `lib/api-version.js` back to
+  d022d8b34a6d7583, the room asks for nothing; `prompt-engine` §7 pins the absence). What was tried: The next session without the sentence
   (15:43, record `muzj03pc`) had the chain again, a thin chain with a ring pendant, from the first second until the turn,
   then gone; the shirt was darker than the product until the turn as well (the shopper's own dark shirt showing through a
   start that has not converged - the turn regenerates the torso). Across the owner's PEAK clips the chain shows in 6 of 17
@@ -1308,7 +1311,14 @@ records, back 395-1259ms after a prime, front 398-743ms) and not the image size 
   ~0.25s to form a new print) is the engine's. **Not measured live yet** - the next TEST session's `oa` should read under ~100.
   **Measured live 2026-10-09** (records `mv0o1l3b` shirt, `mv0o42ul` shorts): `oa` 2-52ms on every tick (was 190-215).
 
-### 2.41 Each image its own pace; the picture's pace (2026-10-09)
+### 2.41 Each image its own pace; the picture's pace (2026-10-09) - REVERTED 2026-10-10
+**Reverted with the necklace sentence** after the owner's 10-10 measurement ("what you did broke it - put it back"): the shirt
+rendered a bare chest after the turn (the sentence, §2.38) and the shorts session opened on the shopper's own shorts for
+2.4s - a session whose orientation link and wire stalled before the reveal (`link-ping` 1397ms, a write waiting 2147ms),
+not shown to come from these changes, but reverted with them on the owner's call. `PLAYOUT_DELAY_HINT` is 0.08 again and the
+pace is the session's median again. What was measured, kept for the next attempt: the shorts session's own `out-stats.pace`
+(150ms buffer) read the engine's RTP spacing even (p90 124) and the ARRIVAL bursty (p90 182) - the network, which a buffer
+is for; the shirt session read our INPUT bursty (p90 154, camera at 22 fps) - our main thread. What it said:
 "The shirt works well but it doesn't feel smooth - make it smoother; and the shorts went crazy at the end and went away at
 the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0o42ul` basketball shorts, clip 10:53).
 - **The shorts' return (`engineAckEstimate(key)`, app.js THE ENGINE'S PACE):** the FRONT went out on the projection at a pace

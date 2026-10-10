@@ -171,30 +171,15 @@ console.log("\n── §5 the browser carries no prompt wording ──");
   }
 }
 
-console.log("\n── §7 FRONT_CLEAR - opt-in, front tops only, TEST sessions only (\"it put a necklace on me\", 2026-10-08) ──");
+console.log("\n── §7 FRONT_CLEAR is gone - it kept the shopper's own shirt (2026-10-08) ──");
 {
-  const SENT = "Clean, unadorned neckline.";
-  const tee = { name: "חולצה עם הדפס", title: "חולצה עם הדפס", type: "חולצה קצרה", category: "tops", textOcr: "PEAK", custom: true, __bottoms: false };
-  const pants = { name: "מכנסי כדורסל", title: "מכנסי כדורסל", category: "bottoms", __bottoms: true };
-  const ask = (item, angle, extra = {}) => LIB.promptForRequest(LIB.sanitizePromptRequest({ kind: "single", item, angle, delta: 0, ...extra }));
-  check("a request that does not ask is byte-identical to before (no sentence)", !ask(tee, "front").includes(SENT) && !ask(tee, "back").includes(SENT));
-  check("a request that asks gets it on the FRONT of a top, at the end (P.LOW, after the fit sentence)",
-    ask(tee, "front", { clearFront: true }).endsWith(SENT), ask(tee, "front", { clearFront: true }).slice(-120));
-  check("...never on the back, never on bottoms, never on the full look",
-    !ask(tee, "back", { clearFront: true }).includes(SENT) && !ask(pants, "front", { clearFront: true }).includes(SENT) &&
-      !LIB.promptForRequest(LIB.sanitizePromptRequest({ kind: "look", clearFront: true })).includes(SENT));
-  check("...and it does not leak into the next request (per-request state, reset in finally)",
-    ask(tee, "front", { clearFront: true }).includes(SENT) && !ask(tee, "front").includes(SENT));
-  check("only a literal true asks", !("clearFront" in LIB.sanitizePromptRequest({ clearFront: "true" })) &&
-    LIB.sanitizePromptRequest({ clearFront: true }).clearFront === true);
-  check("the sentence names no object (no negative prompt exists; a named noun is summoned)",
-    !/necklace|chain|jewel|pendant|accessor/i.test(SENT) && LIB_SRC.includes(`const FRONT_CLEAR = "${SENT}";`));
-  /* The first wording ("Nothing is worn over the garment's collar or front.") rendered the shopper's OWN shirt colour in both
-     measured sessions: "the garment" read as what they wear, "nothing worn over it" as keep it (2026-10-08). */
-  check("...and none of the first wording's trap: no garment, nothing worn, no 'nothing'", !/\bworn\b|\bwear|garment|nothing/i.test(SENT), SENT);
-  const wp = APP.slice(APP.indexOf("function wirePrompt(item, angle, where, opts = {}) {"), APP.indexOf("\n}\n", APP.indexOf("function wirePrompt(item, angle, where, opts = {}) {")));
-  check("the room asks for it only from a TEST session, and only for the front",
-    /\.\.\.\(front && typeof traceEnabled === "function" && traceEnabled\(\) \? \{ clearFront: true \} : \{\}\),/.test(wp), wp);
+  /* "Nothing is worn over the garment's collar or front." went out in TEST sessions to stop an invented necklace, and the
+     first measured session (15:29, record muzijj7m) rendered the PEAK print on the shopper's OWN dark shirt from the first
+     second: "the garment" read as what the shopper wears, and "nothing over it" as keep it. Reverted whole; this pins the
+     absence so it is not re-added blind (CLAUDE.md §2.38). */
+  check("no prompt sentence about what is worn over the garment", !/worn over the garment/i.test(LIB_SRC) && !/FRONT_CLEAR/.test(LIB_SRC));
+  check("the room sends no clearFront and the engine reads none",
+    !/clearFront/.test(APP) && !/clearFront/.test(LIB_SRC));
 }
 
 console.log(fails === 0 ? "\nPrompt engine: OK" : `\nPrompt engine: ${fails} FAILED`);

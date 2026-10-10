@@ -797,30 +797,12 @@ console.log("\n── §5 the wiring ──");
   check("§5.7 the engine's constants the trigger reads live inside it (turn-yaw-window runs it standalone)",
     /function makeEarlyTurnTrigger\([\s\S]*?const SIDE_BAND = -0\.7;[\s\S]*?const SIDE_YAW_DEG = 40;/.test(ENGINE_SRC));
   /* THE ENGINE'S PACE. */
-  /* ...of the image the next swap sends (EACH IMAGE ITS OWN PACE, 2026-10-09): the front on the back leg. */
-  check("§5.8 the tick sends the engine's pace for the image the next swap sends, typeof-guarded",
-    /lat: typeof engineAckEstimate === "function" \? engineAckEstimate\(autoOrientation === "back" \? "front" : autoOrientation === "front" \? "back" : undefined\) : null,/.test(APP));
+  check("§5.8 the tick sends the engine's pace, typeof-guarded",
+    /lat: typeof engineAckEstimate === "function" \? engineAckEstimate\(\) : null,/.test(APP));
   check("§5.9 ...measured on every REPEAT image write (never a prompt-only write, nor the back's first send), reset with the wire",
     /const ENGINE_PACE_LABELS = new Set\(\["applyGarment", "applyLook"\]\);/.test(APP) &&
-    /await send\(\);\s*\n\s*if \(ENGINE_PACE_LABELS\.has\(label\)\) noteEngineAck\(Date\.now\(\) - sentAt, paceKey\);/.test(APP) &&
-    /function resetConditionWire\(\) \{\s*\n\s*wireEpoch\+\+;\s*\n\s*_engineAckMs = \[\];[^\n]*\n\s*_engineAckByKey = new Map\(\);/.test(APP));
-  check("§5.9b applyGarment keys its ack by the reference's side (its frozen angle)",
-    /sendCondition\("applyGarment", \(\) => rtClient\.set\(payload\), \{ paceKey: angleAtStart === "back" \? "back" : "front" \}\);/.test(APP));
-  {
-    /* THE REPORT (10:53 shorts, record mv0o42ul): the front's own acks 684-709 at connect, the back's swap 597 - the session's
-       median read 592 on the back leg, and the FRONT it timed took 721. */
-    const ctx = new Function(between(APP, "const ENGINE_PACE_LABELS", "\nfunction sendCondition(") +
-      "\nreturn { noteEngineAck, engineAckEstimate };")();
-    ctx.noteEngineAck(684, "front"); ctx.noteEngineAck(709, "front"); ctx.noteEngineAck(560, "front"); ctx.noteEngineAck(597, "back"); ctx.noteEngineAck(540, "back");
-    const front = ctx.engineAckEstimate("front"), back = ctx.engineAckEstimate("back"), all = ctx.engineAckEstimate(), none = ctx.engineAckEstimate("look");
-    check("§5.9c each image its own pace: the front's own median, the back's own, the session's for an image with none yet",
-      front === 684 && back === 597 && all === 560 && none === 560, JSON.stringify({ front, back, all, none }));
-    const ctx2 = new Function(between(APP, "const ENGINE_PACE_LABELS", "\nfunction sendCondition(") +
-      "\nreturn { noteEngineAck, engineAckEstimate };")();
-    ctx2.noteEngineAck(430); ctx2.noteEngineAck(450);
-    check("§5.9d ...an unkeyed write counts toward the session's alone (the look, a caller without a key)",
-      ctx2.engineAckEstimate("front") === 450 && ctx2.engineAckEstimate() === 450);
-  }
+    /await send\(\);\s*\n\s*if \(ENGINE_PACE_LABELS\.has\(label\)\) noteEngineAck\(Date\.now\(\) - sentAt\);/.test(APP) &&
+    /function resetConditionWire\(\) \{\s*\n\s*wireEpoch\+\+;\s*\n\s*_engineAckMs = \[\];/.test(APP));
   {
     const ctx = new Function(between(APP, "const ENGINE_PACE_LABELS", "\nfunction sendCondition(") +
       "\nreturn { noteEngineAck, engineAckEstimate };")();

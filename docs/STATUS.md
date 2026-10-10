@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-09 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading, each image its own pace, a larger jitter buffer; the necklace sentence reworded, TEST sessions only (not on main)_
+_Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading; the 10-09 changes (necklace sentence, per-image pace, jitter buffer) REVERTED (not on main)_
 
 ## At a glance
 
@@ -325,6 +325,10 @@ _Last updated: 2026-10-09 · branch merge/edge-main (preview-oct8): rear-photo m
   render's frames arrive in bursts (two close, then a ~200ms gap); the receiver now buffers 150ms instead of 80 (about 70ms more
   delay on screen, no change in where the swaps land), and a TEST session records where the bursts come from. No Decart
   credit used. On `preview-oct8` only; **nothing on main.**
+- **2026-10-10 19:13-19:15 preview measurement - "what you did broke it, put it back" (CLAUDE.md §2.38, §2.41):** the shirt
+  came back from the turn as a bare chest with the print on the skin (the neckline sentence), and the shorts opened on your
+  own shorts for 2.4s. Both 10-09 commits reverted (`44c114a`, `5f50349`); the fresh-reading tick (`77acef0`) stays - it
+  changes no picture. Next: real 360s through the engine on the preview, shirt and shorts, within 80 credits.
 
 ## Hebrew/English i18n
 - **Stage:** done (core).

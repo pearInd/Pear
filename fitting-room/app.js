@@ -939,32 +939,15 @@ let _orientSendMark = null;
    that times a turn is the REPEAT swap's. Counted, it read a fast engine as slow and held every back (the twin, 2026-10-04). */
 const ENGINE_PACE_LABELS = new Set(["applyGarment", "applyLook"]);
 let _engineAckMs = [];
-/* EACH IMAGE ITS OWN PACE (2026-10-09) - "the shorts went crazy at the end and went away at the wrong time". The 10:53
-   basketball-shorts session (record mv0o42ul): the return FRONT was timed on a pace of 592ms - the median of the session's
-   acks, pulled down by the BACK's (597ms, 222 KB) - and the FRONT it sent (316 KB) took 721ms, as its own sends at connect
-   had (684-709). It landed ~130ms late, the shorts drawn from the rear photo on a body already coming round (~314 degrees
-   for a 280 aim) - the distorted frames at the side. The return sends the FRONT, so its timing reads the front's own acks;
-   an image with none yet falls back to the session's. On the PEAK tee (76 vs 70 KB, the same acks) nothing moves. Keyed by
-   the reference's side (applyGarment's frozen angle); a write without a key counts only toward the session's. */
-let _engineAckByKey = new Map();
-function noteEngineAck(ms, key) {
+function noteEngineAck(ms) {
   if (!Number.isFinite(ms) || ms < 0) return;
   _engineAckMs.push(Math.round(ms));
   if (_engineAckMs.length > 3) _engineAckMs.shift();
-  if (typeof key === "string" && key) {
-    const own = _engineAckByKey.get(key) || [];
-    own.push(Math.round(ms));
-    if (own.length > 3) own.shift();
-    _engineAckByKey.set(key, own);
-  }
 }
-/** @param {string} [key] the image the next swap sends ("front"/"back") - its own acks when it has any
- *  @returns {number|null} the median of the last three image acks (ms) - that image's, else the session's - or null before the first */
-function engineAckEstimate(key) {
-  const own = typeof key === "string" && key ? _engineAckByKey.get(key) : null;
-  const src = own && own.length ? own : _engineAckMs;
-  if (!src.length) return null;
-  const a = src.slice().sort((x, y) => x - y);
+/** @returns {number|null} the median of the session's last three image acks (ms), or null before the first */
+function engineAckEstimate() {
+  if (!_engineAckMs.length) return null;
+  const a = _engineAckMs.slice().sort((x, y) => x - y);
   return a[a.length >> 1];
 }
 /** @returns {number|null} the SLOWEST of those three - the engine the back gate must plan for (one slow ack is what
@@ -973,7 +956,7 @@ function engineAckHigh() {
   return _engineAckMs.length ? Math.max(..._engineAckMs) : null;
 }
 
-function sendCondition(label, send, { skipIfBusy = false, paceKey = null } = {}) {
+function sendCondition(label, send, { skipIfBusy = false } = {}) {
   if (skipIfBusy && wireBusy()) {
     console.log(`[PEAR] ${label}: a conditioning write is already in flight - skipped`,
       "(background re-conditioning is re-offered on the next tick)");
@@ -1004,7 +987,7 @@ function sendCondition(label, send, { skipIfBusy = false, paceKey = null } = {})
     const sentAt = Date.now();
     try {
       await send();
-      if (ENGINE_PACE_LABELS.has(label)) noteEngineAck(Date.now() - sentAt, paceKey);
+      if (ENGINE_PACE_LABELS.has(label)) noteEngineAck(Date.now() - sentAt);
       return true;
     } finally {
       /* UNCONDITIONAL, unlike the epoch-scoped release beside it: the write was on the wire
@@ -1030,7 +1013,6 @@ function sendCondition(label, send, { skipIfBusy = false, paceKey = null } = {})
 function resetConditionWire() {
   wireEpoch++;
   _engineAckMs = [];   // the engine's pace is per session (THE ENGINE'S PACE)
-  _engineAckByKey = new Map();
   isSettingCondition = false;
   wireWrites = 0;
   wireQueue = Promise.resolve();
@@ -5776,7 +5758,6 @@ function createThrottledInputStream(srcStream, {
       if (outTrack && typeof outTrack.requestFrame === "function") outTrack.requestFrame();
       lastFrameAt = clock();
       if (typeof traceInputFrame === "function") traceInputFrame(canvas);   // a TEST session's lag probe; a no-op otherwise
-      if (typeof notePaceInput === "function") notePaceInput(performance.now());   // THE PACE OF THE PICTURE; a no-op otherwise
     } catch (_) {}
   };
 
@@ -8931,43 +8912,6 @@ function makeStreamContinuity({ stallMs = LIVE_STALL_REVEAL_MS, fadeMs = LIVE_CO
   };
 }
 
-/* ── THE PACE OF THE PICTURE (2026-10-09) - "the shirt works well, but it doesn't feel smooth" ──────────────────────────
-   The owner's clips, every presented frame: the render's ~10 fps arrive unevenly - two frames 25-45ms apart, then a gap of
-   170-230ms (p90 ~140-170ms, max ~225-235 in the 10-08 15:43 and 10-09 10:53 clips) - a picture that runs at 10 fps on
-   average and looks like 5 in the gaps. Where the unevenness is made decides the fix: the camera frames we SEND (the
-   throttle's setInterval on a main thread that also runs the pose model), the engine's own spacing (its RTP timestamps),
-   or the network (the arrival time against those timestamps). A TEST session now records all three at the end of the
-   window: the intervals between the throttle's frames (`in`), the frames' RTP timestamps (`rtp`), their arrival
-   (`recv`) and their presentation (`show`), each as [p10, p50, p90, max] ms, in `out-stats.pace`. Passive: nothing
-   decides on it, and a shopper's session collects nothing. */
-let _paceIn = null;              // the throttle's frame times while a TEST session's output is on screen; null otherwise
-const PACE_MAX_SAMPLES = 600;    // ~60s at 10 fps - a measurement window is 5s
-function notePaceInput(t) {
-  if (_paceIn && _paceIn.length < PACE_MAX_SAMPLES) _paceIn.push(t);
-}
-/** @returns {number[]|null} [p10, p50, p90, max] of the intervals between consecutive times (ms), or null under 3 */
-function paceSummary(times) {
-  if (!Array.isArray(times) || times.length < 3) return null;
-  const iv = [];
-  for (let i = 1; i < times.length; i++) { const d = times[i] - times[i - 1]; if (Number.isFinite(d) && d >= 0) iv.push(d); }
-  if (iv.length < 2) return null;
-  iv.sort((a, b) => a - b);
-  const q = (p) => Math.round(iv[Math.min(iv.length - 1, Math.floor(iv.length * p))]);
-  return [q(0.1), q(0.5), q(0.9), Math.round(iv[iv.length - 1])];
-}
-/** RTP timestamps (90 kHz, wrapping at 2^32) to a monotonic ms series. */
-function paceRtpMs(ts) {
-  const out = [];
-  let base = 0, prev = null;
-  for (const t of ts) {
-    if (prev !== null && t < prev && prev - t > 2 ** 31) base += 2 ** 32;   // one wrap
-    out.push((base + t) / 90);
-    prev = t;
-  }
-  return out;
-}
-/* ── end THE PACE OF THE PICTURE ── */
-
 let _continuityCanvas = null;
 let _continuity = null;          // { stop } while a live session runs
 let liveContinuityAlpha = 0;     // the camera layer's current opacity - the recorder blends at exactly this
@@ -9026,18 +8970,10 @@ function startStreamContinuity() {
   const model = makeStreamContinuity();
   const t0 = performance.now();
   let stopped = false, raf = 0, aiFrames = 0, camFrames = 0, shownAlpha = -1;
-  /* THE PACE OF THE PICTURE - a TEST session only. */
-  const pace = typeof traceEnabled === "function" && traceEnabled() ? { show: [], recv: [], rtp: [] } : null;
-  _paceIn = pace ? [] : null;
-  const onAi = (now, md) => {
+  const onAi = (now) => {
     if (stopped) return;
     aiFrames++; model.frame(now);
     if (typeof traceOutputFrame === "function") traceOutputFrame(ai);   // a TEST session's lag probe; a no-op otherwise
-    if (pace && pace.show.length < PACE_MAX_SAMPLES) {
-      pace.show.push(now);
-      if (md && Number.isFinite(md.receiveTime)) pace.recv.push(md.receiveTime);
-      if (md && Number.isFinite(md.rtpTimestamp)) pace.rtp.push(md.rtpTimestamp);
-    }
     ai.requestVideoFrameCallback(onAi);
   };
   ai.requestVideoFrameCallback(onAi);
@@ -9079,11 +9015,8 @@ function startStreamContinuity() {
         traceOrient("out-stats", { camFps: camTimed ? Math.round(camFrames / secs) : null, outFps: Math.round(aiFrames / secs),
           longestGap: Math.round(model.stats.longestGapMs), stalls: model.stats.stalls,
           camMs: LIVE_CAMERA_BRIDGE ? Math.round(model.stats.cameraMs) : 0, stallMs: Math.round(model.stats.cameraMs),
-          bridge: LIVE_CAMERA_BRIDGE,
-          ...(pace ? { pace: { in: paceSummary(_paceIn), rtp: paceSummary(paceRtpMs(pace.rtp)), recv: paceSummary(pace.recv),
-            show: paceSummary(pace.show), jb: Math.round(PLAYOUT_DELAY_HINT * 1000) } } : {}) });
+          bridge: LIVE_CAMERA_BRIDGE });
       }
-      _paceIn = null;   // THE PACE OF THE PICTURE: recorded above, collected no further
       console.log(`[PEAR] stream continuity: session - local camera ${camTimed ? (camFrames / secs).toFixed(0) + " fps" : "fps n/a"},` +
         ` render output ${(aiFrames / secs).toFixed(0)} fps, longest output gap ${Math.round(model.stats.longestGapMs)}ms,` +
         ` ${model.stats.stalls} stall(s) ` + (LIVE_CAMERA_BRIDGE ? `bridged with the live camera (${Math.round(model.stats.cameraMs)}ms on screen)`
@@ -10719,8 +10652,7 @@ function createOrientationWatcher() {
         /* THE HEAD OUT OF FRAME: the engine counts the side instead of reading the order's sign. Sent only when true. */
         ...(typeof _poseHeadOut !== "undefined" && _poseHeadOut === true ? { headOut: true } : {}),
         /* The engine's pace (THE ENGINE'S PACE): the return to the front goes out earlier on a slow engine. */
-        /* ...of the image the NEXT swap sends: the front on the back leg, the back on the front leg (EACH IMAGE ITS OWN PACE). */
-        lat: typeof engineAckEstimate === "function" ? engineAckEstimate(autoOrientation === "back" ? "front" : autoOrientation === "front" ? "back" : undefined) : null,
+        lat: typeof engineAckEstimate === "function" ? engineAckEstimate() : null,
         latHi: typeof engineAckHigh === "function" ? engineAckHigh() : null,
         lock: autoOrientation, profile: autoProfile, dualView: currentAngle === AUTO_ANGLE,
         dbg: ORIENT_DEBUG ? orientDebugFacts(vote) : undefined,
@@ -12470,16 +12402,12 @@ const _wirePrompts = new Map();
  * @returns {Promise<string>}
  */
 function wirePrompt(item, angle, where, opts = {}) {
-  const front = angle !== "back";
   return requestWirePrompt({
     kind: "single",
     item: promptFactsOf(item),
-    angle: front ? "front" : "back",
+    angle: angle === "back" ? "back" : "front",
     inProfile: opts.inProfile === true,
     delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0,
-    /* FRONT_CLEAR ("it put a necklace on me", 2026-10-08 - see lib/prompts.js): asked for from a TEST
-       session only until the owner has measured it; a shopper's request is exactly as before. */
-    ...(front && typeof traceEnabled === "function" && traceEnabled() ? { clearFront: true } : {}),
   }, where);
 }
 
@@ -13126,8 +13054,7 @@ async function applyGarment(item) {
      prompt-only-flip/side-profile run this function standalone against a fixed sandbox
      global list, where a bare reference would throw ReferenceError. */
   const condBefore = typeof sampleRenderSignature === "function" ? sampleRenderSignature() : null;
-  /* paceKey: this reference's side - the return to the front is timed on the front's own acks (EACH IMAGE ITS OWN PACE). */
-  await sendCondition("applyGarment", () => rtClient.set(payload), { paceKey: angleAtStart === "back" ? "back" : "front" });
+  await sendCondition("applyGarment", () => rtClient.set(payload));
   /* Stamped only AFTER set() resolves, which is what makes a retry correct: applyActive()
      re-enters this function on a rejection, and if these had been written optimistically
      the second attempt would see its own reference "already on the wire" and take the

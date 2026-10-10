@@ -361,12 +361,6 @@
                       (bounded, a task of its own, ?pose_follow=0), wired in POSE_SYNC's place, and
                       at the room's cadence on the recorded 360s: the same readings, the outbound
                       BACK on the same reading but sooner, the return unmoved.
-     picture-pace
-                      "The shirt works well, but it doesn't feel smooth" (2026-10-09): the render's
-                      ~10 fps arrives in bursts. The receiver's jitter buffer 80 -> 150ms (both APIs,
-                      one number), and a TEST record's out-stats.pace says where the unevenness is
-                      made - our camera frames, the engine's spacing, the network, the screen. The
-                      summaries on the reported intervals, an RTP wrap, the TEST-only wiring.
      garment-box
                       "It just added the guy who models the shirt, with his back to the camera"
                       (FOX PEAK, 2026-10-08): the store's model is painted out of the REAR
@@ -546,7 +540,6 @@ const SUITES = [
   ["garment-box", "garment-box.test.mjs"],
   ["head-frame", "head-frame.test.mjs"],
   ["pose-follow", "pose-follow.test.mjs"],
-  ["picture-pace", "picture-pace.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────
