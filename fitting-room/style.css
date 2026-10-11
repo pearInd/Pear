@@ -6342,15 +6342,23 @@ body :is(.camera-card__flip, .camera-card__timer, .pear-rz-btn--replay, .plb-btn
               inset 0 -8px 16px -12px rgba(255, 255, 255, .35), 0 8px 22px -12px rgba(0, 0, 0, .5);
 }
 /* a primary ON a dark surface (the replay card's Download): the translucent tint went olive over the dark card and its
-   dark label sank into it - here the pear glass is near-opaque, the label dark and crisp */
-body .pear-rz-btn--dl {
-  background: linear-gradient(180deg, rgba(196, 230, 72, .96) 0%, rgba(150, 192, 8, .92) 100%);
-  color: #172300;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .75), inset 0 0 0 .5px rgba(255, 255, 255, .5),
-              inset 0 -8px 16px -12px rgba(255, 255, 255, .5), 0 10px 26px -12px rgba(141, 182, 0, .55);
+   dark label sank into it - here the pear glass is near-opaque, the label dark and crisp. Scoped to the card by its id:
+   the shared tint rule above carries the weight of .pear-sz-btn.is-active through its :is(), and a class-weight rule
+   here lost to it (reported with a screenshot: "the download button is hard to see"). */
+body #pearReplayZone .pear-rz-btn--dl {
+  background: linear-gradient(180deg, rgb(201, 233, 82) 0%, rgb(152, 194, 10) 100%);
+  color: #142000;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), inset 0 0 0 .5px rgba(255, 255, 255, .55),
+              inset 0 -8px 16px -12px rgba(255, 255, 255, .55), 0 10px 26px -12px rgba(141, 182, 0, .6);
 }
-@media (hover: hover) and (pointer: fine) {
-  body .pear-rz-btn--dl:hover { background: linear-gradient(180deg, rgba(206, 236, 90, .98) 0%, rgba(158, 200, 12, .95) 100%); }
+body #pearReplayZone .pear-rz-btn--dl .pear-rz-btn__en { opacity: .72; }
+/* Add to Cart's success moment (the white check) - the same solid pear glass, so the check reads; the tint rule above
+   would otherwise leave a white check on pale glass */
+body .btn-add-cart.is-done:not(#_) {
+  background: linear-gradient(180deg, rgb(168, 204, 30) 0%, rgb(120, 160, 0) 100%);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), inset 0 0 0 .5px rgba(255, 255, 255, .45),
+              inset 0 -8px 16px -12px rgba(255, 255, 255, .45), 0 10px 26px -12px rgba(120, 160, 0, .6);
 }
 /* the selected size reads as chosen, the rest as glass keys */
 body .pear-sz-btn.is-active { box-shadow: var(--lg2-rim), var(--lg2-depth), 0 0 0 1px rgba(141, 182, 0, .55), var(--lg2-drop); }
@@ -6389,30 +6397,65 @@ body .camera-card.live, body .camera-card.show-live {
 }
 body .cam-guide__step--key { animation: camGuideStep .62s var(--ease-spring) both; animation-delay: .16s; }
 body .cat-item.is-active { animation: none; }
+/* ── 3b · HOVER AND TOUCH - one answer each ──────────────────────────────────────────────────────────────────────
+   REPORTED: "when you rest on a button with the mouse, or on a phone, it doesn't feel good". Many buttons carried their
+   own :hover outside any hover query - a 2-3px lift, another tint, a pear ring, a bigger shadow - and a phone keeps
+   :hover after a tap, so a tapped button stayed raised and recoloured. Now:
+     · a mouse: the glass brightens, its shadow deepens, and it lifts (the lift is the `scale` animation in
+       lux-interactions.js, so hover, press and release are one continuous motion) - no ring, no translate, no spin;
+     · touch: no hover state at all - a button looks exactly as it did before the finger, except while it is pressed.
+   :not(#_) lends these an id's weight, so they outrank every per-button hover (some are id-scoped). */
 @media (hover: hover) and (pointer: fine) {
   body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
            .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
            .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
-           .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip,
-           .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout,
-           .cart-line__remove):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
-    transform: none;
-  }
-  body #btn-next-screen:hover:not(:disabled):not([aria-disabled="true"]) { transform: none; }
-  body .cl-arrow:hover { transform: translateY(-50%); }
-  body :is(.btn-ghost, .btn-edit-measurements, .cart-btn, .cookie-btn--ghost, .pcmp__close, .terms-modal__close, .gd-close,
-           .pear-help-widget__btn, .pear-help-widget__close, .cl-arrow, .pip-retake, .pip-clear,
-           .profile-dropdown__logout, .cart-line__remove, .pear-sz-btn:not(.is-active)):hover:not(:disabled) {
+           .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .camera-card__timer,
+           .pip-retake, .pip-clear, .profile-dropdown__logout, .cart-line__remove, .cl-card__look):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    transform: none; border-color: transparent;
     background: var(--lg2-clear-hover);
+    box-shadow: var(--lg2-rim), var(--lg2-depth), 0 2px 4px rgba(15, 23, 42, .06), 0 18px 36px -16px rgba(15, 23, 42, .4);
   }
-  body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look, .pear-rz-btn--dl,
-           .btn-update-measure, .pear-compare-bar):hover:not(:disabled):not([aria-disabled="true"]) {
-    background: var(--lg2-tint-hover);
+  body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look, .btn-update-measure, .pear-compare-bar, .pear-sz-btn.is-active):hover:not(:disabled):not([aria-disabled="true"]):not(#_) { background: var(--lg2-tint-hover); color: #2c4100; }
+  body :is(.camera-card__flip, .camera-card__timer, .pear-rz-btn--replay, .plb-btn, .pear-lightbox__close):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    background: linear-gradient(180deg, rgba(255, 255, 255, .3) 0%, rgba(255, 255, 255, .12) 100%); color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), inset 0 0 0 .5px rgba(255, 255, 255, .34),
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .4), 0 14px 30px -14px rgba(0, 0, 0, .6);
   }
-  /* no spins on hover or press (the close buttons turned 90 degrees, the flip and the retake icons spun) */
-  body :is(.pcmp__close, .gd-close):hover, body .pear-lightbox__close:hover,
-  body .camera-card__flip:hover, body .pip-retake:hover .pip-retake__icon { transform: none; }
+  body #pearReplayZone .pear-rz-btn--dl:hover:not(#_) {
+    background: linear-gradient(180deg, rgb(212, 240, 98) 0%, rgb(160, 202, 14) 100%); color: #142000;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85), inset 0 0 0 .5px rgba(255, 255, 255, .6),
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .6), 0 16px 32px -14px rgba(141, 182, 0, .7);
+  }
+  body .cl-arrow:hover:not(#_) { transform: translateY(-50%); background: var(--lg2-clear-hover); }
+  body .pip-retake:hover .pip-retake__icon { transform: none; }
 }
+@media (hover: none), (pointer: coarse) {
+  body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+           .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
+           .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
+           .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .camera-card__timer,
+           .pip-retake, .pip-clear, .profile-dropdown__logout, .cart-line__remove, .cl-card__look):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    transform: none; border-color: transparent;
+    background: var(--lg2-clear);
+    box-shadow: var(--lg2-rim), var(--lg2-depth), var(--lg2-drop);
+  }
+  body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look, .btn-update-measure, .pear-compare-bar, .pear-sz-btn.is-active):hover:not(:disabled):not([aria-disabled="true"]):not(#_) { background: var(--lg2-tint); color: #2c4100; }
+  body :is(.camera-card__flip, .camera-card__timer, .pear-rz-btn--replay, .plb-btn, .pear-lightbox__close):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    background: var(--lg2-dark); color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 0 0 .5px rgba(255, 255, 255, .28),
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .35), 0 8px 22px -12px rgba(0, 0, 0, .5);
+  }
+  body #pearReplayZone .pear-rz-btn--dl:hover:not(#_) {
+    background: linear-gradient(180deg, rgb(201, 233, 82) 0%, rgb(152, 194, 10) 100%); color: #142000;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), inset 0 0 0 .5px rgba(255, 255, 255, .55),
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .55), 0 10px 26px -12px rgba(141, 182, 0, .6);
+  }
+  body .pear-sz-btn.is-oos:hover:not(#_) { background: linear-gradient(180deg, rgba(255, 255, 255, .42), rgba(255, 255, 255, .2)); color: #9a9aa0; }
+  body .cl-arrow:hover:not(#_) { transform: translateY(-50%); }
+  body .pip-retake:hover .pip-retake__icon { transform: none; }
+}
+/* no spins on hover or press (the close buttons turned 90 degrees, the flip and the retake icons spun) */
+body :is(.pcmp__close, .gd-close, .pear-lightbox__close, .camera-card__flip):is(:hover, :active):not(#_) { transform: none; }
 body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
          .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
          .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
@@ -6444,11 +6487,16 @@ body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn
          .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
          .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
          .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .camera-card__timer, .cl-arrow,
-         .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout, .cart-line__remove, .cl-card__look).lg-press {
+         .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout, .cart-line__remove, .cl-card__look).lg-press:not(#_):not(#__) {
   box-shadow: var(--lg2-press);
   transition-property: box-shadow, background;
   transition-duration: .16s;
   transition-delay: 0s;
+}
+
+body #pearReplayZone .pear-rz-btn--dl.lg-press:not(#_):not(#__) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), inset 0 0 0 .5px rgba(255, 255, 255, .45),
+              inset 0 4px 14px rgba(40, 60, 0, .35), 0 4px 12px -8px rgba(141, 182, 0, .5);
 }
 
 /* ── 5 · one glass track, one lens thumb ── */

@@ -377,6 +377,9 @@ _Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): Liquid Glass
   that sinks in like a bubble and springs back (no more ripple of light), one liquid lens thumb for the four switches
   (swells when touched, stretches as it moves), Apple's system font everywhere, every emoji replaced by a line icon, the
   breathing glows removed, four untranslated labels fixed. Behaviour unchanged.
+- **Follow-up the same day:** the Download button made readable (its rule had lost to the shared tint), hover and touch
+  rebuilt as one motion (a mouse lifts the glass, a press sinks it from there; touch has no hover state left behind after
+  a tap; a quick tap plays the whole bubble).
 - **To check by hand:** the feel on a real iPhone and a mid-range Android (the press timing, the thumb stretch, scrolling
   smoothness with the glass blur).
 

@@ -1468,6 +1468,17 @@ behaviour changed.
 - Measured: the device audit (168 states, 6 sizes, both languages) - no horizontal scroll, no overflow, no covered control;
   the press sampled frame by frame (mouse hold and finger tap; the click still lands); unit suite, `qa:visual` 40/40,
   build, `trace:prompt` identical.
+- **Then, reported with a screenshot: "the download button is hard to see; resting on a button with the mouse or on a phone
+  doesn't feel good".** (1) The Download rule never applied: the shared tint rule's `:is()` carries the weight of
+  `.pear-sz-btn.is-active` (0,2,1) and outranked it - it is scoped to `#pearReplayZone` now (solid pear glass, dark label);
+  Add to Cart's success state got the same treatment. (2) Many buttons had their own `:hover` outside any hover query (a
+  lift, another tint, a ring) and a phone keeps `:hover` after a tap: style.css 3b answers once for a mouse (brighter glass,
+  deeper shadow) and once for touch (no hover at all), at an id's weight (`:not(#_)`). (3) Hover, press and release are one
+  state machine on the `scale` property, always started from where the glass is: a mouse lifts it (1.025), a press sinks it
+  from there, a release springs back to the lift or to rest; a finger sinks it at once, a scroll settles it quietly, and a
+  tap quicker than the sink plays the whole bubble. Keyframe easing per segment - one easing over the whole run had raced
+  through the sink in ~40ms. Sampled: hover 1 -> 1.025 in ~320ms; quick tap 0.955 x 0.925 at ~200ms, out to 1.02 x 1.04, rest
+  by ~740ms; a tapped button reads identical before and after (no sticky hover).
 
 ## 3. Cross-file lockstep
 

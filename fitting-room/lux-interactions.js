@@ -412,59 +412,111 @@
   /* 4e · THE BUBBLE PRESS (2026-10-11, the Liquid Glass pass - style.css "LIQUID GLASS"). "When you press it should
      sink in like a bubble, the way Apple's does - not this light." Held, a glass button squashes in (wider than it is
      tall, the way a bubble flattens under a finger) and its glass darkens inward (.lg-press, CSS); released, it springs
-     back through one soft overshoot. The scale runs on the individual `scale` property through the Web Animations API,
-     so a button's own transform, transition list and entrance animation are never touched or replayed - and it never
-     intercepts the click: it only listens. Disabled and aria-disabled buttons do not move. */
-  /* (the lists live INSIDE the init functions: init() can run before this file's later top-level consts exist -
-     ready() calls it synchronously once the DOM is parsed.) */
+     back through one soft overshoot.
+     HOVER, PRESS AND RELEASE ARE ONE MOTION (reported: "resting on a button with the mouse, or on a phone, doesn't feel
+     good"). Each button has one small state - hovered (a mouse only), pressed - and one running animation of the
+     individual `scale` property (Web Animations), always started from where the glass IS: a mouse lifts it (1.025),
+     a press sinks it from there, a release springs it back to the lift if the mouse is still on it, to rest if not. A
+     finger sinks it at once - like a native control - and a press the browser takes over for a scroll (pointercancel)
+     settles back quietly, no pop. Touch never hovers (style.css 3b). Nothing here touches a button's own transform,
+     transition list or entrance animation, and nothing intercepts the click: it only listens. Disabled, aria-disabled
+     and busy buttons do not move. */
   function initLiquidPress() {
     const PRESSABLE = ".btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download, " +
       ".btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar, .plb-btn, .pear-sz-btn, " +
       ".pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close, .pear-help-widget__btn, " +
       ".pear-help-widget__close, .camera-card__flip, .camera-card__timer, .cl-arrow, .pip-retake, .pip-clear, " +
       ".profile-btn, .profile-dropdown__logout, .cart-line__remove, .cl-card__look";
-    const PRESS_IN = "0.955 0.925";
-    const POP = [{ scale: PRESS_IN }, { scale: "1.035 1.06", offset: 0.36 }, { scale: "0.992 0.985", offset: 0.62 },
-                 { scale: "1.004 1.005", offset: 0.82 }, { scale: "1 1" }];
-    /* A finger may be starting a SCROLL, not a press: like iOS, a touch waits a beat (TOUCH_DELAY_MS) before the glass
-       sinks; a tap shorter than that still plays the whole bubble (in, then out), and a press the browser takes over
-       for a scroll (pointercancel) settles back quietly - no pop for something that was never pressed. */
-    const TOUCH_DELAY_MS = 70;
     if (typeof Element === "undefined" || !Element.prototype.animate) return;
-    let held = null, pressAnim = null, timer = 0, sunk = false;
-    const play = (el, frames, opts) => { try { return el.animate(frames, opts); } catch (_) { return null; } };
-    const sink = (el) => {
-      sunk = true;
-      el.classList.add("lg-press");
-      if (!reduce) pressAnim = play(el, [{ scale: "1 1" }, { scale: PRESS_IN }], { duration: 170, easing: "cubic-bezier(.3, .7, .4, 1)", fill: "forwards" });
+    const REST = [1, 1], LIFT = [1.025, 1.025], SINK = [0.955, 0.925];
+    const QUICK_TAP_MS = 120;   // a release sooner than this has not let the glass sink yet
+    const states = new WeakMap();
+    const stateOf = (el) => { let st = states.get(el); if (!st) { st = { hover: false, pressed: false, anim: null }; states.set(el, st); } return st; };
+    const inert = (el) => el.disabled || el.getAttribute("aria-disabled") === "true" || el.classList.contains("is-loading");
+    const now = (el) => {
+      const v = getComputedStyle(el).scale;
+      if (!v || v === "none") return REST;
+      const n = v.trim().split(/\s+/).map(Number);
+      return [n[0] || 1, Number.isFinite(n[1]) ? n[1] : (n[0] || 1)];
     };
-    const finish = (cancelled) => {
-      clearTimeout(timer);
+    const fmt = (v) => `${v[0].toFixed(4)} ${v[1].toFixed(4)}`;
+    const goal = (st) => (st.pressed ? SINK : st.hover ? LIFT : REST);
+    const run = (el, frames, opts) => {
+      const st = stateOf(el);
+      let a = null;
+      try { a = el.animate(frames, Object.assign({ fill: "forwards" }, opts)); } catch (_) { return; }
+      const prev = st.anim;
+      st.anim = a;
+      if (prev) { try { prev.cancel(); } catch (_) {} }
+      /* back at rest: nothing is left holding the property */
+      a.onfinish = () => { if (st.anim === a && !st.hover && !st.pressed) { try { a.cancel(); } catch (_) {} st.anim = null; } };
+    };
+    const move = (el, how) => {
+      const st = stateOf(el);
+      if (reduce) { if (st.anim) { try { st.anim.cancel(); } catch (_) {} st.anim = null; } return; }
+      const from = now(el), to = goal(st);
+      /* Easing per SEGMENT (keyframe easing), the whole run linear: one easing over the whole run raced through the
+         sink in ~40ms and the bubble was never seen. */
+      const IN = "cubic-bezier(.3, .7, .4, 1)", OUT = "cubic-bezier(.22, .9, .36, 1)", SETTLE = "cubic-bezier(.45, 0, .55, 1)";
+      if (how === "press") run(el, [{ scale: fmt(from), easing: IN }, { scale: fmt(to) }], { duration: 140 });
+      else if (how === "pop" && performance.now() - st.since < QUICK_TAP_MS) {
+        /* a tap quicker than the sink itself: play the whole bubble - in, then out - so a quick tap is felt too */
+        run(el, [{ scale: fmt(from), easing: IN }, { scale: fmt(SINK), offset: 0.2, easing: OUT },
+                 { scale: fmt([to[0] * 1.022, to[1] * 1.04]), offset: 0.5, easing: SETTLE },
+                 { scale: fmt([to[0] * 0.996, to[1] * 0.992]), offset: 0.75, easing: SETTLE }, { scale: fmt(to) }],
+            { duration: 640, easing: "linear" });
+      }
+      else if (how === "pop") run(el, [{ scale: fmt(from), easing: OUT }, { scale: fmt([to[0] * 1.022, to[1] * 1.04]), offset: 0.38, easing: SETTLE },
+                                       { scale: fmt([to[0] * 0.996, to[1] * 0.992]), offset: 0.7, easing: SETTLE }, { scale: fmt(to) }],
+                                  { duration: 520, easing: "linear" });
+      else run(el, [{ scale: fmt(from) }, { scale: fmt(to) }], { duration: how === "cancel" ? 220 : 340, easing: "cubic-bezier(.34, 1.3, .64, 1)" });
+    };
+
+    /* the mouse: lift on the way in, settle on the way out (one hovered button at a time) */
+    let hovered = null;
+    const leave = () => { if (!hovered) return; const el = hovered; hovered = null; stateOf(el).hover = false; move(el, "hover"); };
+    if (fine) {
+      document.addEventListener("pointerover", (e) => {
+        if (e.pointerType === "touch") return;
+        const el = e.target.closest && e.target.closest(PRESSABLE);
+        if (el === hovered) return;
+        leave();
+        if (!el || inert(el)) return;
+        hovered = el; stateOf(el).hover = true; move(el, "hover");
+      }, { passive: true });
+      document.addEventListener("pointerout", (e) => {
+        if (e.pointerType === "touch" || !hovered) return;
+        if (e.relatedTarget && hovered.contains(e.relatedTarget)) return;
+        leave();
+      }, { passive: true });
+    }
+
+    /* the press: a mouse or a finger sinks the glass at once */
+    let held = null;
+    const release = (how) => {
       const el = held;
       if (!el) return;
       held = null;
+      const st = stateOf(el);
+      st.pressed = false;
       el.classList.remove("lg-press");
-      if (pressAnim) { try { pressAnim.cancel(); } catch (_) {} pressAnim = null; }
-      if (reduce) return;
-      if (cancelled) { if (sunk) play(el, [{ scale: PRESS_IN }, { scale: "1 1" }], { duration: 240, easing: "cubic-bezier(.2, .8, .2, 1)" }); return; }
-      if (sunk) play(el, POP, { duration: 640, easing: "cubic-bezier(.25, .8, .35, 1)" });
-      else play(el, [{ scale: "1 1" }, { scale: PRESS_IN, offset: 0.2 }, { scale: "1.035 1.06", offset: 0.49 },
-                     { scale: "0.992 0.985", offset: 0.7 }, { scale: "1.004 1.005", offset: 0.86 }, { scale: "1 1" }],
-        { duration: 760, easing: "cubic-bezier(.25, .8, .35, 1)" });
+      move(el, how);
     };
     document.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "mouse" && e.button !== 0) return;
       const el = e.target.closest && e.target.closest(PRESSABLE);
-      if (!el || el.disabled || el.getAttribute("aria-disabled") === "true" || el.classList.contains("is-loading")) return;
-      if (held) finish(true);
-      held = el; sunk = false;
+      if (!el || inert(el)) return;
+      if (held && held !== el) release("cancel");
+      held = el;
+      stateOf(el).pressed = true;
+      stateOf(el).since = performance.now();
+      el.classList.add("lg-press");
       if (navigator.vibrate) { try { navigator.vibrate(6); } catch (_) {} }
-      if (e.pointerType === "touch") timer = setTimeout(() => { if (held === el) sink(el); }, TOUCH_DELAY_MS);
-      else sink(el);
+      move(el, "press");
     }, { passive: true });
-    document.addEventListener("pointerup", () => finish(false), { passive: true });
-    document.addEventListener("pointercancel", () => finish(true), { passive: true });
-    window.addEventListener("blur", () => finish(true));
+    document.addEventListener("pointerup", () => release("pop"), { passive: true });
+    document.addEventListener("pointercancel", () => release("cancel"), { passive: true });
+    window.addEventListener("blur", () => { release("cancel"); leave(); });
   }
 
   /* 4f · ONE LIQUID THUMB for the four segmented controls (language, fullscreen, gender, timer). Their own code keeps
