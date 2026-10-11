@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-06 · main: THE SWAP FLOW + THE LANDING, PROJECTED · branch `claude/project-thread-cr4uyn`: size-guide capture Phase 2, [PR #1](https://github.com/pearInd/Pear/pull/1) open for your review_
+_Last updated: 2026-10-11 · REVERTED IN PRODUCTION at the owner's request ("it doesn't work the way it did before it was on main"): main is bf7a9e2, whose tree IS a79b500 (this morning's build), and the orientation Worker is rolled back to e55ef6c6 (the version a79b500 ran with). Everything below is on preview-oct8 only, not live. Replaying the owner's three sessions through both engines gave the same back/front decisions, so the Worker was not the cause; in both clips the shopper faces the lens while the records show a back sent ~1.5s in (yaw 67-85 read on a front-facing body). Was briefly shipped as ff3ae2d with Worker 2204800d: Liquid Glass design pass (one material, bubble press, liquid thumbs, SF font, no emojis); a UI pass at every device size; the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor - verified through the engine (s9: both garments, the back print on the back view, reveal 5.6s); s6/s7 lost to the measurement rig's camera, fixed; not on main · branch `claude/project-thread-cr4uyn`: size-guide capture Phase 2, [PR #1](https://github.com/pearInd/Pear/pull/1) ready for your review (scanner only)_
 
 ## At a glance
 
@@ -333,13 +333,108 @@ _Last updated: 2026-10-06 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
   front at the side and the good one keeps its timing.
 - **Three sessions the next night - "almost perfect, a tiny bit later; no stutters":** the return's
   aim 280 -> 290 (model median 275-278, p10 259+), and no re-drape inside the window in AI Auto.
-  **Next: your measurement.**
-
-## Hebrew/English i18n
+- **2026-10-07 13:53 report - "the angles are not accurate, it disappears too fast" (CLAUDE.md §2.36):** eight of your
+  clips through the pose model, each lined up with its record: the engine puts a swap on frames taken ~0.1s BEFORE the
+  send (0.31s before to 0.02s after, by session) - every aim since 10-05 was tuned on ~80ms after. Recalibrated (the
+  projection's lead from the measured delay, aim 280, it may wait past the side): on your own clips the landing median
+  266 -> 277.5, the two fast turns that put the back on the chest 294 -> 282 and 305 -> 292. Today's session moves only
+  251 -> 253 (its engine held the most frames, and its output stood still at ~255). That session-to-session spread needs
+  the lag measured live: TEST records now carry it (`lag`, passive). No Decart credit used.
+- **2026-10-08 07:31 report - "almost perfect; the back disappears too early, frames with nothing on the back"
+  (CLAUDE.md §2.37):** the pose model read your back as facing the camera for one reading and the back was withdrawn on
+  it. Now one reading can't do that (two in a row are needed, a reading is voted once), and a back confirmed by the
+  shoulder order arms the return at the side: replayed on its own clip, the front lands ~308 instead of ~210. Its record
+  also carries the first live lag reading (median 1,081ms). No Decart credit used.
+  **Next: your measurement - 2-3 sessions calibrate the live lag.**
+- **2026-10-08 11:40-11:41 report - "front and back work perfectly; the model from the store photo appeared in the first
+  measurement, and it put a necklace on me" (CLAUDE.md §2.38):** the 11:40 record shows the output leaving the camera for
+  ~1.4s of the back view - the store's rear photo (a man with his back to the camera) drawn instead of you. The rear photo
+  is now sent with the model painted out above the collar and below the hem (same size, the print in the same place); the
+  front is untouched. The necklace is the engine's own (not in any photo, prompt or your shirt): one sentence, sent only
+  in TEST sessions until you have measured it. Swap timing untouched. No Decart credit used. Committed on
+  `merge/edge-main` (endpoint `b19d697` + the room); **the push to main and the Worker deploy wait on your OK.**
+- **2026-10-08 15:29 preview measurement - "it changed the shirt to the colour of the shirt I'm wearing; the angles are fine"
+  (CLAUDE.md §2.38):** the necklace sentence (TEST sessions only) made the engine keep your own shirt. Removed entirely;
+  the prompts are byte-identical to production again. The back-photo mask and the angle logic are unchanged. The
+  necklace is open again.
+- **2026-10-08 11:45 report - "the front and back of the shorts got mixed up" (CLAUDE.md §2.39):** the shorts session was
+  framed from the neck down; without the head the pose model read your back as the front and the FRONT went out with your
+  back to the camera. The room now notices a head out of frame (never on the nine head-in sessions on record) and the
+  engine counts which side you face instead of reading it: on that session's own record the back now holds through the
+  back view and the front returns at the side. No Decart credit used. Needs the same push + Worker deploy.
+- **2026-10-08 15:43 preview measurement - "the back wasn't right at the back, it took time to load; it put a necklace on
+  me that disappeared after the turn" (CLAUDE.md §2.38, §2.40):** the back went out one pose reading late - every decision
+  of that session ran on a reading ~200ms old (the pose timer and the decision timer at their worst phase; about a third
+  of the 33 records), so it went out at the side instead of at ~60 degrees. The decision now waits for the pose loop's next
+  reading when its own is stale (no extra pose inference - the 10-05 attempt that ran one cost camera fps); modelled on 11
+  recorded 360s: the back on the same reading, a median 10 degrees sooner (up to 23), the return unchanged. Browser only -
+  no Worker deploy for it. The necklace: the first sentence removed it but kept your shirt's colour; the second wording,
+  "Clean, unadorned neckline." (no garment, nothing "worn"), goes out in TEST sessions only. No Decart credit used.
+  On `preview-oct8` only; **nothing on main.**
+- **2026-10-09 10:51-10:53 preview measurement - "the shirt works well but doesn't feel smooth; the shorts went crazy at the end
+  and went away at the wrong time" (CLAUDE.md §2.41):** the fresh-reading fix works live (every decision on a reading 2-52ms
+  old, was ~200). The shorts' front came back ~130ms late: its image is bigger (316 KB) and slower than the back's, and the
+  timing used the average of both - now each image its own pace (replayed: the front out ~110ms sooner). Smoothness: the
+  render's frames arrive in bursts (two close, then a ~200ms gap); the receiver now buffers 150ms instead of 80 (about 70ms more
+  delay on screen, no change in where the swaps land), and a TEST session records where the bursts come from. No Decart
+  credit used. On `preview-oct8` only; **nothing on main.**
+- **2026-10-10 19:13-19:15 preview measurement - "what you did broke it, put it back" (CLAUDE.md §2.38, §2.41):** the shirt
+  came back from the turn as a bare chest with the print on the skin (the neckline sentence), and the shorts opened on your
+  own shorts for 2.4s. Both 10-09 commits reverted (`44c114a`, `5f50349`); the fresh-reading tick (`77acef0`) stays - it
+  changes no picture.
+- **2026-10-10 verified through the engine (3 real sessions, owner's cap 80 credits):** a driver opens the FOX product page,
+  injects the preview widget (TEST key; the widget's demo flag only skips the e-mail sign-up), and feeds the room the owner's
+  own recorded 360 as the camera. PEAK shirt (record `mv2m9wyl`): the PEAK front from the first second over a white jersey,
+  the back print from the three-quarter back on, the front back at the end, no bare chest. CHICAGO shorts (`mv2mgezp`): the
+  product from the first second over green shorts, the stripe at the sides, the plain back, the front back at the end. The
+  first session (`mv2m2wmf`) was spent on a driver mistake - the room opened without the widget, so no classifier verdict
+  arrived and after its 30s gate it went live with the gallery's SECOND photo (a three-quarter front) as the back: a real
+  fallback that breaks §2.1 when the classifier never answers - **open, not fixed**.
+- **2026-10-10/11 the full look - shirt + shorts together (CLAUDE.md §2.42):** first attempt measured and replaced (the shorts
+  never rendered from the black-barred panels, and the big image made the back late). Second attempt: an outfit-shaped reference
+  (shirt above shorts, each cut to its garment, 70-80 KB), the shorts' band fixed on the server (it was the white tee), the card
+  shows front and back of both garments, "Store item" instead of "Custom upload". Plus two bugs fixed on the way (the shorts'
+  answer written onto the shirt; an answer on the size screen dropped). The one real session (record mv3hkkb2) connected and
+  never showed the image: the full look re-uploaded its whole reference on every re-anchor (~every 0.75s), so the reveal gate
+  never saw a quiet wire - a bug the look path always had (it slowed the earlier look sessions' reveal to 13-19s and queued the
+  back swap). Fixed (an unchanged look sends nothing) and verified through the room's mock engine: reveal 3.2s, the back at 50
+  degrees, the front back at 297. 6 real sessions today in all. **Not yet seen through the real engine.**
+- **2026-10-11, later:** s6/s7 (no reveal) were the MEASUREMENT RIG's camera starving (a canvas stream that emits only on
+  page renders - reproduced for free on a single garment too; the rig now pushes its frames). s8 through the real engine,
+  record mv3j8ba0: the look rendered - the PEAK tee with its print over the CHICAGO shorts with their lettering, the stripes at
+  the side - but the back view was plain (the back composite was sent cold on the turn and never acknowledged in the window)
+  and the reveal came 7s after connect (single garments: 5.5s). Fixed: the look's back composite is primed at connect, and
+  the session is seeded with the look's front outfit instead of the shirt alone. Mock: revealed 3.2s, the turn's back a
+  repeat. Unit suite, visual gate (40/40), build, trace:prompt identical.
+- **Verified through the real engine (s9, record mv3kfd8t, e25e250):** the back primed at connect (398ms), revealed 5.6s
+  after connect (s8: 7.0s), the turn's back acknowledged in 458ms (s8: never), the front back in 483ms, no stall. On screen:
+  shirt and shorts together at the front, the shirt's back print on the back view, the front print back at the front.
+  9 real sessions in all (2 of them, s6/s7, lost to the rig). Not yet measured on a live person or with other products.
 - **Stage:** done (core).
 - **Done:** language toggle + English strings `a7de91c`, `310b174`; geo-IP language
   lock fix + `fitting-room/i18n.js` module `4ecda99`; cart popover i18n `82de850`.
 - **Remaining:** none recorded. New strings must go through `i18n.js`.
+
+## The UI across devices (2026-10-11)
+- **Stage:** done (layout fixes only - nothing in how the room works changed). CLAUDE.md §2.43.
+- Audited every room state at 14 sizes (280-1920px, the store's 480px frame) in Hebrew and English, plus the widget on the
+  FOX page. Fixed: the language switch covering the step row (phones, the store frame, Hebrew 921-1090px); the page
+  scrolling sideways after a session on 280/320px; "Retake" cut; the camera guide's button see-through on small phones;
+  garment names cut at the wrong end in Hebrew; Add to Cart breaking mid-phrase; the "tried" marker in Hebrew in the
+  English UI; the widget's close button invisible on phones and sitting on the step label.
+- **Your call:** the store's chat and accessibility buttons draw over our modal; raising the modal above them would also
+  hide the store's accessibility button while the room is open.
+
+## Liquid Glass design pass (2026-10-11)
+- **Stage:** done on preview (CLAUDE.md §2.44). One glass material for every button (primary actions tinted pear), a press
+  that sinks in like a bubble and springs back (no more ripple of light), one liquid lens thumb for the four switches
+  (swells when touched, stretches as it moves), Apple's system font everywhere, every emoji replaced by a line icon, the
+  breathing glows removed, four untranslated labels fixed. Behaviour unchanged.
+- **Follow-up the same day:** the Download button made readable (its rule had lost to the shared tint), hover and touch
+  rebuilt as one motion (a mouse lifts the glass, a press sinks it from there; touch has no hover state left behind after
+  a tap; a quick tap plays the whole bubble).
+- **To check by hand:** the feel on a real iPhone and a mid-range Android (the press timing, the thumb stretch, scrolling
+  smoothness with the glass blur).
 
 ## Security hardening + client-code hiding
 - **Stage:** in progress.

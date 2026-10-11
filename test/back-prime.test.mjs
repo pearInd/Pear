@@ -19,8 +19,8 @@ function check(label, cond, detail) {
 const between = (a, b) => { const i = APP.indexOf(a); if (i < 0) throw new Error("no " + a); return APP.slice(i, APP.indexOf(b, i)); };
 const SRC = between("let _primedBackGen = -1;", "function armFirstFrameBilling(video, gen) {");
 
-function world({ search = "", angle = "auto", look = null, back = "https://cdn.test/back.jpg", live = true, busySkip = false } = {}) {
-  const sent = [], acked = [], blobs = {};
+function world({ search = "", angle = "auto", look = null, back = "https://cdn.test/back.jpg", live = true, busySkip = false, lookTools = false } = {}) {
+  const sent = [], acked = [], blobs = {}, stitched = [];
   const env = {
     location: { search }, activeItem: { img: "https://cdn.test/front.jpg" }, currentAngle: angle, AUTO_ANGLE: "auto",
     resolveLook: () => look, galleryOf: () => ({ front: "https://cdn.test/front.jpg" }), distinctBackOf: () => back,
@@ -31,10 +31,16 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
     noteImageUploadAcked: (w) => acked.push(w), lastSentImageRef: "front-blob", lastSentPrompt: "front-prompt",
     traceOrient: () => {}, console: { log() {}, warn() {} },
     rtImageOnWire: true, applied: [], applyActive: async () => { env.applied.push({ ref: api.state().lastSentImageRef }); },
+    /* The full look's helpers (lookTools): each half's photo per side, the stitch cache (one Blob per pair), the look prompt. */
+    ...(lookTools ? {
+      lookHalfFor: (it, side) => (side === "back" && it.back) || it.front,
+      stitchLookBlob: async (a, b) => (blobs[`${a}|${b}`] ||= (stitched.push([a, b]), { size: 72000, pair: [a, b] })),
+      wireLookPrompt: async () => "LOOK",
+    } : {}),
   };
   const names = Object.keys(env);
   const api = new Function(...names, `${SRC}\nreturn { primeBackReference, primeAtConnect, state: () => ({ lastSentImageRef, lastSentPrompt, rtImageOnWire }) };`)(...names.map((k) => env[k]));
-  return { api, sent, acked, blobs, env };
+  return { api, sent, acked, blobs, env, stitched };
 }
 
 {
@@ -52,11 +58,28 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
   const cases = [
     ["?prime_back=0 (main's hold)", world({ search: "?prime_back=0" })],
     ["a single-view garment (not AI Auto)", world({ angle: "front" })],
-    ["a full look", world({ look: { top: {}, bottom: {} } })],
+    ["a full look without the look's helpers in scope", world({ look: { top: {}, bottom: {} } })],
+    ["a full look whose halves have no back of their own (its back composite IS the front one)",
+      world({ lookTools: true, look: { top: { front: "T.jpg" }, bottom: { front: "B.jpg" } } })],
     ["no real back photo", world({ back: null })],
     ["a session that ended meanwhile", world({ live: false })],
   ];
   for (const [name, w] of cases) check(`§5 nothing is sent for ${name}`, (await w.api.primeBackReference(3)) === false && w.sent.length === 0);
+  /* A FULL LOOK TOO (2026-10-11): every full-look session sent its back composite cold on the turn - 2,399ms, 1,269ms,
+     and not acknowledged at all in the 3.1s left (mv3j8ba0) - where the primed single garments took 305-355ms. */
+  const lk = world({ lookTools: true, look: { top: { front: "T.jpg", back: "Tb.jpg" }, bottom: { front: "B.jpg", back: "Bb.jpg" } } });
+  const lkOk = await lk.api.primeBackReference(3);
+  check("§5b a full look primes its BACK composite: the stitch of both halves' backs - the cached Blob the turn sends - with the look prompt",
+    lkOk === true && lk.sent.length === 1 && lk.sent[0].image === lk.blobs["Tb.jpg|Bb.jpg"] && lk.sent[0].prompt === "LOOK" &&
+    lk.sent[0].enhance === false && lk.acked.join() === "primeBack" && lk.api.state().lastSentImageRef === null,
+    JSON.stringify({ lkOk, sent: lk.sent, stitched: lk.stitched }));
+  const half = world({ lookTools: true, look: { top: { front: "T.jpg", back: "Tb.jpg" }, bottom: { front: "B.jpg" } } });
+  check("§5c ...and when only one half has a back, the other lends its front (lookHalfFor) - still primed",
+    (await half.api.primeBackReference(3)) === true && half.sent[0].image === half.blobs["Tb.jpg|B.jpg"]);
+  const lkc = world({ lookTools: true, look: { top: { front: "T.jpg", back: "Tb.jpg" }, bottom: { front: "B.jpg", back: "Bb.jpg" } } });
+  const lkcOk = await lkc.api.primeAtConnect(3);
+  check("§5d at connect, a look: the back composite once, then the look re-applied with the no-op refs cleared",
+    lkcOk === true && lkc.sent.length === 1 && lkc.env.applied.length === 1 && lkc.env.applied[0].ref === null);
   const busy = world({ busySkip: true });
   check("§6 a wire that declines the write sends nothing and claims nothing", (await busy.api.primeBackReference(3)) === false && busy.acked.length === 0);
 }

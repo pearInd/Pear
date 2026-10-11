@@ -253,7 +253,8 @@ console.log("\n── §5 THE VERDICT IS TRACEABLE - it is the only thing that c
      that select it. The lock log is typeof-guarded on activeItem because the orientation
      watcher runs standalone in side-profile.test.mjs (CLAUDE.md 2.7). */
   check("the verdict is logged where it LANDS - the widget's post-open correction",
-    /PEAR_UPDATE_GARMENT applied[\s\S]{0,700}?"\| rear: backIsPlain=" \+ activeItem\.backIsPlain \+ " looksPrinted=" \+ activeItem\._backLooksPrinted/.test(APP),
+    /* the correction lands on the room's OWN garment since 2026-10-11 (`target` - THE VERDICT IS FOR THE ROOM'S OWN GARMENT) */
+    /PEAR_UPDATE_GARMENT applied[\s\S]{0,700}?"\| rear: backIsPlain=" \+ target\.backIsPlain \+ " looksPrinted=" \+ target\._backLooksPrinted/.test(APP),
     "it can arrive mid-session; a silent change to what the wire asserts is what made this unanswerable");
   check("...and where the BACK lock is reported, but only on that lock",
     /autoOrientation === "back" && typeof activeItem !== "undefined" && activeItem\s*\n?\s*\? ` \| rear: backIsPlain=/.test(APP),

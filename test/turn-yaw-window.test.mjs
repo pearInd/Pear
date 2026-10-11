@@ -706,7 +706,9 @@ const MEASURED = { front: 0.76, back: -0.68, frontMirrored: 0.78, backMirrored: 
     !/if \(poseVote\) \{[^}]*faceSeen = true/.test(watcher));
   check("the tick counts consecutive shoulder votes per side into poseStreak",
     /lastPoseVoted = posed;/.test(watcher) &&
-    /if \(s\.poseVoted\) \{ poseStreak = vote === poseSide \? poseStreak \+ 1 : 1; poseSide = vote; \}/.test(watcher));
+    /* ONE READING, ONE VOTE (2026-10-07): where the room measures the order, a vote on the same pose reading adds nothing */
+    /const samePose = s\.ord !== null && s\.ord !== undefined && Number\.isFinite\(s\.yawAt\) && s\.yawAt > 0 &&\s*poseVoteAt !== null && Math\.abs\(s\.yawAt - poseVoteAt\) <= 5 && vote === poseSide;/.test(watcher) &&
+    /if \(s\.poseVoted\) \{ if \(!samePose\) \{ poseStreak = vote === poseSide \? poseStreak \+ 1 : 1; poseSide = vote; \} poseVoteAt = s\.yawAt; \}/.test(watcher));
   check("...and hands it to orientFlipDecision()", /orientFlipDecision\(\{[^}]*poseStreak[^}]*\}\)/.test(watcher));
   check("the watcher names the engine it armed", /MediaPipe shoulder order/.test(watcher));
   const p0 = SRC.indexOf("function startPresenceWatcher");
@@ -1809,7 +1811,7 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
       wrapped === client && client.sessionId === "live-session" && pe.withPreEncodedReferences(client) === client && pe.withPreEncodedReferences(null) === null);
   }
   check("every fetched garment Blob is pre-encoded as it lands, and the live client is wrapped at connect",
-    /const normalized = await normalizeToSupportedImage\(raw\);[\s\S]{0,400}const blob = typeof EXP_SMALL !== "undefined" && EXP_SMALL && typeof expDownscale === "function" \? await expDownscale\(normalized\) : normalized;[\s\S]{0,300}preEncodeReference\(blob\);\s*\n\s*return blob;/.test(SRC) &&
+    /let normalized = await normalizeToSupportedImage\(raw\);[\s\S]{0,400}normalized = await maskReferenceBand\(normalized, url, await bandJob\);\s*\n\s*\}\s*\n[\s\S]{0,200}const blob = typeof EXP_SMALL !== "undefined" && EXP_SMALL && typeof expDownscale === "function" \? await expDownscale\(normalized\) : normalized;[\s\S]{0,300}preEncodeReference\(blob\);\s*\n\s*return blob;/.test(SRC) &&
     /rtClient = await client\.realtime\.connect\(realtimeInput, buildRealtimeConnectOpts\(gen\)\);[^\n]*\n[^\n]*\n\s*if \(typeof withPreEncodedReferences === "function"\) rtClient = withPreEncodedReferences\(rtClient\);/.test(SRC));
 
   const r0 = SRC.indexOf("function makeRenderResumeDetector(");

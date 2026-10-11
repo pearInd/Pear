@@ -429,8 +429,10 @@ console.log("\n── §5 the chart reaches Screen 1, and a correction can retra
     listener.slice(0, 200));
   check("§5.5 ...and it re-runs the calculator while the shopper is still on Screen 1",
     /calculateSize\(\)/.test(listener));
-  check("§5.6 ...and stamps the active item too, so Screen 2 agrees with Screen 1",
-    /activeItem\.sizeChart = incomingChart/.test(listener));
+  /* The room's OWN garment since 2026-10-11 (`target` - THE VERDICT IS FOR THE ROOM'S OWN GARMENT): a garment added to a
+     full look before the verdict lands is not the one the store's chart describes. */
+  check("§5.6 ...and stamps the room's own garment too, so Screen 2 agrees with Screen 1",
+    /target\.sizeChart = incomingChart/.test(listener));
 
   /* resolvedStoreSizeChart() is executed inside slices that have no module scope
      (CLAUDE.md §2.7) - a bare reference to either binding is a ReferenceError there. */
