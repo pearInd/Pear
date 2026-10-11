@@ -826,7 +826,8 @@ console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the ang
   check("applyGarment never re-reads profileActive() after the await",
     apply.split("profileActive()").length - 1 === 1, "expected exactly one read");
 
-  const look = extract("const canStitchLook = currentAngle !== AUTO_ANGLE;", "if (!primaryImage) {");
+  /* The anchor is the stitch decision (AI Auto stitches per side since 2026-10-10 - applyLook's AI AUTO STITCHES TOO). */
+  const look = extract("const canStitchLook = !!(topImg && bottomImg);", "if (!primaryImage) {");
   const lookSnap = look.indexOf("const profileAtStart");
   const lookAwait = look.indexOf("await stitchLookBlob");
   check("applyLook snapshots it before the stitch await too",

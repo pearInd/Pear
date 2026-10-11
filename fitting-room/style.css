@@ -521,7 +521,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep);
-  font-family: "Urbanist"; font-size: 1rem; font-weight: 800; letter-spacing: .01em;
+  font-family: var(--font-ui); font-size: 1rem; font-weight: 800; letter-spacing: .01em;
   cursor: pointer;
   box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .55);
   transition: all .4s var(--ease);
@@ -564,7 +564,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   border: 1px solid rgba(141, 182, 0, .40); border-radius: var(--pill);
   background: var(--pear-soft);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
-  color: var(--pear-deep); font-family: "Urbanist"; font-weight: 800;
+  color: var(--pear-deep); font-family: var(--font-ui); font-weight: 800;
   font-size: .9rem; letter-spacing: .01em; cursor: pointer;
   box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255, 255, 255, .5);
   transition: transform .4s var(--ease), background .3s var(--ease), border-color .3s var(--ease), box-shadow .4s var(--ease);
@@ -938,6 +938,38 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    leftover-space audit as the .container changes above. */
 #screen-calculator .calc-main { padding-top: 0; padding-bottom: 16px; }
 .calc-main .step-progress { width: 100%; max-width: 472px; padding-top: 12px; }
+/* ── THE LANGUAGE SWITCH'S CORNER on Screen 1 (2026-10-11, the UI audit) ──────────────────────────────────
+   .lang-switch is pinned to the page's physical top-left, and this row (the step label + the percent) shares
+   that top band with nothing reserved for it: up to ~550px wide - every phone, and the store's 480px frame on
+   desktop - the row's left end ran under the switch ("…1 of 2 · Size" in English, the word "Step" hidden; the
+   percent peeking from behind it in Hebrew), and so did the Hebrew percent in the two-column layout up to
+   ~1090px (the form column on the left there). The row keeps the switch's gutter (--hdr-gutter-l, the token
+   the header and the focus bar reserve with), less how far its own left edge already sits from the page's
+   left - the column's padding, the 472px row centred in it, the row's own padding. max(0px, …): wherever the
+   row already clears the switch nothing moves. Measured at 280-1920px in both languages (the row's left vs
+   the switch's right). If the column geometry above changes, these two formulas follow it. */
+@media (max-width: 920px) {
+  .calc-main .step-progress-label {
+    padding-left: max(0px, calc(var(--hdr-gutter-l) - clamp(16px, 3vw, 40px)
+      - max(0px, (100vw - 2 * clamp(16px, 3vw, 40px) - 472px) / 2) - clamp(18px, 5vw, 28px)));
+  }
+}
+@media (min-width: 921px) {
+  /* Two columns (.calc-card 2fr 3fr, gap 2px, in a 1180px shell): the 3fr form column is on the LEFT in Hebrew. */
+  html[dir="rtl"] .calc-main .step-progress-label {
+    padding-left: max(0px, calc(var(--hdr-gutter-l) - max(0px, (100vw - 1180px) / 2) - clamp(16px, 3vw, 40px)
+      - ((min(1180px, 100vw) - 2px) * 3 / 5 - 2 * clamp(16px, 3vw, 40px) - 472px) / 2 - clamp(18px, 5vw, 28px)));
+  }
+}
+/* ...and on a phone inside the store's widget (html.pear-embedded, narrower than the widget's 480px frame - so the frame
+   is the whole screen) the widget's close button sits in the page's top-RIGHT corner, 8px in and 36px wide
+   (pear-widget.js, .pear-widget-close at max-width 520px): the Hebrew step label starts there. 50px from the right edge
+   is kept clear, less the row's own inset. */
+@media (max-width: 479px) {
+  html.pear-embedded .calc-main .step-progress-label {
+    padding-right: max(0px, calc(50px - clamp(16px, 3vw, 40px) - clamp(18px, 5vw, 28px)));
+  }
+}
 #screen-calculator .container { margin: 0 auto 12px; }
 .calc-main__copyright {
   margin: 16px auto 0; text-align: center;
@@ -1228,7 +1260,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      Scoped to just this button rather than changing --pear-deep globally (that
      variable is the app's one shared accent color, used well beyond the header). */
   color: #4a6300;
-  font-family: "Inter", sans-serif; font-size: .8rem; font-weight: 700;
+  font-family: var(--font-ui); font-size: .8rem; font-weight: 700;
   white-space: nowrap; cursor: pointer;
   transition: transform .3s var(--ease), box-shadow .3s var(--ease), border-color .3s var(--ease), background .3s var(--ease);
 }
@@ -1474,6 +1506,15 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
 }
 .ag-duo > span { border: 1px solid var(--glass-border); border-radius: 9px; overflow: hidden; }
+/* Both views of both garments (2026-10-11): shirt front | shirt back / shorts front | shorts back */
+.active-garment.is-duo .active-garment__media { width: 124px; height: auto; }
+.active-garment__media > span.ag-duo--views { grid-template-columns: 1fr 1fr; gap: 3px; }
+.ag-view { position: relative; display: block; aspect-ratio: 1 / 1; background: #f3f1ee; }
+.ag-view img { width: 100%; height: 100%; object-fit: cover; object-position: center 38%; display: block; }
+.ag-view b { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%); font: 600 8px/1.3 system-ui, sans-serif;
+  padding: 0 4px; border-radius: 4px; background: rgba(255,255,255,.88); color: #2b3a12; white-space: nowrap; }
+.ag-view--missing img { opacity: .35; filter: grayscale(1); }
+.ag-view--missing b { color: #8a2b14; }
 
 /* ── camera card - premium rounded glass-framed stage ──────────────────── */
 .camera-card {
@@ -2225,7 +2266,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 
 .btn-capture__icon { font-size: 1.2rem; }
-.btn-capture__label { font-family: "Urbanist"; font-weight: 800; font-size: 1.05rem; }
+.btn-capture__label { font-family: var(--font-ui); font-weight: 800; font-size: 1.05rem; }
 .btn-capture__en { font-size: .74rem; opacity: .85; letter-spacing: .06em; }
 .btn-ghost[hidden] { display: none; }
 
@@ -2462,7 +2503,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep); cursor: pointer;
-  font-weight: 800; font-family: "Urbanist", sans-serif; font-size: 1rem;
+  font-weight: 800; font-family: var(--font-ui); font-size: 1rem;
   box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .55);
   transition: all .4s var(--ease);
 }
@@ -2478,7 +2519,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: var(--glass-strong);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--ink); cursor: pointer; font-weight: 800;
-  font-family: "Urbanist", sans-serif; font-size: 1rem; box-shadow: var(--shadow-soft);
+  font-family: var(--font-ui); font-size: 1rem; box-shadow: var(--shadow-soft);
   transition: transform .4s var(--ease), box-shadow .4s var(--ease), background .3s var(--ease);
 }
 .btn-download:hover { transform: translateY(-3px) scale(1.02); background: rgba(255,255,255,.85); box-shadow: var(--shadow); }
@@ -2660,7 +2701,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: rgba(255,255,255,.28);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   border: 1px solid var(--glass-border);
-  color: var(--ink); font-family: "Urbanist", sans-serif; font-weight: 800; font-size: .86rem;
+  color: var(--ink); font-family: var(--font-ui); font-weight: 800; font-size: .86rem;
   cursor: pointer; box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,.6);
   transition: all .5s cubic-bezier(.16, 1, .3, 1);
 }
@@ -2670,6 +2711,12 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .pip-retake:hover .pip-retake__icon { transform: rotate(-180deg); }
 .pip-retake__en { font-size: .68rem; font-weight: 600; opacity: .6; letter-spacing: .04em; }
 .pip-retake[hidden] { display: none; }
+/* THE RETAKE PILL KEEPS ITS WORDS (2026-10-11, the UI audit): squeezed by the title on a phone, the pill shrank and its
+   overflow:hidden (the sheen, below) cut its English ("tetake" at 390px) and broke "מדוד שוב" in two. It keeps its
+   natural width; when a row cannot hold the title and both buttons, the buttons drop under the title (the pill's
+   margin-inline-start:auto keeps them at the row's end). One row wherever it fits, as before. */
+.pip-head { flex-wrap: wrap; row-gap: 10px; }
+.pip-retake { flex-shrink: 0; white-space: nowrap; }
 
 .pip-clear {
   font-size: .74rem; font-weight: 700; color: var(--muted);
@@ -2786,7 +2833,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .plb-btn {
   display: inline-flex; align-items: center; gap: 7px;
   padding: 11px 18px; border-radius: var(--pill); cursor: pointer;
-  font-family: "Urbanist", sans-serif; font-weight: 800; font-size: .9rem;
+  font-family: var(--font-ui); font-weight: 800; font-size: .9rem;
   border: 1px solid rgba(255,255,255,.5);
   background: rgba(255,255,255,.16);
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
@@ -2836,7 +2883,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: linear-gradient(135deg, var(--pear-tint), rgba(141,182,0,.08));
   -webkit-backdrop-filter: blur(25px) saturate(200%); backdrop-filter: blur(25px) saturate(200%);
   border: 1px solid rgba(141,182,0,.45);
-  color: var(--pear-deep); font-family: "Urbanist", sans-serif; font-weight: 800; font-size: .92rem;
+  color: var(--pear-deep); font-family: var(--font-ui); font-weight: 800; font-size: .92rem;
   cursor: pointer; box-shadow: 0 10px 30px rgba(141,182,0,.22), inset 0 1px 0 rgba(255,255,255,.55);
   transition: all .5s cubic-bezier(.16, 1, .3, 1);
   animation: compareBarIn .5s cubic-bezier(.16, 1, .3, 1) both;
@@ -3626,7 +3673,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   border: 1px solid rgba(255, 255, 255, .4);
   background: linear-gradient(135deg, rgba(255, 253, 246, .92) 0%, rgba(250, 247, 235, .78) 100%);
   -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%);
-  color: var(--help-accent); font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1.15rem;
+  color: var(--help-accent); font-family: var(--font-ui); font-weight: 800; font-size: 1.15rem;
   cursor: pointer;
   box-shadow: 0 8px 32px rgba(0, 0, 0, .06), inset 0 1px 0 rgba(255, 255, 255, .6);
   transition: box-shadow .3s var(--ease), background .3s var(--ease),
@@ -3803,7 +3850,7 @@ body.focus-mode.is-scrolled .profile-btn {
 .profile-dropdown__logout {
   width: 100%; margin-top: 10px; padding: 9px 12px; border: 0; border-radius: var(--pill);
   background: rgba(220, 60, 60, .12); color: #b23a3a;
-  font-family: "Inter", sans-serif; font-size: .84rem; font-weight: 700; cursor: pointer;
+  font-family: var(--font-ui); font-size: .84rem; font-weight: 700; cursor: pointer;
   transition: background .25s var(--ease);
 }
 .profile-dropdown__logout:hover { background: rgba(220, 60, 60, .2); }
@@ -3818,7 +3865,7 @@ body.focus-mode.is-scrolled .profile-btn {
   background: linear-gradient(135deg, rgba(141,182,0,.22), rgba(141,182,0,.10));
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep); cursor: pointer;
-  font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1.04rem; letter-spacing: .01em;
+  font-family: var(--font-ui); font-weight: 800; font-size: 1.04rem; letter-spacing: .01em;
   box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.55);
   transition: transform .45s var(--power), background .4s var(--ease),
               border-color .4s var(--ease), box-shadow .4s var(--ease), color .3s var(--ease);
@@ -3829,6 +3876,12 @@ body.focus-mode.is-scrolled .profile-btn {
 .bac__en   { font-weight: 600; font-size: .76rem; opacity: .68; letter-spacing: .04em; }
 .bac__icon { font-weight: 700; margin-inline-end: 2px; }
 .bac__label { display: inline-flex; align-items: center; gap: 7px; transition: opacity .3s var(--ease), transform .4s var(--power); }
+/* EACH PHRASE STAYS WHOLE (2026-10-11, the UI audit): under 600px the row keeps the help button's gutter on both sides
+   (see "Permanent clearance from the fixed help button"), and up to 375px wide that left too little for one line - the
+   words broke mid-phrase ("Add to / Cart", "הוסף / לסל"). The label now wraps between the Hebrew and the English, never
+   inside either; one line wherever it fits, as before. */
+.bac__label { flex-wrap: wrap; justify-content: center; row-gap: 0; }
+.bac__label > span { white-space: nowrap; }
 /* spinner + check are centred overlays so the button width never jumps */
 .bac__spinner, .bac__check {
   position: absolute; top: 50%; left: 50%;
@@ -4130,6 +4183,17 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
   min-width: 0; flex: 1 1 auto;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* THE NAME IS CUT AT ITS OWN END (2026-10-11, the UI audit): one ellipsis on the whole line cut the line's visual LEFT end,
+   which in Hebrew is the START of a Latin garment name - "מדידת פריט ממוקדת: ... tee" on a 390px phone, the name gone.
+   The label and the name are two runs now, each with its own ellipsis, the name in its own direction (plaintext); the
+   label gives way first, so a narrow phone still shows which garment this is. */
+.focus-bar__text { display: flex; gap: .3em; }
+.focus-bar__text > span, .focus-bar__text > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.focus-bar__text > span { flex: 0 1000 auto; }
+.focus-bar__text > strong { flex: 0 1 auto; unicode-bidi: plaintext; }
+/* The same fix wherever a garment name, a person's name or an email is cut with an ellipsis: in its own direction, so a
+   Latin name in the Hebrew UI loses its END ("CHICAGO sh…"), never its start ("…CAGO shorts" on a gallery tile). */
+.live-gallery-item__name, .cart-line__title, .profile-dropdown__name, .profile-dropdown__email { unicode-bidi: plaintext; }
 .focus-bar__badge { flex-shrink: 0; }
 /* once the rails appear (≥1340px) keep every full-width bar inside the gutter.
    Split left/right instead of the symmetric padding-inline shorthand: the
@@ -5294,7 +5358,7 @@ body :is(.pear-help-widget__close, .profile-dropdown__logout) {
 .cart-line__remove { transition: background .25s var(--ease), color .25s var(--ease), transform .3s cubic-bezier(.2, .8, .2, 1); }
 /* The gender options inherit the page face (font-family: inherit). The page face moved
    to SF/Heebo; pin theirs to the baseline page face so the switch keeps its height. */
-#genderToggle .gender-option { font-family: "Inter", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+#genderToggle .gender-option { font-family: var(--font-ui); }
 
 /* the glass sheen - OVER the button's own fill, UNDER its label */
 body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
@@ -5692,7 +5756,7 @@ body:has(.pear-compare-overlay.show, .gd-overlay.show, .pear-lightbox.show, .ter
   position: relative; overflow: hidden;
   min-height: 42px; padding: 10px 18px;
   border-radius: var(--pill);
-  font-family: "Urbanist", "Inter", sans-serif; font-size: .88rem; font-weight: 800; letter-spacing: .01em;
+  font-family: var(--font-ui); font-size: .88rem; font-weight: 800; letter-spacing: .01em;
   cursor: pointer; white-space: nowrap;
   transition: transform .35s var(--ease-sheet), background .3s var(--ease), box-shadow .3s var(--ease);
 }
@@ -5907,6 +5971,12 @@ body.has-cookie-banner .pear-help-widget {
   box-shadow: 0 -10px 22px -6px rgba(238, 238, 236, .95), 0 8px 24px -6px rgba(0, 0, 0, .12);
   animation: camGuideStep .62s var(--ease-spring) .58s both;
 }
+/* NOT SEE-THROUGH (2026-10-11, the UI audit): pinned to the bottom while a small phone scrolls the steps under it, the
+   button's translucent tint let the step text show through its own label (280-320px). The same tint, over the guide's
+   own backdrop colour instead of over the scrolling text. */
+.cam-guide__go.btn-primary { background: linear-gradient(var(--pear-tint), var(--pear-tint)), #ecece8; }
+/* ...hovered too: a phone keeps :hover after a tap, and the tap that opens the camera lands where this button appears. */
+.cam-guide__go.btn-primary:hover:not(:disabled) { background: linear-gradient(rgba(141, 182, 0, .26), rgba(141, 182, 0, .26)), #ecece8; }
 .cam-guide__go::after {
   content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
   background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .55) 50%, transparent 70%);
@@ -6184,3 +6254,324 @@ body.has-cookie-banner .pear-help-widget {
   .otp-success.is-playing .otp-success__badge { animation: otpVeil 2.1s linear both; transform: none; }
   .otp-success.is-playing .otp-success__ring, .otp-success.is-playing .otp-success__check { animation: none; stroke-dashoffset: 0; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   ✦ LIQUID GLASS - ONE MATERIAL, ONE PRESS, ONE THUMB (2026-10-11)
+   ════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   ASKED, with four Liquid Glass references (a glass segmented control, a glass toggle whose knob swells past its
+   track, the WWDC25 liquid blob, a tinted glass pill): "every button in one premium Apple style; whatever you press
+   and drag works the same; no emojis; when you press it should sink in like a bubble, not this light; Apple's fonts;
+   the whole interface in one style." This layer is LAST in the file and is the single source of that look:
+     1. tokens + the face      - var(--font-ui) is the system font (SF Pro / SF Hebrew on Apple; Inter + Heebo
+                                 elsewhere) for every text and every button.
+     2. the material           - clear glass (a light frost, a specular rim, inner depth, a soft drop shadow) for
+                                 every button; tinted pear glass for the primary actions; a dark glass variant over
+                                 the camera and the replay/lightbox; a calm disabled state.
+     3. no light               - the hover sheen sweeps, the tap ripple (mobile-ux.js), the glow pulses and the hover
+                                 lifts/spins are gone; hover only brightens the glass a little.
+     4. the bubble press       - lux-interactions.js presses the glass in (it squashes like a bubble and darkens
+                                 inward) and lets it spring back with one soft overshoot, via the `scale` property and
+                                 the Web Animations API - so no button's own transform, transition or animation is
+                                 touched or replayed.
+     5. one thumb              - the four segmented controls (language, fullscreen, gender, timer) share one glass
+                                 track and one lens thumb: touched or dragged it swells past the track and clears,
+                                 and while it travels it stretches along its motion like liquid (lux-interactions.js
+                                 measures its speed). Drawn on the thumb's ::before, so the controls' own drag and
+                                 snap code positions the thumb exactly as before.
+     6. icons                  - .lg-icon, the SF-Symbols-weight line icons that replaced the emojis.
+   Nothing here changes what any control does - only how it looks and feels. */
+
+/* ── 1 · tokens + the face ── */
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "SF Pro", "Inter", "Heebo",
+             "Segoe UI", Roboto, system-ui, sans-serif;
+  --lg2-ease:   cubic-bezier(.32, .72, 0, 1);      /* the iOS sheet curve */
+  --lg2-spring: cubic-bezier(.34, 1.36, .64, 1);   /* one soft overshoot */
+  --lg2-blur:   blur(18px) saturate(190%);
+  --lg2-clear:  linear-gradient(180deg, rgba(255, 255, 255, .62) 0%, rgba(255, 255, 255, .30) 100%);
+  --lg2-clear-hover: linear-gradient(180deg, rgba(255, 255, 255, .74) 0%, rgba(255, 255, 255, .40) 100%);
+  --lg2-tint:   linear-gradient(180deg, rgba(178, 214, 52, .50) 0%, rgba(141, 182, 0, .30) 100%);
+  --lg2-tint-hover: linear-gradient(180deg, rgba(186, 220, 64, .60) 0%, rgba(141, 182, 0, .38) 100%);
+  --lg2-dark:   linear-gradient(180deg, rgba(255, 255, 255, .22) 0%, rgba(255, 255, 255, .08) 100%);
+  /* the glass itself: a bright top lip, a faint bottom catch-light, a hairline rim, inner thickness */
+  --lg2-rim:    inset 0 1px 0 rgba(255, 255, 255, .95),
+                inset 0 -1px 0 rgba(255, 255, 255, .35),
+                inset 0 0 0 .5px rgba(255, 255, 255, .6);
+  --lg2-depth:  inset 0 -10px 18px -14px rgba(255, 255, 255, .85),
+                inset 0 10px 16px -16px rgba(15, 23, 42, .14);
+  --lg2-drop:   0 1px 2px rgba(15, 23, 42, .06), 0 10px 26px -14px rgba(15, 23, 42, .32);
+  --lg2-press:  inset 0 1px 0 rgba(255, 255, 255, .75),
+                inset 0 0 0 .5px rgba(255, 255, 255, .5),
+                inset 0 4px 14px rgba(15, 23, 42, .16),
+                inset 0 -6px 14px -10px rgba(255, 255, 255, .6),
+                0 2px 8px -6px rgba(15, 23, 42, .3);
+}
+html, body, button, input, select, textarea { font-family: var(--font-ui); }
+body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+         .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
+         .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
+         .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .camera-card__timer, .cl-arrow,
+         .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout, .cart-line__remove, .cl-card__look) {
+  font-family: var(--font-ui);
+  letter-spacing: -.01em;
+}
+
+/* ── 2 · the material ── */
+body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+         .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
+         .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
+         .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .camera-card__timer, .cl-arrow,
+         .pip-retake, .pip-clear, .profile-dropdown__logout, .cart-line__remove, .cl-card__look) {
+  background: var(--lg2-clear);
+  -webkit-backdrop-filter: var(--lg2-blur);
+          backdrop-filter: var(--lg2-blur);
+  border-color: transparent;
+  box-shadow: var(--lg2-rim), var(--lg2-depth), var(--lg2-drop);
+}
+/* primary actions: the same glass, tinted pear */
+body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look, .pear-rz-btn--dl,
+         .btn-update-measure, .pear-compare-bar, .pear-sz-btn.is-active) {
+  background: var(--lg2-tint);
+  color: #2c4100;
+}
+/* over the camera, the replay card and the lightbox: dark glass, white ink */
+body :is(.camera-card__flip, .camera-card__timer, .pear-rz-btn--replay, .plb-btn, .pear-lightbox__close) {
+  background: var(--lg2-dark);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 0 0 .5px rgba(255, 255, 255, .28),
+              inset 0 -8px 16px -12px rgba(255, 255, 255, .35), 0 8px 22px -12px rgba(0, 0, 0, .5);
+}
+/* a primary ON a dark surface (the replay card's Download): the translucent tint went olive over the dark card and its
+   dark label sank into it - here the pear glass is near-opaque, the label dark and crisp. Scoped to the card by its id:
+   the shared tint rule above carries the weight of .pear-sz-btn.is-active through its :is(), and a class-weight rule
+   here lost to it (reported with a screenshot: "the download button is hard to see"). */
+body #pearReplayZone .pear-rz-btn--dl {
+  background: linear-gradient(180deg, rgb(201, 233, 82) 0%, rgb(152, 194, 10) 100%);
+  color: #142000;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), inset 0 0 0 .5px rgba(255, 255, 255, .55),
+              inset 0 -8px 16px -12px rgba(255, 255, 255, .55), 0 10px 26px -12px rgba(141, 182, 0, .6);
+}
+body #pearReplayZone .pear-rz-btn--dl .pear-rz-btn__en { opacity: .72; }
+/* Add to Cart's success moment (the white check) - the same solid pear glass, so the check reads; the tint rule above
+   would otherwise leave a white check on pale glass */
+body .btn-add-cart.is-done:not(#_) {
+  background: linear-gradient(180deg, rgb(168, 204, 30) 0%, rgb(120, 160, 0) 100%);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), inset 0 0 0 .5px rgba(255, 255, 255, .45),
+              inset 0 -8px 16px -12px rgba(255, 255, 255, .45), 0 10px 26px -12px rgba(120, 160, 0, .6);
+}
+/* the selected size reads as chosen, the rest as glass keys */
+body .pear-sz-btn.is-active { box-shadow: var(--lg2-rim), var(--lg2-depth), 0 0 0 1px rgba(141, 182, 0, .55), var(--lg2-drop); }
+/* disabled: the glass stays, the action does not - muted ink, no drop shadow, no press */
+body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-update-measure, .cookie-btn, .pear-sz-btn,
+         .pear-rz-btn, .cl-card__look):is(:disabled, [aria-disabled="true"]) {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .5), rgba(255, 255, 255, .26));
+  color: rgba(15, 23, 42, .38);
+  box-shadow: var(--lg2-rim), inset 0 0 0 .5px rgba(15, 23, 42, .06);
+}
+/* the specular edge: brighter at the top-left and the bottom-right, like light caught in a glass rim */
+body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+         .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
+         .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
+         .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .camera-card__timer, .cl-arrow,
+         .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout, .cart-line__remove, .cl-card__look)::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  border-radius: inherit; padding: 1px; opacity: 1;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .95) 0%, rgba(255, 255, 255, .18) 32%,
+              rgba(255, 255, 255, 0) 52%, rgba(255, 255, 255, .14) 72%, rgba(255, 255, 255, .7) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+}
+
+/* ── 3 · no light: the sheens, the glows, the lifts and the spins are gone ── */
+.btn-primary::after, .btn-capture::after, .btn-watch::after { content: none; }
+.step-progress-fill::after { content: none; animation: none; }
+.btn-add-cart.is-loading { animation: none; }
+.pear-ripple { display: none !important; }
+/* the glows that breathed: a steady, quiet ring instead (the live card's breathing edge also re-blurred its shadow every
+   frame). The status signals stay - the presence lock ring and the garment-detect scan say something; these did not. */
+body .camera-card.live, body .camera-card.show-live {
+  animation: none;
+  box-shadow: 0 0 0 1.5px rgba(141, 182, 0, .72), 0 18px 44px -20px rgba(15, 23, 42, .35);
+}
+body .cam-guide__step--key { animation: camGuideStep .62s var(--ease-spring) both; animation-delay: .16s; }
+body .cat-item.is-active { animation: none; }
+/* ── 3b · HOVER AND TOUCH - one answer each ──────────────────────────────────────────────────────────────────────
+   REPORTED: "when you rest on a button with the mouse, or on a phone, it doesn't feel good". Many buttons carried their
+   own :hover outside any hover query - a 2-3px lift, another tint, a pear ring, a bigger shadow - and a phone keeps
+   :hover after a tap, so a tapped button stayed raised and recoloured. Now:
+     · a mouse: the glass brightens, its shadow deepens, and it lifts (the lift is the `scale` animation in
+       lux-interactions.js, so hover, press and release are one continuous motion) - no ring, no translate, no spin;
+     · touch: no hover state at all - a button looks exactly as it did before the finger, except while it is pressed.
+   :not(#_) lends these an id's weight, so they outrank every per-button hover (some are id-scoped). */
+@media (hover: hover) and (pointer: fine) {
+  body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+           .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
+           .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
+           .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .camera-card__timer,
+           .pip-retake, .pip-clear, .profile-dropdown__logout, .cart-line__remove, .cl-card__look):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    transform: none; border-color: transparent;
+    background: var(--lg2-clear-hover);
+    box-shadow: var(--lg2-rim), var(--lg2-depth), 0 2px 4px rgba(15, 23, 42, .06), 0 18px 36px -16px rgba(15, 23, 42, .4);
+  }
+  body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look, .btn-update-measure, .pear-compare-bar, .pear-sz-btn.is-active):hover:not(:disabled):not([aria-disabled="true"]):not(#_) { background: var(--lg2-tint-hover); color: #2c4100; }
+  body :is(.camera-card__flip, .camera-card__timer, .pear-rz-btn--replay, .plb-btn, .pear-lightbox__close):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    background: linear-gradient(180deg, rgba(255, 255, 255, .3) 0%, rgba(255, 255, 255, .12) 100%); color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), inset 0 0 0 .5px rgba(255, 255, 255, .34),
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .4), 0 14px 30px -14px rgba(0, 0, 0, .6);
+  }
+  body #pearReplayZone .pear-rz-btn--dl:hover:not(#_) {
+    background: linear-gradient(180deg, rgb(212, 240, 98) 0%, rgb(160, 202, 14) 100%); color: #142000;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85), inset 0 0 0 .5px rgba(255, 255, 255, .6),
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .6), 0 16px 32px -14px rgba(141, 182, 0, .7);
+  }
+  body .cl-arrow:hover:not(#_) { transform: translateY(-50%); background: var(--lg2-clear-hover); }
+  body .pip-retake:hover .pip-retake__icon { transform: none; }
+}
+@media (hover: none), (pointer: coarse) {
+  body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+           .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
+           .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
+           .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .camera-card__timer,
+           .pip-retake, .pip-clear, .profile-dropdown__logout, .cart-line__remove, .cl-card__look):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    transform: none; border-color: transparent;
+    background: var(--lg2-clear);
+    box-shadow: var(--lg2-rim), var(--lg2-depth), var(--lg2-drop);
+  }
+  body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look, .btn-update-measure, .pear-compare-bar, .pear-sz-btn.is-active):hover:not(:disabled):not([aria-disabled="true"]):not(#_) { background: var(--lg2-tint); color: #2c4100; }
+  body :is(.camera-card__flip, .camera-card__timer, .pear-rz-btn--replay, .plb-btn, .pear-lightbox__close):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    background: var(--lg2-dark); color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 0 0 .5px rgba(255, 255, 255, .28),
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .35), 0 8px 22px -12px rgba(0, 0, 0, .5);
+  }
+  body #pearReplayZone .pear-rz-btn--dl:hover:not(#_) {
+    background: linear-gradient(180deg, rgb(201, 233, 82) 0%, rgb(152, 194, 10) 100%); color: #142000;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), inset 0 0 0 .5px rgba(255, 255, 255, .55),
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .55), 0 10px 26px -12px rgba(141, 182, 0, .6);
+  }
+  body .pear-sz-btn.is-oos:hover:not(#_) { background: linear-gradient(180deg, rgba(255, 255, 255, .42), rgba(255, 255, 255, .2)); color: #9a9aa0; }
+  body .cl-arrow:hover:not(#_) { transform: translateY(-50%); }
+  body .pip-retake:hover .pip-retake__icon { transform: none; }
+}
+/* no spins on hover or press (the close buttons turned 90 degrees, the flip and the retake icons spun) */
+body :is(.pcmp__close, .gd-close, .pear-lightbox__close, .camera-card__flip):is(:hover, :active):not(#_) { transform: none; }
+body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+         .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
+         .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
+         .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip,
+         .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout,
+         .cart-line__remove):active:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
+  transform: none;
+}
+body #btn-next-screen:active:not(:disabled):not([aria-disabled="true"]) { transform: none; }
+body .cl-arrow:active { transform: translateY(-50%); }
+body .camera-card__flip:active, body .cl-card__look:active, body .cl-card__look:hover { transform: none; }
+
+/* the injected size keys and replay buttons (app.js) bring their own states, and an injected <style> lands after this
+   file - so these restate the layer at a higher weight: no lift on hover (a phone keeps :hover after a tap, which left a
+   key raised and ringed), no pulsing glow on the chosen size, the sold-out keys in the same muted glass */
+body .pear-sz-btn:is(:hover, :active), body .pear-rz-btn:is(:hover, :active) { transform: none; border-color: transparent; }
+body .pear-sz-btn:not(.is-active):hover { box-shadow: var(--lg2-rim), var(--lg2-depth), var(--lg2-drop); color: inherit; }
+body .pear-sz-btn.is-active { animation: none; border-color: transparent; }
+body .pear-sz-btn.is-oos {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .42), rgba(255, 255, 255, .2));
+  border-color: transparent;
+  box-shadow: var(--lg2-rim), inset 0 0 0 .5px rgba(15, 23, 42, .06);
+}
+body .pear-sz-btn.is-oos.is-active { background: var(--lg2-tint); }
+body .pear-rz-btn--replay:hover { background: linear-gradient(180deg, rgba(255, 255, 255, .3) 0%, rgba(255, 255, 255, .12) 100%); }
+
+/* ── 4 · the bubble press (driven by lux-interactions.js: .lg-press while held; the scale itself is a Web Animation) ── */
+body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+         .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
+         .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
+         .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .camera-card__timer, .cl-arrow,
+         .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout, .cart-line__remove, .cl-card__look).lg-press:not(#_):not(#__) {
+  box-shadow: var(--lg2-press);
+  transition-property: box-shadow, background;
+  transition-duration: .16s;
+  transition-delay: 0s;
+}
+
+body #pearReplayZone .pear-rz-btn--dl.lg-press:not(#_):not(#__) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), inset 0 0 0 .5px rgba(255, 255, 255, .45),
+              inset 0 4px 14px rgba(40, 60, 0, .35), 0 4px 12px -8px rgba(141, 182, 0, .5);
+}
+
+/* ── 5 · one glass track, one lens thumb ── */
+body :is(.lang-switch, .fs-switch, .gender-toggle.liquid-glass-track, .cam-timer__track) {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .42) 0%, rgba(255, 255, 255, .18) 100%);
+  -webkit-backdrop-filter: var(--lg2-blur);
+          backdrop-filter: var(--lg2-blur);
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 0 0 .5px rgba(255, 255, 255, .55),
+              inset 0 2px 6px rgba(15, 23, 42, .08), 0 1px 2px rgba(15, 23, 42, .05), 0 8px 22px -14px rgba(15, 23, 42, .3);
+  overflow: visible;
+}
+body .gender-toggle.liquid-glass-track::before { content: none; }
+/* the thumb is only the positioning box now; ::before is the glass that swells and stretches */
+body :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill) {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+          backdrop-filter: none !important;
+}
+body :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill)::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .98) 0%, rgba(255, 255, 255, .78) 100%);
+  box-shadow: inset 0 1px 0 #fff, inset 0 0 0 .5px rgba(255, 255, 255, .9), inset 0 -3px 6px -4px rgba(15, 23, 42, .08),
+              0 0 0 .5px rgba(15, 23, 42, .06), 0 3px 10px -3px rgba(15, 23, 42, .26);
+  scale: var(--lg-sx, 1) var(--lg-sy, 1);
+  transition: scale .55s var(--lg2-spring), background .28s var(--lg2-ease), box-shadow .28s var(--lg2-ease),
+              -webkit-backdrop-filter .28s var(--lg2-ease), backdrop-filter .28s var(--lg2-ease);
+}
+/* touched or dragged: the lens swells past the track and clears, like the glass knob in the reference */
+body :is(.lang-switch, .fs-switch, .liquid-glass-track, .cam-timer__track):is(.lg-touch, .is-dragging)
+  :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill)::before {
+  scale: calc(1.16 * var(--lg-sx, 1)) calc(1.34 * var(--lg-sy, 1));
+  /* a clear bead on a light page: the glass itself is faint, its RIM and its refraction carry it - a bright lip and a
+     white hairline inside, a fine dark hairline outside so it separates from ivory, the bottom of the bead shaded the
+     way a lens darkens toward its far edge, and a lifted shadow */
+  background: radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, .7) 0%, rgba(255, 255, 255, .22) 55%, rgba(255, 255, 255, .1) 100%);
+  -webkit-backdrop-filter: blur(1px) saturate(200%) brightness(1.08) contrast(1.04);
+          backdrop-filter: blur(1px) saturate(200%) brightness(1.08) contrast(1.04);
+  box-shadow: inset 0 1.5px 0 #fff, inset 0 0 0 1px rgba(255, 255, 255, .95), 0 0 0 .75px rgba(15, 23, 42, .16),
+              inset 0 -9px 14px -9px rgba(15, 23, 42, .22), inset 0 9px 12px -9px rgba(255, 255, 255, 1),
+              0 14px 28px -10px rgba(15, 23, 42, .42), 0 2px 6px rgba(15, 23, 42, .1);
+  transition: scale .32s var(--lg2-spring), background .2s var(--lg2-ease), box-shadow .2s var(--lg2-ease),
+              -webkit-backdrop-filter .2s var(--lg2-ease), backdrop-filter .2s var(--lg2-ease);
+}
+
+/* Add to Cart reads like Go Live above it: the action on top (icon + the Hebrew), the English beneath - one layout,
+   both widths, never a stray "·" at the start of a wrapped line. */
+body .btn-add-cart .bac__label { row-gap: 1px; }
+body .btn-add-cart .bac__en { flex-basis: 100%; text-align: center; font-size: .72rem; }
+
+/* the full-look cue is one pill: on a phone it broke between its check and its words ("✓" alone, then "TOTAL LOOK") */
+body .complete-look.is-complete .cl-title::after { display: inline-block; white-space: nowrap; }
+
+/* ── 6 · icons ── */
+.lg-icon {
+  width: 1.15em; height: 1.15em; flex: none; display: inline-block; vertical-align: -.2em;
+  fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+}
+.camera-card__icon { display: inline-flex; color: var(--ink, #111); opacity: .78; }
+.camera-card__icon .lg-icon { width: 46px; height: 46px; stroke-width: 1.5; }
+.btn-capture__icon { display: inline-flex; font-size: 1.35rem; line-height: 1; }
+.bac__icon { display: inline-flex; font-size: 1.05em; }
+.bac__check .lg-icon { width: 1.35rem; height: 1.35rem; stroke-width: 2.4; }
+.pip-retake__icon, .plb-btn__icon { display: inline-flex; }
+.gd-empty__icon .lg-icon { width: 40px; height: 40px; stroke-width: 1.6; }
+:is(.pcmp__close, .gd-close, .terms-modal__close, .cart-line__remove) .lg-icon { width: 18px; height: 18px; stroke-width: 2.1; }
+.lgi-select .lg-icon { width: 14px; height: 14px; stroke-width: 2.6; }
+.viewbadge .lg-icon { width: 12px; height: 12px; stroke-width: 2.4; }
+.lux-cart-toast__icon .lg-icon { width: 1em; height: 1em; stroke-width: 2.6; }
+
+@media (prefers-reduced-motion: reduce) {
+  body :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill)::before { transition: none; scale: 1; }
+}
+/* the two buttons this layer added to the list: a box for ::before and a stacking context for its z-index:-1 */
+body .cl-card__look { position: relative; isolation: isolate; }
+body .camera-card__timer { position: relative; isolation: isolate; }
