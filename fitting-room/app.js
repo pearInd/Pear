@@ -11666,17 +11666,20 @@ const OUTFIT_TOP_SHARE = 0.56;      // the top's region, from the top of the fra
 const OUTFIT_BOTTOM_WIDTH = 0.74;   // the bottom's width as a share of the top's (a waist under a pair of sleeves)
 const OUTFIT_MARGIN = 0.04;         // of the width, around the outfit
 const OUTFIT_JPEG_Q = 0.88;
+const OUTFIT_WHOLE_BOTTOM = 0.65;   // a bottom without a band: the top of its photo used
+const OUTFIT_WHOLE_TUCK = 0.18;     // ...and this share of it tucked under the top's hem (CHICAGO: the tee under the shirt, the lettering not)
 /** Where each half of the outfit goes. tw/th, bw/bh: the top's and the bottom's source sizes (their bands, in px). Pure. */
-function outfitLayout(tw, th, bw, bh, W = OUTFIT_W, H = OUTFIT_H) {
+function outfitLayout(tw, th, bw, bh, W = OUTFIT_W, H = OUTFIT_H, tuck = 0) {
   const m = W * OUTFIT_MARGIN;
   const topMaxW = W - 2 * m, topMaxH = H * OUTFIT_TOP_SHARE - m;
   const kt = Math.min(topMaxW / tw, topMaxH / th);
   const tw2 = tw * kt, th2 = th * kt;
   const top = { x: (W - tw2) / 2, y: m + (topMaxH - th2), w: tw2, h: th2 };   // the hem sits on the seam
   const seam = top.y + top.h;
-  const kb = Math.min((tw2 * OUTFIT_BOTTOM_WIDTH) / bw, (H - m - seam) / bh);
+  const kb = Math.min((tw2 * OUTFIT_BOTTOM_WIDTH) / bw, (H - m - seam) / (bh * (1 - tuck)));
   const bw2 = bw * kb, bh2 = bh * kb;
-  const bottom = { x: (W - bw2) / 2, y: seam - Math.min(bh2 * 0.04, th2 * 0.04), w: bw2, h: bh2 };   // the waistband just under the hem
+  /* the waistband just under the hem - or, with `tuck` (a bottom shown without its band), that share of it under the top */
+  const bottom = { x: (W - bw2) / 2, y: seam - (tuck > 0 ? bh2 * tuck : Math.min(bh2 * 0.04, th2 * 0.04)), w: bw2, h: bh2 };
   return { top, bottom };
 }
 
@@ -11699,11 +11702,14 @@ function stitchLookBlob(topUrl, bottomUrl) {
       /* THE OUTFIT SHAPE: each half cut to its garment's band (the server's, v2) - the whole photo when there is none. */
       const [top, bottom, topBand, bottomBand] = await Promise.all([loadGarmentBitmap(topUrl), loadGarmentBitmap(bottomUrl),
         lookGarmentBand(topUrl, "top"), lookGarmentBand(bottomUrl, "bottom")]);
-      const tb = topBand || { y0: 0, y1: 1, x0: 0, x1: 1 }, bb = bottomBand || { y0: 0, y1: 1, x0: 0, x1: 1 };
+      /* No band for the bottom (the server abstains on an implausible one - see lib/garment-box.js BOTTOM_MIN_HEM): its photo's
+         top OUTFIT_WHOLE_BOTTOM (a lower-body product photo is framed from about the waist), tucked under the hem by
+         OUTFIT_WHOLE_TUCK of its height - what is above the waistband (CHICAGO: a white tee) goes under the shirt. */
+      const tb = topBand || { y0: 0, y1: 1, x0: 0, x1: 1 }, bb = bottomBand || { y0: 0, y1: OUTFIT_WHOLE_BOTTOM, x0: 0, x1: 1 };
       const src = (img, band) => ({ sx: band.x0 * img.width, sy: band.y0 * img.height,
         sw: (band.x1 - band.x0) * img.width, sh: (band.y1 - band.y0) * img.height });
       const ts = src(top, tb), bs = src(bottom, bb);
-      const L = outfitLayout(ts.sw, ts.sh, bs.sw, bs.sh);
+      const L = outfitLayout(ts.sw, ts.sh, bs.sw, bs.sh, OUTFIT_W, OUTFIT_H, bottomBand ? 0 : OUTFIT_WHOLE_TUCK);
       const off    = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(OUTFIT_W, OUTFIT_H) : null;
       const canvas = off || Object.assign(document.createElement("canvas"), { width: OUTFIT_W, height: OUTFIT_H });
       const ctx    = canvas.getContext("2d");

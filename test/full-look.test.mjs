@@ -67,6 +67,10 @@ console.log("\n── §2 each half cropped to its garment, in THE OUTFIT SHAPE 
     Math.abs(L.bottom.w / L.bottom.h - bw / bh) < 1e-6 && L.bottom.y < L.top.y + L.top.h && L.bottom.y > L.top.y + L.top.h - 0.05 * L.top.h &&
     L.bottom.y + L.bottom.h <= H + 1e-6 && Math.abs(L.bottom.x + L.bottom.w / 2 - W / 2) < 1e-6, JSON.stringify(L.bottom));
   check("§2.4 ...no wider than ~3/4 of the top (a waist under a pair of sleeves)", L.bottom.w <= L.top.w * 0.74 + 1e-6);
+  /* a bottom shown without its band: the top 65% of its photo, 16% of it tucked under the shirt's hem */
+  const T = G.outfitLayout(tw, th, 2048, 0.65 * 3072, W, H, 0.16);
+  check("§2.4b a bottom without a band is tucked under the hem (here 16%) of its height (what is above its waist goes under the top), still inside the frame",
+    Math.abs((T.top.y + T.top.h) - T.bottom.y - 0.16 * T.bottom.h) < 1e-6 && T.bottom.y + T.bottom.h <= H - W * 0.04 + 1e-6 && T.bottom.w <= T.top.w * 0.74 + 1e-6, JSON.stringify(T));
   /* the fetch */
   const asked = [];
   const ok = mk(async (u) => { asked.push(u); return { ok: true, json: async () => ({ band: { y0: 0.07, y1: 0.61, x0: 0.24, x1: 0.79 }, reason: "band" }) }; });
@@ -87,7 +91,7 @@ console.log("\n── §2 each half cropped to its garment, in THE OUTFIT SHAPE 
   const stitch = between(APP, "function stitchLookBlob(topUrl, bottomUrl) {", "\n}\n");
   check("§2.10 the stitch: both bands, the bottom drawn first and the top over it, one backdrop, no bar, no labels, its own cache key",
     /lookGarmentBand\(topUrl, "top"\), lookGarmentBand\(bottomUrl, "bottom"\)\]\);/.test(stitch) &&
-    /const L = outfitLayout\(ts\.sw, ts\.sh, bs\.sw, bs\.sh\);/.test(stitch) &&
+    /const L = outfitLayout\(ts\.sw, ts\.sh, bs\.sw, bs\.sh, OUTFIT_W, OUTFIT_H, bottomBand \? 0 : OUTFIT_WHOLE_TUCK\);/.test(stitch) &&
     stitch.indexOf("L.bottom.x, L.bottom.y") < stitch.indexOf("L.top.x, L.top.y") && /ctx\.fillStyle = OUTFIT_BG;/.test(stitch) &&
     !/drawSectionLabel|LOOK_SEP|"#000000"/.test(stitch.replace(/\/\*[\s\S]*?\*\//g, "")) && /const key = `outfit2 \$\{topUrl\} \$\{bottomUrl\}`;/.test(stitch));
 }

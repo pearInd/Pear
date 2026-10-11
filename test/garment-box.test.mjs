@@ -252,6 +252,9 @@ console.log("\n── §8 both garments asked, the region by POSITION (v3) ─�
     !!GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, upper_box_2d: [345, 167, 870, 833], lower_box_2d: null }, "top").band);
   check("§8.4 a v1/v2 answer (one box_2d) still reads as before", !!GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, box_2d: [345, 167, 870, 833] }, "top").band);
   const p = GB.garmentBoxPrompt("bottom");
+  check("§8.6 a lower-body box that ends in the top 30% of the photo is no band (the CHICAGO answers: [0, 0.17]) - the mask sends the photo whole",
+    GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, upper_box_2d: null, lower_box_2d: [0, 156, 173, 844] }, "bottom").reason === "implausible" &&
+    !!GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, lower_box_2d: [70, 238, 498, 793] }, "bottom").band);
   check("§8.5 the prompt asks for both boxes and names the product's region", /upper_box_2d/.test(p) && /lower_box_2d/.test(p) && /LOWER body/.test(p));
 }
 

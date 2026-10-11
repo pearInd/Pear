@@ -2954,7 +2954,9 @@ app.get("/api/garment-box", classifyLimiter, async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     return res.json({ band: null, reason: "rate-limited", source: "rate_limited", v: GARMENT_BOX_VERSION });
   }
-  const body = { band: out.band, reason: out.reason, source: out.source, v: GARMENT_BOX_VERSION };
+  /* The model's own box(es), numbers only - what decided the band, readable without the server's logs. */
+  const body = { band: out.band, reason: out.reason, source: out.source, v: GARMENT_BOX_VERSION,
+    ...(out.raw ? { raw: out.raw } : {}), ...(out.both ? { both: out.both } : {}) };
   if (out.source === "ai") {
     _garmentBoxMemo.set(key, { at: Date.now(), body });
     if (_garmentBoxMemo.size > GARMENT_BOX_MEMO_MAX) _garmentBoxMemo.delete(_garmentBoxMemo.keys().next().value);

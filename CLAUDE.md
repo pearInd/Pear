@@ -1368,6 +1368,10 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   wrong band. **v3 (the same day):** v2 still boxed the tee ([0, 0.14] / [0, 0.17] at 768 wide, temperature 0) - the model's
   LABEL fails, not its boxes - so it is asked for both garments' boxes at once and the region is taken by POSITION
   (`pickRegionBox`: the lower-body garment is the lower box).
+  **It still failed on CHICAGO** (v3: one photo no lower box at all, the other [0, 0.17] again) - so a lower-body band ending in the
+  top 30% of the photo is IMPLAUSIBLE and no band (`BOTTOM_MIN_HEM`): the rear mask sends the photo whole (v1-v3 would have painted
+  the shorts out), and the look shows the bottom's photo top 65%, 18% of it tucked under the shirt's hem (the tee under it, the
+  lettering not). The API now returns the model's raw box(es) (`raw`, `both`).
 - **The card (`lookViewThumbs`):** a full look shows four views - each half's front and back, as the swaps send them (a half
   with no back says "אין גב"); and "Custom upload" only for an uploaded crop - a store product reads "Store item".
 - **THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2726ee2)** and **THE EARLY VERDICT (24d9abf)** - two listener bugs found on the
