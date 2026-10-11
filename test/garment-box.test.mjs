@@ -122,8 +122,8 @@ const SERVER = readFileSync(new URL("../server.js", import.meta.url), "utf8").re
   check("only a verdict is cached - in memory and at the CDN; an error or a throttle is no-store",
     /if \(out\.source === "ai"\) \{[\s\S]*?_garmentBoxMemo\.set\(key[\s\S]*?s-maxage=[\s\S]*?\} else \{\s*\n\s*res\.setHeader\("Cache-Control", "no-store"\);/.test(route) &&
       /catch \(e\) \{[\s\S]*?no-store[\s\S]*?rate-limited/.test(route));
-  check("the memo is keyed by the CANONICAL photo (CLAUDE.md §2.2) and the region",
-    /const key = `\$\{canonicalImageUrl\(imageUrl\) \|\| imageUrl\}\|\$\{region\}`;/.test(route));
+  check("the memo is keyed by the rule's VERSION, the CANONICAL photo (CLAUDE.md §2.2) and the region",
+    /const key = `\$\{GARMENT_BOX_VERSION\}\|\$\{canonicalImageUrl\(imageUrl\) \|\| imageUrl\}\|\$\{region\}`;/.test(route));
   check("the answer names no vendor (§2.24: source is \"ai\")", !/gemini/i.test(route.replace(/GEMINI_API_KEY/g, "")));
 }
 
@@ -161,7 +161,7 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
   const c2 = await good.referenceBackBand("https://cdn.example.com/tee-3.jpg");
   check("a good answer comes back as the band, asked for with the photo and its region",
     c1 && c1.y0 === 0.3419 && c1.y1 === 0.8954 && c1.x0 === 0.17 &&
-      /\/api\/garment-box\?image_url=https%3A%2F%2Fcdn\.example\.com%2Ftee-3\.jpg%3Fwidth%3D1000&region=top&v=1$/.test(asked[0]),
+      /\/api\/garment-box\?image_url=https%3A%2F%2Fcdn\.example\.com%2Ftee-3\.jpg%3Fwidth%3D1000&region=top&v=2$/.test(asked[0]),
     asked[0]);
   check("...once per photo: another spelling of the same photo is the memo (canonical key)", asked.length === 1 && c2 === c1);
   check("THE FRONT IS NEVER ASKED ABOUT - it is sent exactly as before", good.referenceBackBand(item.img) === null && asked.length === 1);
@@ -209,6 +209,30 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
   check("a PNG stays a PNG with its alpha", /const png = \/\^image\\\/png\$\/i\.test/.test(maskFn) && /alpha: png/.test(maskFn));
   check("a TEST record carries what the mask did (ctx.ref)", /ref: typeof _refMaskLog !== "undefined" && _refMaskLog\.length \? _refMaskLog\.slice\(-3\) : undefined,/.test(APP));
   check("no second pose model in the browser (CLAUDE.md §2.15)", !/runningMode: "IMAGE"/.test(APP));
+}
+
+console.log("\n── §7 the photo the model sees, and a bottom's hem (v2, 2026-10-11) ──");
+{
+  const GB = await import("../lib/garment-box.js");
+  check("§7.1 v2", GB.GARMENT_BOX_VERSION === 2);
+  const a = GB.analysisUrl("http://fox.co.il/cdn/shop/files/3108650200-1.jpg?v=1752403462");
+  const b = GB.analysisUrl("https://cdn.shopify.com/s/files/1/0638/8252/6908/files/3108650200-4.jpg?crop=center&height=1499&width=2048&v=1");
+  check("§7.2 a Shopify photo (the store's /cdn/shop/ or cdn.shopify.com) is analysed 768 wide - crop and height dropped, its version kept",
+    /width=768/.test(a) && /v=1752403462/.test(a) && /width=768/.test(b) && !/crop=|height=/.test(b) && (b.match(/width=/g) || []).length === 1, a + " | " + b);
+  check("§7.3 any other host is fetched as it is", GB.analysisUrl("https://img.example.com/a.jpg?w=2000") === "https://img.example.com/a.jpg?w=2000" &&
+    GB.analysisUrl("not a url") === "not a url");
+  /* the CHICAGO back photo's v1 answer: the box stopped at 0.38 with the hem at ~0.47 */
+  const r = GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, box_2d: [161, 183, 383, 823] }, "bottom");
+  check("§7.4 a bottom keeps a quarter of its box below the hem (0.38 -> ~0.44) and a little above the waistband",
+    r.band && Math.abs(r.band.y1 - (0.383 + 0.25 * 0.222)) < 1e-3 && Math.abs(r.band.y0 - (0.161 - 0.03 * 0.222)) < 1e-3, JSON.stringify(r));
+  const t = GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, box_2d: [345, 167, 870, 833] }, "top");
+  check("§7.5 a top's margins are as before (exact on PEAK)", t.band && Math.abs(t.band.y0 - (0.345 - 0.015 * 0.525)) < 1e-3 && Math.abs(t.band.y1 - (0.870 + 0.01 * 0.525)) < 1e-3, JSON.stringify(t));
+  let fetched = null;
+  await GB.detectGarmentBand("http://fox.co.il/cdn/shop/files/x-1.jpg", "bottom", "k", { fetchImpl: async (u) => {
+    if (fetched === null) { fetched = String(u); return { ok: true, headers: { get: () => "image/jpeg" }, arrayBuffer: async () => new ArrayBuffer(8) }; }
+    return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ worn_by_person: true, box_2d: [70, 238, 498, 793], confidence: 0.9 }) }] } }] }) };
+  } });
+  check("§7.6 ...and that is the URL the server actually fetches (https, 768 wide)", /^https:\/\/fox\.co\.il\/cdn\/shop\/files\/x-1\.jpg\?width=768$/.test(fetched || ""), fetched);
 }
 
 console.log(fails === 0 ? "\ngarment-box: OK" : `\ngarment-box: ${fails} FAILED`);

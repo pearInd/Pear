@@ -1474,6 +1474,15 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
 }
 .ag-duo > span { border: 1px solid var(--glass-border); border-radius: 9px; overflow: hidden; }
+/* Both views of both garments (2026-10-11): shirt front | shirt back / shorts front | shorts back */
+.active-garment.is-duo .active-garment__media { width: 124px; height: auto; }
+.active-garment__media > span.ag-duo--views { grid-template-columns: 1fr 1fr; gap: 3px; }
+.ag-view { position: relative; display: block; aspect-ratio: 1 / 1; background: #f3f1ee; }
+.ag-view img { width: 100%; height: 100%; object-fit: cover; object-position: center 38%; display: block; }
+.ag-view b { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%); font: 600 8px/1.3 system-ui, sans-serif;
+  padding: 0 4px; border-radius: 4px; background: rgba(255,255,255,.88); color: #2b3a12; white-space: nowrap; }
+.ag-view--missing img { opacity: .35; filter: grayscale(1); }
+.ag-view--missing b { color: #8a2b14; }
 
 /* ── camera card - premium rounded glass-framed stage ──────────────────── */
 .camera-card {

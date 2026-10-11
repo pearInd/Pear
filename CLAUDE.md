@@ -305,7 +305,10 @@ the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to
 `  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
 (the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
 `function createOrientationWatcher() {`. `pose-follow` slices `app.js` from `/* ── THE TICK WAITS FOR THE READING (2026-10-09)` to
-`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
+`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `full-look` slices `app.js` from `function lookHalfFor(item, angle) {`
+to the `Camera + engine bootstrap` banner, from `const LOOK_BAND_TIMEOUT_MS = 3500;` to the `stitchLookBlob` JSDoc, and from
+`/* ── THE GARMENTS YOU TRIED` to `/* ── end THE GARMENTS YOU TRIED ── */` (§2.42); `side-profile` slices `applyLook` from
+`const canStitchLook = !!(topImg && bottomImg);`. `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
 `/** The rows to paint on an image` (the rear band request, run on a fake fetch). `garment-cache-age-group` slices
 `server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
 `/* Per-product view lookup` and `scanner/scan-store.js` from
@@ -1341,30 +1344,36 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   even `rtp`, bursty `recv` -> the network, which the buffer is for. `picture-pace` (14).
 - **Not measured live yet:** both. The next TEST session's `out-stats.pace` and its return landing are the check.
 
-### 2.42 The full look in AI Auto - TRIED AND REVERTED; two verdict bugs fixed on the way (2026-10-10/11)
-"Make sure both work well at the same time" (the owner chose: a full look, the shirt and the shorts in one session).
-- **What was broken, and still is:** `applyLook()` skips the stitch for AI Auto, so a full look of two garments with back
-  photos sends the TOP's photo alone (the bottom gets no reference); and FOX has no way to assemble a look ("Complete the Look"
-  types the store's cached catalog by words in the image URL, which FOX's numeric file names never carry).
-- **Tried (07e6b66, f21a149) and REVERTED:** one stitched composite per side (both fronts / both backs, the top cut to its
-  `/api/garment-box` band, the bottom whole), built ahead of the turn, plus a per-store memory of the garments a shopper tried,
-  offered first in "Complete the Look". Measured through the engine, PEAK + CHICAGO, the owner's recorded 360 as the camera:
-  session `mv3frez7` - the PEAK front rendered from the first second, the shorts were NOT (plain black, no lettering), the
-  back composite was acknowledged in 1,269ms (a single photo: 300-500ms) so no back print through the back view, and the back
-  print landed on the chest at the end. The engine reads one stitched image of two garments as mostly the top, and the larger
-  image slows every swap. Do not retry the TOP/BOTTOM stitch for AI Auto without a different reference shape, measured first.
-  Two side findings are recorded here for the next attempt: the server's BOTTOM bands were wrong on both CHICAGO photos
-  ([0, 0.15], the white tee above the waistband; the TOP bands were exact) - and the rear-photo mask (§2.38) uses that same
-  bottom band (the shorts' back photo is mostly painted out; the shorts still rendered right in `mv2mgezp`).
-- **KEPT - THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2726ee2):** the PEAR_UPDATE_GARMENT listener wrote the widget's correction
-  onto `activeItem` - in the first full-look session (`mv3f87ox`) that was the shirt just added, and the look went live as the
-  shorts twice ("it measured the shorts as the shorts and as the shirt"). It writes to `target`: the room's own garment,
-  `_handoffItem`, set by `enterRoom()` (the active one only without it). A catalog swap is the same case.
-- **KEPT - THE EARLY VERDICT (24d9abf):** `enterRoom()` builds the garment only when the shopper leaves the size screen, and a
-  correction that landed before that was DROPPED - a shopper slower on height and weight than the classifier (~20-35s on PEAK)
-  went live on the room's opening guess: the gallery's second photo as the back, on PEAK the model three-quarters to the FRONT
-  (§2.1). Held now (`_earlyGarmentUpdate`) and replayed through the same listener right after `setActiveItem`.
-- `garment-verdict` (6) pins both; color-lock / plain-back-anchor / size-chart-overlay pin the writes on `target`.
+### 2.42 The full look in AI Auto - the shirt and the shorts together (2026-10-10/11)
+"Make sure both work well at the same time" (the owner chose a full look; one real session for this second attempt).
+- **What was broken:** `applyLook()` skipped the stitch for AI Auto, so a look of two garments with back photos sent the TOP's
+  photo alone; and on FOX there was no way to assemble one ("Complete the Look" typed the store catalog by words in the image
+  URL, which FOX's numeric file names never carry).
+- **THE GARMENTS YOU TRIED (localStorage `pear_tried_garments`):** a garment is remembered with a VERIFIED gallery (the
+  classifier's verdict, or a room opened already classified), per store; "Complete the Look" lists the other region's first.
+- **AI AUTO STITCHES TOO (`lookHalfFor`, `prewarmLookComposites`):** one composite per side (both fronts / both distinct backs),
+  frozen before any await, built when the look forms.
+- **FIRST ATTEMPT, MEASURED AND REPLACED (session `mv3frez7`):** 1024x2048 black-barred "TOP"/"BOTTOM" panels - the PEAK front
+  rendered, the shorts never did, and the ~0.6 MB back composite took 1,269ms to acknowledge (single photos 300-500ms): no back
+  print through the back view, the print on the chest at the end. The session before (`mv3f87ox`) painted a striped strip of
+  the reference into the scene.
+- **THE OUTFIT SHAPE (`outfitLayout`, 2026-10-11):** what a product photo of an outfit looks like - the top cut to its band with
+  its hem on the seam, the bottom cut to its band under it (layered under the hem, ~3/4 of the top's width), one backdrop (the
+  top photo's own corner), no bar, no labels, 768x1152 JPEG 0.88: 82/68 KB for PEAK + CHICAGO front/back (rendered locally from
+  the real bands before any session).
+- **THE BOTTOM'S BAND (`lib/garment-box.js` v2):** the v1 bottom bands were the white tee above the waistband on both CHICAGO
+  photos ([0, 0.15]) - the model was handed the 2048x3072 original; at 600 wide the front came back 0.07-0.50. A Shopify photo
+  is now analysed 768 wide (`analysisUrl`), a bottom keeps a quarter of its box below the hem and 3% above, and the version is in
+  the memo key (v1 answers are never served again). This also fixes the rear-photo MASK for bottoms (§2.38), which used the same
+  wrong band.
+- **The card (`lookViewThumbs`):** a full look shows four views - each half's front and back, as the swaps send them (a half
+  with no back says "אין גב"); and "Custom upload" only for an uploaded crop - a store product reads "Store item".
+- **THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2726ee2)** and **THE EARLY VERDICT (24d9abf)** - two listener bugs found on the
+  way (the shorts' verdict written onto the shirt just added: "it measured the shorts twice"; a verdict on the size screen
+  dropped, the gallery's second photo going live as the back).
+- `full-look` (47), `garment-box` §7. The look prompt is unchanged (`trace:prompt` identical). **The outfit shape is measured by
+  one real session - its result is recorded below when it is in.**
+
 ---
 
 ## 3. Cross-file lockstep

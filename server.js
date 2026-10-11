@@ -2938,7 +2938,8 @@ app.get("/api/garment-box", classifyLimiter, async (req, res) => {
     return res.status(400).json({ error: "bad_image_url", message: "image_url must be a public image." });
   }
 
-  const key = `${canonicalImageUrl(imageUrl) || imageUrl}|${region}`;
+  /* The rule's version is part of the key: a v1 answer is never served for a v2 question (GARMENT_BOX_VERSION). */
+  const key = `${GARMENT_BOX_VERSION}|${canonicalImageUrl(imageUrl) || imageUrl}|${region}`;
   const hit = _garmentBoxMemo.get(key);
   if (hit && Date.now() - hit.at < GARMENT_BOX_MEMO_MS) {
     res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");

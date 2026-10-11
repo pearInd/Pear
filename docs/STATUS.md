@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading; the 10-09 changes (necklace sentence, per-image pace, jitter buffer) REVERTED (not on main)_
+_Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading, the full look in AI Auto; the 10-09 changes REVERTED (not on main)_
 
 ## At a glance
 
@@ -337,16 +337,11 @@ _Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo m
   first session (`mv2m2wmf`) was spent on a driver mistake - the room opened without the widget, so no classifier verdict
   arrived and after its 30s gate it went live with the gallery's SECOND photo (a three-quarter front) as the back: a real
   fallback that breaks §2.1 when the classifier never answers - **open, not fixed**.
-- **2026-10-10/11 "make both work well at the same time" - the full look (CLAUDE.md §2.42): tried through the engine and
-  REVERTED.** A combined image of the shirt and the shorts per side: the shirt rendered, the shorts did not, and the bigger image
-  slowed the back swap (no back print through the back view, the print on the chest at the end) - 3 real sessions of the 5.
-  Kept: two real bugs found on the way - the widget's classifier answer is now written to the garment the room was opened for
-  (in a look it overwrote the added shirt: "it measured the shorts twice"), and an answer that arrives while you are still on
-  the size screen is held and applied (it was dropped, and the room went live with the gallery's second photo - on PEAK a
-  three-quarter FRONT photo - as the back). Credits: 5 real sessions in all today (~50-100 by the room's 10/session model, if the
-  pre-reveal seconds are billed too; the balance itself is not visible to me).
-
-## Hebrew/English i18n
+- **2026-10-10/11 the full look - shirt + shorts together (CLAUDE.md §2.42):** first attempt measured and replaced (the shorts
+  never rendered from the black-barred panels, and the big image made the back late). Second attempt: an outfit-shaped reference
+  (shirt above shorts, each cut to its garment, 70-80 KB), the shorts' band fixed on the server (it was the white tee), the card
+  shows front and back of both garments, "Store item" instead of "Custom upload". Plus two bugs fixed on the way (the shorts'
+  answer written onto the shirt; an answer on the size screen dropped). One real session to measure it.
 - **Stage:** done (core).
 - **Done:** language toggle + English strings `a7de91c`, `310b174`; geo-IP language
   lock fix + `fitting-room/i18n.js` module `4ecda99`; cart popover i18n `82de850`.

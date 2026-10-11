@@ -361,12 +361,12 @@
                       (bounded, a task of its own, ?pose_follow=0), wired in POSE_SYNC's place, and
                       at the room's cadence on the recorded 360s: the same readings, the outbound
                       BACK on the same reading but sooner, the return unmoved.
-     garment-verdict
-                      The widget's classifier verdict reaches the right garment (2026-10-10/11): it is
-                      written to the room's OWN garment, never to one added since (a full look went live
-                      as the shorts twice), and one that lands on the size screen is held and replayed
-                      when the garment exists (it was dropped - the gallery's second photo went live as
-                      the back).
+     full-look
+                      "Make both work well at the same time" (2026-10-10): the shirt and the shorts
+                      together. AI Auto stitches the look per side (both fronts / both backs, built
+                      ahead), the top is cut to its garment band (the bottom shown whole - its band
+                      measured wrong), and the room remembers the garments a shopper tried (verified
+                      galleries, per store) so "Complete the Look" can offer the other one.
      garment-box
                       "It just added the guy who models the shirt, with his back to the camera"
                       (FOX PEAK, 2026-10-08): the store's model is painted out of the REAR
@@ -546,7 +546,7 @@ const SUITES = [
   ["garment-box", "garment-box.test.mjs"],
   ["head-frame", "head-frame.test.mjs"],
   ["pose-follow", "pose-follow.test.mjs"],
-  ["garment-verdict", "garment-verdict.test.mjs"],
+  ["full-look", "full-look.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────
