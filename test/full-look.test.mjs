@@ -104,6 +104,10 @@ console.log("\n── §3 applyLook stitches in AI Auto ──");
     (() => { const c = look.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, ""); return c.indexOf("lookHalfFor(top, lookAngle)") < c.indexOf("await "); })());
   check("§3.2 the stitch is no longer skipped for AI Auto - only a missing half skips it",
     /const canStitchLook = !!\(topImg && bottomImg\);/.test(look) && !/currentAngle !== AUTO_ANGLE/.test(look.replace(/\/\*[\s\S]*?\*\//g, "")));
+  /* THE LOOK'S NO-OP (2026-10-11): every re-anchor re-uploaded the composite - no reveal in session mv3hkkb2 (17 uploads). */
+  check("§3.2b an unchanged look (the same side's composite + the same prompt) sends nothing, before the wire is taken",
+    /if \(primaryImage === lastSentImageRef && prompt === lastSentPrompt\) \{[^}]*return;\s*\n\s*\}/.test(look) &&
+    look.indexOf("primaryImage === lastSentImageRef") < look.indexOf('sendCondition("applyLook"'));
   const add = between(APP, "function addToLook(piece) {", "\n}\n");
   check("§3.3 a completed look builds both composites at once", /if \(outfitComplete\(\)\) \{\s*\n\s*prewarmLookComposites\(\);/.test(add));
 }

@@ -1381,6 +1381,12 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
 - **THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2726ee2)** and **THE EARLY VERDICT (24d9abf)** - two listener bugs found on the
   way (the shorts' verdict written onto the shirt just added: "it measured the shorts twice"; a verdict on the size screen
   dropped, the gallery's second photo going live as the back).
+- **THE LOOK'S NO-OP (the one real session of the outfit shape, record `mv3hkkb2`: connected, never revealed):** `applyLook()` had no
+  "unchanged" skip, so the re-anchor (every REANCHOR_MS) re-uploaded the whole composite - 8 and 5 uploads before the 19.4s / 12.7s
+  reveals of the first attempt, the back swap queued behind them; with the outfit's ~350ms acks the wire was never quiet long
+  enough for the reveal gate (17 uploads, torn down). Same side + same prompt now sends nothing. Verified through the source
+  room's mock engine with the visual fixture's person as the camera: revealed 3.2s after connect, no upload while square to the
+  lens, the back composite at 50 degrees, the front at 297.
 - `full-look` (47), `garment-box` §7. The look prompt is unchanged (`trace:prompt` identical). **The outfit shape is measured by
   one real session - its result is recorded below when it is in.**
 

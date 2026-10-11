@@ -13412,6 +13412,18 @@ async function applyLook(top, bottom) {
   /* A look has MORE ways to arrive with a bad reference than a single garment (a stitch
      Blob, a top reference, a bare garmentImageRef of either half) - all land on this line. */
   if (typeof assertUsableImageRef === "function") assertUsableImageRef(primaryImage, "applyLook");
+  /* ── THE LOOK'S NO-OP (2026-10-11) - "the image never came" ───────────────────────────────────────────────────────────────
+     applyGarment() skips a write whose reference AND prompt are both already on the wire; this did not - and the re-anchor
+     calls applyActive() every REANCHOR_MS, so every re-anchor RE-UPLOADED the look's whole composite (330-850ms each). The
+     full-look TEST records: 8 and 5 uploads before a reveal at 19.4s and 12.7s (mv3f87ox, mv3frez7), the back swap queued
+     behind them ("swap-pend"); and with the small outfit composite (~350ms acks, mv3hkkb2) the wire was never quiet long enough
+     for the reveal gate - 17 uploads, no reveal, the session torn down. The composite is one cached Blob per side
+     (stitchLookBlob), so the same side + the same prompt is the same reference: nothing to send. The cold-start re-assert and
+     a swap clear lastSentImageRef first, so they still send. */
+  if (primaryImage === lastSentImageRef && prompt === lastSentPrompt) {
+    console.log("[PEAR] look no-op skipped - the composite and the prompt are both already on the wire");
+    return;
+  }
   const images = [topImg, bottomImg].filter(Boolean).map(garmentImageRef).filter(Boolean);
 
   // ONE combined payload - both garments, one pass, same session.

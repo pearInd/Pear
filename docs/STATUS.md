@@ -341,7 +341,11 @@ _Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo m
   never rendered from the black-barred panels, and the big image made the back late). Second attempt: an outfit-shaped reference
   (shirt above shorts, each cut to its garment, 70-80 KB), the shorts' band fixed on the server (it was the white tee), the card
   shows front and back of both garments, "Store item" instead of "Custom upload". Plus two bugs fixed on the way (the shorts'
-  answer written onto the shirt; an answer on the size screen dropped). One real session to measure it.
+  answer written onto the shirt; an answer on the size screen dropped). The one real session (record mv3hkkb2) connected and
+  never showed the image: the full look re-uploaded its whole reference on every re-anchor (~every 0.75s), so the reveal gate
+  never saw a quiet wire - a bug the look path always had (it slowed the earlier look sessions' reveal to 13-19s and queued the
+  back swap). Fixed (an unchanged look sends nothing) and verified through the room's mock engine: reveal 3.2s, the back at 50
+  degrees, the front back at 297. 6 real sessions today in all. **Not yet seen through the real engine.**
 - **Stage:** done (core).
 - **Done:** language toggle + English strings `a7de91c`, `310b174`; geo-IP language
   lock fix + `fitting-room/i18n.js` module `4ecda99`; cart popover i18n `82de850`.
