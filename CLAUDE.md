@@ -36,6 +36,9 @@ lookAnchorPrompt() →  full-look path only (both slots filled)
 
 `COMPOSITE_DEFAULT = false`.
 
+**TEST sessions only (§2.45):** the room asks with `strict: true`, and `imageOnlyPrompt()` adds `KEEP_OPPOSITE_LAYER`
+(bottoms) or `STRICT_REFERENCE_LOCK` (a top's front). A shopper's wire is the diagram above, byte for byte.
+
 ### These are currently DEAD CODE relative to the wire
 
 `getFabricModifier()` · `getAnatomicalAnchor()` · `QUALITY_SUFFIX` ·
@@ -1479,6 +1482,28 @@ behaviour changed.
   tap quicker than the sink plays the whole bubble. Keyframe easing per segment - one easing over the whole run had raced
   through the sink in ~40ms. Sampled: hover 1 -> 1.025 in ~320ms; quick tap 0.955 x 0.925 at ~200ms, out to 1.02 x 1.04, rest
   by ~740ms; a tapped button reads identical before and after (no sticky hover).
+
+### 2.45 The chain on the shirt, the mark over the shorts - two restores, TEST sessions only (2026-10-11)
+Reported with a clip (PEAK tee, then basketball shorts): "it put a necklace or something on the shirt, and it goes away from
+the front too fast - change it very very slightly so it works perfectly; the same for the shorts". Layer A, so RULE 0 first:
+`trace:prompt` showed neither the shirt's front nor the shorts carried a clause against ADDED detail - the tops anchor says
+"Strictly preserve ... texture, pattern, and color", which does not forbid a chain; the bottoms branch had no pin on the upper
+body at all. Two documented retirements, one per branch, through the restore path (`imageOnlyPrompt()`, "TWO RESTORES, ONE PER
+BRANCH"):
+- **bottoms, every angle: `KEEP_OPPOSITE_LAYER` at P.HIGH** ("Keep the subject's upper body and background unmodified.") - the
+  tops anchor's own lower-body sentence, mirrored. Shorts front 404 -> 461 chars, back 479 -> 536.
+- **tops, the front only: `STRICT_REFERENCE_LOCK` at P.LOW** ("Exactly match color, pattern, logos, and cut. Do NOT invent, add,
+  or alter any details.") - names no object (the summoning rule) and no neckline or worn garment (the two wordings §2.38
+  records as failed). P.LOW sheds first, so it never evicts the closure lock or the fit sentence. PEAK front 491 -> 579.
+- **Only in a TEST session until measured:** the room's `wirePrompt()` adds `strict: true` when `traceEnabled()` (store key TEST
+  or `?pear_trace=1`); `sanitizePromptRequest()` passes it only when exactly `true`; `promptForRequest()` holds it for one answer
+  and clears it in `finally`. Every shopper request, `trace:prompt --json` and `prompt-engine` §1's pin are byte-identical to
+  the approved wire (the audit's only change: `KEEP_OPPOSITE_LAYER` reads live). `prompt-engine` §8 pins the gate; the three
+  structural pins (`color-lock`, `garment-category-prompt`, `conditioning-trace`) read a shopper's resolver - the `strict &&`
+  lines aside.
+- **The fingerprint moved** (`lib/api-version.js`): until a Worker deploy, the room takes /prompt and /size from the origin
+  (`/api/*`, ~350ms from Israel, prefetched before go-live) - the edge answers with the old engine and is refused by design.
+- **To ship to shoppers:** drop the `strict &&` from the line that measured well (one at a time), re-pin, `wrangler deploy`.
 
 ## 3. Cross-file lockstep
 

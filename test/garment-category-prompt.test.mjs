@@ -388,7 +388,7 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      permitted between entries (each clause carries its rationale inline), hence [\s\S]*?
      rather than \s* - the ORDER and the PRIORITIES are pinned, not the whitespace. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\[P\.CORE, identityLockSentence\(item, angle\)\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\[P\.CORE, identityLockSentence\(item, angle\)\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*(?:\.\.\.\(strict && bottoms \? \[\[P\.HIGH, KEEP_OPPOSITE_LAYER\]\] : \[\]\),\s*)?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n\s*(?:\.\.\.\(strict && !bottoms && angle !== "back" \? \[\[P\.LOW, STRICT_REFERENCE_LOCK\]\] : \[\]\),\s*\n\s*)?\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
      Whichever of the three the construction/category/angle axes select, it rides at

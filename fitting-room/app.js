@@ -12573,6 +12573,9 @@ function wirePrompt(item, angle, where, opts = {}) {
     angle: angle === "back" ? "back" : "front",
     inProfile: opts.inProfile === true,
     delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0,
+    /* a TEST session asks for the two measured-first restores (lib/prompts.js "TWO RESTORES, ONE PER BRANCH"); a shopper
+       asks for exactly what it asked for before. typeof: suites run this without the flight recorder. */
+    ...(typeof traceEnabled === "function" && traceEnabled() ? { strict: true } : {}),
   }, where);
 }
 

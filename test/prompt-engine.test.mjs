@@ -182,5 +182,28 @@ console.log("\n── §7 FRONT_CLEAR is gone - it kept the shopper's own shirt 
     !/clearFront/.test(APP) && !/clearFront/.test(LIB_SRC));
 }
 
+console.log("\n── §8 the two restores reach TEST sessions only (2026-10-11) ──");
+{
+  /* "It put a necklace or something on the shirt ... the same for the shorts." KEEP_OPPOSITE_LAYER on bottoms (every angle)
+     and STRICT_REFERENCE_LOCK on a top's front, asked for with `strict: true` - which the room sends only when the store
+     key is TEST. A shopper's request is byte-identical to before (§1's pin still holds over the same corpus). */
+  const P = await import("../lib/prompts.js");
+  const top = { name: "חולצה עם הדפס", type: "shirt", garmentType: "upper_body", __bottoms: false };
+  const bot = { name: "מכנסי כדורסל", type: "pants", garmentType: "lower_body", __bottoms: true };
+  const say = (item, angle, strict) => P.promptForRequest(P.sanitizePromptRequest({ kind: "single", item, angle, delta: 0, ...(strict ? { strict: true } : {}) }));
+  const INVENT = /Do NOT invent, add, or alter any details\./, UPPER = /Keep the subject's upper body and background unmodified\./;
+  check("§8.1 a shopper's prompts carry neither restore", !INVENT.test(say(top, "front")) && !UPPER.test(say(bot, "front")) && !UPPER.test(say(bot, "back")));
+  check("§8.2 a TEST top's front carries the invent lock, its back does not",
+    INVENT.test(say(top, "front", true)) && !INVENT.test(say(top, "back", true)) && !UPPER.test(say(top, "front", true)));
+  check("§8.3 TEST bottoms carry the upper-body pin on both sides, and no invent lock",
+    UPPER.test(say(bot, "front", true)) && UPPER.test(say(bot, "back", true)) && !INVENT.test(say(bot, "front", true)));
+  check("§8.4 the sanitiser passes strict only when it is exactly true", P.sanitizePromptRequest({ strict: "yes" }).strict === undefined &&
+    P.sanitizePromptRequest({ strict: true }).strict === true && !("strict" in P.sanitizePromptRequest({})));
+  check("§8.5 the request state is cleared after each answer (a TEST answer never leaks into the next shopper's)",
+    (say(top, "front", true), !INVENT.test(say(top, "front"))));
+  check("§8.6 the room asks for it only in a TEST session (traceEnabled)",
+    /\.\.\.\(typeof traceEnabled === "function" && traceEnabled\(\) \? \{ strict: true \} : \{\}\),/.test(APP));
+}
+
 console.log(fails === 0 ? "\nPrompt engine: OK" : `\nPrompt engine: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

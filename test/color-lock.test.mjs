@@ -234,8 +234,11 @@ console.log("\n── §4 IT RIDES AT P.CORE - PROMOTED, AND THAT REVERSES AN EA
     /\[P\.MED, fitSentence\(/.test(resolver) &&
     resolver.indexOf("P.CORE, identityLockSentence") < resolver.indexOf("P.MED, fitSentence"),
     "fitPrompt() breaks priority ties by array position, so the order is part of the guarantee");
-  check("...and nothing was left at P.LOW or P.TRIM on this branch",
-    !/\[P\.LOW,/.test(resolver) && !/\[P\.TRIM,/.test(resolver),
+  /* (2026-10-11) the TEST-session restores (lib/prompts.js "TWO RESTORES, ONE PER BRANCH") ride behind `strict &&` - a
+     shopper's resolver is pinned without them, exactly as before. */
+  const shopperResolver = resolver.replace(/\.\.\.\(strict && [^\n]*\),/g, "");
+  check("...and nothing was left at P.LOW or P.TRIM on this branch (a shopper's - the TEST-only restores aside)",
+    !/\[P\.LOW,/.test(shopperResolver) && !/\[P\.TRIM,/.test(shopperResolver),
     "a leftover lower tier would mean the promotion was partial");
 }
 

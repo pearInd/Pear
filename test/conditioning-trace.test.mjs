@@ -229,9 +229,11 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
     /identityLockSentence\(item, angle\)/.test(resolverCode) &&
     /angle !== "back"/.test(APP.slice(APP.indexOf("function identityLockSentence"))),
     "the back branch must withhold the print half - see identityLockSentence");
-  check("the one bought-back clause rides at P.HIGH, so it sheds before the anchor does",
-    (resolverCode.match(/P\.HIGH/g) || []).length === 1 &&
-    /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverCode), resolverCode);
+  /* (2026-10-11) the TEST-session restores ride behind `strict &&`; a shopper's resolver still carries exactly one P.HIGH. */
+  const shopperResolverCode = resolverCode.replace(/\.\.\.\(strict && [^\n]*\),/g, "");
+  check("the one bought-back clause rides at P.HIGH, so it sheds before the anchor does (a shopper's - the TEST-only restores aside)",
+    (shopperResolverCode.match(/P\.HIGH/g) || []).length === 1 &&
+    /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(shopperResolverCode), resolverCode);
   /* NOW SCOPED THREE WAYS, not two. The closure lock was shipping on plain tees, where
      "buttons / zip / placket" were the only construction words on the wire and the model
      rendered a garment that had them - see PLAIN_TEE_ANCHOR and plain-tee-fidelity.test.mjs.
