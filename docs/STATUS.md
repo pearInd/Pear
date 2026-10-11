@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): Liquid Glass design pass (one material, bubble press, liquid thumbs, SF font, no emojis); a UI pass at every device size; the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor - verified through the engine (s9: both garments, the back print on the back view, reveal 5.6s); s6/s7 lost to the measurement rig's camera, fixed; not on main_
+_Last updated: 2026-10-11 · SHIPPED TO MAIN (ff3ae2d, app.pear-ai.io) with the orientation Worker redeployed (version 2204800d - it now carries the head-out-of-frame engine of 2026-10-08, which the earlier Worker deploy did not); everything below is live: Liquid Glass design pass (one material, bubble press, liquid thumbs, SF font, no emojis); a UI pass at every device size; the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor - verified through the engine (s9: both garments, the back print on the back view, reveal 5.6s); s6/s7 lost to the measurement rig's camera, fixed; not on main_
 
 ## At a glance
 
