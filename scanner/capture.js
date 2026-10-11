@@ -26,6 +26,7 @@
 import { pathToFileURL } from "node:url";
 import { discoverSizeCharts, buildRecords, saveSizeChartRecords, formatReport, canonicalStoreHost } from "./size-charts.js";
 import { loadScannerEnv, parseCliArgs, formatChartSummary, askYesNo, reasonLine, saveAndVerify } from "./capture-cli.js";
+import { canonicalProductUrl } from "./browser-capture.js";
 
 const MAX_IMAGES = 4;
 const IMAGE_DELAY_MS = 5000;   // Gemini free tier is 15 req/min
@@ -62,7 +63,19 @@ export async function runCapture(storeUrl, {
   log(`── 1/3 static capture: ${storeUrl}`);
   const st = await discover(storeUrl, { maxProducts, log, JSDOM: JSDOMCtor });
   log(formatReport(st.report));
-  const found = st.found.slice();
+  /* ONE PRODUCT, ONE PAGE, IN EVERY STAGE (review, 2026-10-11). buildRecords counts the pages a
+     chart was seen on (2+ = the store's chart), so every stage must name a page the same way.
+     The browser opens a product under canonicalProductUrl's spelling (/products/linen-tee); the
+     static sample can carry another (/products/linen-tee?variant=2, /collections/all/products/
+     linen-tee - the home-page href fallback), and image pages were merged by string: ONE
+     product's chart image, seen by both stages, was "seen on 2 pages" and saved store-wide
+     (product_key '', 2 sightings) - F0's symptom through the image path. Every page identity
+     this run handles goes through pageId() here, once, before anything is merged or counted:
+     the findings' productUrl, the static image pages, the merged image pages. Phase 1
+     (scan-store.js --size-charts) does not run this, so its records are unchanged. */
+  const pageId = (u) => (u ? canonicalProductUrl(u) : "");
+  const onePage = (f) => (f.productUrl ? { ...f, productUrl: pageId(f.productUrl) } : f);
+  const found = st.found.map(onePage);
 
   let browser = null;
   /* REFUSED also covers a store that answered some pages and then said no: the static
@@ -96,7 +109,7 @@ export async function runCapture(storeUrl, {
         triggers_clicked: 0, tabs_clicked: 0, unmeasured_guides: 0, unmeasured_examples: [], network_payloads: 0,
         blocked: { count: 0, examples: [] }, errors: [msg], methods: {} } };
     }
-    found.push(...browser.found);
+    found.push(...browser.found.map(onePage));
   } else if (staticRefused) {
     log(`\n── 2/3 browser fallback: not run - the store refused the static capture${st.report.polite_stop ? " (it began refusing mid-run)" : everyProductRefused ? " (every sampled product page)" : ""}${forceBrowser ? " (--browser ignored)" : ""}; ` +
       "a refusal is reported as BLOCKED, never retried with a browser");
@@ -125,7 +138,7 @@ export async function runCapture(storeUrl, {
      without `imagePages` keeps the old store-wide "". `static` keeps the read's context as
      before: the image URL's own words for a static hit, the referrer text for a browser one. */
   const staticImg = (url) => {
-    const pg = st.imagePages ? (st.imagePages[url] || []).filter((p, i, a) => a.indexOf(p) === i) : [];
+    const pg = st.imagePages ? (st.imagePages[url] || []).map(pageId).filter((p, i, a) => a.indexOf(p) === i) : [];
     const productUrl = pg.length === 1 && pg[0] ? pg[0] : "";
     return { url, productUrl, pages: [productUrl], static: true };
   };
@@ -136,6 +149,10 @@ export async function runCapture(storeUrl, {
      - A refusal of the BROWSER counts too (two refusals in a row, or refused guide
        requests): only the static stage's was checked, so a store that had just answered the
        browser 403 was asked for its static image hits - and the browser's - anyway.
+     - A refused GUIDE request counts whatever the browser kept (report.guide_refused, review
+       2026-10-11): only status "blocked" was read, and the browser stays "ok" once it kept a
+       chart - a one-PDP chart, product-scoped, so nothingYet held - and the store's own
+       images were fetched right after it had refused the guide.
      - The store's site is its REGISTRABLE domain, not the hostname typed: a store given as
        shop.example.co.il kept fetching from www./cdn./bare example.co.il after refusing us.
        Two labels, three under a two-level country suffix (co.il, co.uk, com.au...) - an
@@ -147,7 +164,7 @@ export async function runCapture(storeUrl, {
   const onStoreHost = (u) => {
     try { return siteOf(canonicalStoreHost(new URL(u).hostname)) === siteOf(host); } catch { return false; }
   };
-  const browserRefused = !!browser && browser.report.status === "blocked";
+  const browserRefused = !!browser && (browser.report.status === "blocked" || !!browser.report.guide_refused);
   const refused = staticRefused || browserRefused;
   const staticImages = refused ? st.images.filter((u) => !onStoreHost(u)) : st.images;
   const browserImages = !browser ? [] : refused ? browser.images.filter((i) => !onStoreHost(i.url)) : browser.images;
@@ -161,9 +178,9 @@ export async function runCapture(storeUrl, {
     ...browserImages,
     ...(nothingYet || forceImages ? staticImages.map(staticImg) : []),
   ]) {
-    const pages = img.pages && img.pages.length ? img.pages : [img.productUrl || ""];
+    const pages = (img.pages && img.pages.length ? img.pages : [img.productUrl || ""]).map(pageId).filter((p, i, a) => a.indexOf(p) === i);
     const prev = imageUrls.find((x) => x.url === img.url);
-    if (!prev) imageUrls.push({ ...img, pages: pages.slice() });
+    if (!prev) imageUrls.push({ ...img, productUrl: pageId(img.productUrl), pages });
     else for (const p of pages) if (!prev.pages.includes(p)) prev.pages.push(p);
   }
   /* WHY AN IMAGE WAS NOT READ is a reason of its own (below). With no GEMINI_API_KEY every
@@ -216,7 +233,10 @@ export async function runCapture(storeUrl, {
   let reason = null;
   if (!records.length) {
     const staticBlocked = staticRefused;
-    const browserBlocked = browser && browser.report.status === "blocked";
+    /* A refused guide request is the browser refusing us here too (browserRefused): with
+       nothing KEPT it is BLOCKED - an older browser stage judged "nothing read" on raw readings
+       and left an untyped table's run 'ok', read as "JS GUIDE NOT OPENED". */
+    const browserBlocked = browserRefused;
     const jsSignals = st.report.paths.js_app_detected.triggers_without_link || st.report.paths.js_app_detected.apps.length;
     const browserUnavailable = browser && browser.report.status === "browser_unavailable";
     const imageCount = `${imageUrls.length} image(s)`;
@@ -224,9 +244,10 @@ export async function runCapture(storeUrl, {
        the static refusal. The other order told the owner of a store that had just answered
        403 to "install Chromium" - and the --url manual path that line offers goes through the
        same plain fetch the store refused.
-       A refused BROWSER is BLOCKED whenever the static stage KEPT no record. It tested the
-       static stage's raw findings: a lone untyped "Suits" table (never stored) made a store
-       that had just refused the browser read "JS GUIDE NOT OPENED".
+       A refused BROWSER (its status, or a refused guide request) is BLOCKED whenever the
+       static stage KEPT no record. It tested the static stage's raw findings: a lone untyped
+       "Suits" table (never stored) made a store that had just refused the browser read "JS
+       GUIDE NOT OPENED".
        The browser's other dead ends say what happened, not "JS GUIDE NOT OPENED": its
        navigations got no HTTP answer (UNREACHABLE, quoting the error), or it found no product
        page to open (nothing was looked at - point it at a page with --url). An image found

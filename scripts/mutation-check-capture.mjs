@@ -7,7 +7,7 @@
    that is supposed to guard it, and expects it to go RED. A mutation that stays green
    is a rule nobody is actually checking.
 
-       node scripts/mutation-check-capture.mjs                (exit 1 unless every mutation is KILLED)
+       node scripts/mutation-check-capture.mjs                (exit 1 if any is SURVIVED, INVALID or ERROR)
        node scripts/mutation-check-capture.mjs --jobs 1       (one scratch copy; default: cores - 1, at most 3)
        node scripts/mutation-check-capture.mjs --only dry-run (only mutations whose name matches)
        node scripts/mutation-check-capture.mjs --list         (print the mutations, run nothing)
@@ -23,9 +23,9 @@
    reported "KILLED" and the run said "all N mutations killed", exit 0. A no-op mutation
    was shown KILLED against a red suite. Now:
      - BASELINE FIRST. Every suite is run once on the UNMUTATED scratch copy; a suite that
-       is missing, red (any FAIL line or a non-zero exit), times out or prints no PASS line
-       aborts the whole run (exit 2) before any mutation - a red suite cannot tell a
-       mutation from its own failure.
+       is red (any FAIL line or a non-zero exit), times out or prints no PASS line aborts
+       the whole run (exit 2) before any mutation - a red suite cannot tell a mutation from
+       its own failure. A suite file that does not exist is caught with the anchors (exit 1).
      - KILLED only when the mutated run exits non-zero AND printed at least one assertion
        FAIL line (the suites' `FAIL  <label>` contract). The first failing check is shown.
      - INVALID (exit 1, never a kill): a timeout or a signal, a non-zero exit with no FAIL
@@ -36,7 +36,10 @@
        mutates - fix the anchor, never skip it.
      - SURVIVED (exit 1): the suite stayed green - the rule is not tested.
      - SKIPPED: only a mutation marked "@chromium" whose suite SKIPPED its real-Chromium
-       section (no browser on this machine) and stayed green - never counted as killed.
+       section and stayed green, and only when that suite's BASELINE skipped it too (no
+       browser on this machine). A skip the baseline did not have - Chromium launched for
+       the baseline but not under the parallel jobs - is INVALID (review D7, 2026-10-11).
+       SKIPPED does not fail the run: it is listed, and never counted as killed.
    Suites run with a timeout of 3x their baseline time (at least 240s).
    ============================================================================= */
 import { cpSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
@@ -126,8 +129,10 @@ const MUTATIONS = [
     "|| (browserBlocked && !st.records.length)", "|| (browserBlocked && !st.found.length)", "capture-flow"],
   ["with no GEMINI_API_KEY every image is still sent to the reader", "scanner/capture.js",
     "    const keyless = !apiKey && imageUrls.some((i) => !isPdf(i.url));", "    const keyless = false;", "capture-flow"],
+  ["a lazy-loaded chart image is read as its URL placeholder (blank.gif, an LQIP thumbnail)", "scanner/size-charts.js",
+    "    const src = lazySrc || ownSrc;", "    const src = (ownSrc && !/^data:/i.test(ownSrc) ? ownSrc : lazySrc) || ownSrc;", "scanner-size-charts"],
   ["a lazy-loaded chart image is read as its data: placeholder", "scanner/size-charts.js",
-    "    const src = (ownSrc && !/^data:/i.test(ownSrc) ? ownSrc : lazySrc) || ownSrc;", "    const src = ownSrc || lazySrc;", "scanner-size-charts"],
+    "    const src = lazySrc || ownSrc;", "    const src = ownSrc || lazySrc;", "scanner-size-charts"],
   ["bounded() still starts in-page calls on a page known to be stuck", "scanner/browser-capture.js",
     "    if (stuck) return Promise.reject(new Error(stuck));   // the same page: nothing new is started on it\n", "", "browser-capture"],
   ["any 403 on the store's host is the guide refused, not only inside the guide's window", "scanner/browser-capture.js",
@@ -300,6 +305,9 @@ try {
         if (r.status !== 0) return { m, k: "INVALID ", d: `exit ${r.status} with no FAIL line (a crash before any check): ${errLine(r.stderr || r.stdout).slice(0, 160)}` };
         if (fails.length) return { m, k: "INVALID ", d: `${fails.length} FAIL line(s) but exit 0 - the suite's exit contract is broken` };
         if (needs === "chromium" && /^SKIP\s+§5 Chromium unavailable/m.test(r.stdout)) {
+          if (!chromiumSkipped.has(suite)) {
+            return { m, k: "INVALID ", d: `Chromium ran for the baseline but not for this run - re-check with --jobs 1 --only "${m[0]}"` };
+          }
           return { m, k: "SKIPPED ", d: "needs Chromium: npx playwright install chromium" };
         }
         return { m, k: "SURVIVED", d: "the suite stayed green - this rule is not tested" };

@@ -203,15 +203,23 @@ export async function transcribeChartImage(src, { apiKey, fetchImpl = fetch } = 
   }
 }
 
-/* The path of an image URL, decoded - the words pageContextText() reads off a URL
-   ("/files/size-chart-women-tops.png"). "" for anything that is not an http(s) URL (a
-   data: URL's "path" is the image itself, in base64). */
+/* An image URL's words, EXACTLY as the static stage reads them: capture.js hands a static
+   hit its own URL as `context` (this file's <title>), and pageContextText() adds the decoded
+   path - "<url> | <decoded path>", the same join. "" for anything that is not an http(s) URL
+   (a data: URL's "path" is the image itself, in base64).
+   THE BUG THIS CLOSES (review r5, 2026-10-11). The first cut returned the decoded PATH alone,
+   so a chart named in its QUERY - Next.js serves every <img> as /_next/image?url=%2Fimages%2F
+   size-chart-women-tops.png&w=1080, a CDN asset as chart.png?name=women-tops - was women/tops
+   (0.85) found statically and unknown/tops off its columns (0.5) found in a guide modal: the
+   path is "/_next/image". Built from the same two pieces the static stage reads, the two
+   readings of one URL cannot disagree - a query, a host, an encoded word alike. */
 function imageUrlWords(u) {
   try {
     const url = new URL(String(u || ""));
     if (!/^https?:$/.test(url.protocol)) return "";
-    const p = url.pathname;
-    try { return decodeURIComponent(p); } catch { return p; }
+    let p;
+    try { p = decodeURIComponent(url.pathname); } catch { p = String(u); }   // pageContextText()'s own fallback
+    return `${String(u)} | ${p}`;
   } catch { return ""; }
 }
 
@@ -241,7 +249,8 @@ export async function chartsFromImage(src, { apiKey, fetchImpl = fetch, JSDOM, s
      what the room serves a man when the store has no gendered chart (§2.5b). The filename
      is the chart's own label, not the product page's, so it keeps the tier the static path
      gives it; the referrer still fills only what it leaves open. Derived here from the
-     image's URL, so no caller has to pass it. */
+     image's URL, so no caller has to pass it - the whole URL, query included, exactly as the
+     static stage reads it (imageUrlWords). */
   if (referrerText != null) {
     const ref = referrerAudience([referrerText]);
     const own = imageUrlWords(src.url || pageUrl);

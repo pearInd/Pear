@@ -3,7 +3,8 @@
    §1 WHEN THE BROWSER RUNS: static found nothing / triggers with no link / a JS size
       app -> yes; static captured cleanly -> no; --browser / --no-browser win.
    §2 ONE LIST, ONE buildRecords: static, browser and image findings merge into the same
-      records (same keys, same validation); a chart the parser refused never appears.
+      records (same keys, same validation); a chart the parser refused never appears; every
+      stage names a product page the same way (one product under two spellings is one page).
    §3 NOTHING FOUND -> ONE REASON + THE MANUAL COMMAND: blocked / image unreadable / JS
       guide not opened / no guide / unreachable.
    §4 THE HUMAN END: summary text, y/n never auto-saves off a TTY, the live read-back.
@@ -11,7 +12,8 @@
    §6 A BROWSER STAGE THAT THROWS is browser_unavailable - the static charts survive.
    §7 THE COMMAND LINE: `--flag=value` is `--flag value`; a yes/no flag takes no value.
    §8 THE CLI ITSELF (main): --dry-run never saves, not even with --yes; a save the
-      database skipped is a non-zero exit.
+      database skipped is a non-zero exit; a run that captured nothing still exits 0, and the
+      comment above saveAndVerify says so.
    ============================================================================= */
 import { JSDOM } from "jsdom";
 import { runCapture, browserFallbackReason, main as captureMain } from "../scanner/capture.js";
@@ -128,6 +130,21 @@ console.log("\n── §1 when the browser runs ──");
   await runWith(sub, { store: "https://shop.example.co.il", opts: { imageReader: async (src) => { subAsked.push(src.url); return { found: [], outcome: "not_a_chart", detail: "x" }; } } });
   check("§1.16 ...the store's parent domain and sibling subdomains are the store too (co.il); a lookalike domain is not",
     JSON.stringify(subAsked) === JSON.stringify(["https://cdn.example-cdn.co.il/c.png"]), JSON.stringify(subAsked));
+  /* F1/D1 (review, 2026-10-11): a refused GUIDE request is the store refusing us even when the
+     browser kept a chart (status stays 'ok' then - something was captured): only status
+     'blocked' was read, so the store's own images - static and the browser's - were fetched
+     right after it had refused the guide. browser-capture reports it as guide_refused. */
+  const grAsked = [];
+  const PA = "https://shop.example.com/products/a";
+  const guideRefused = { found: finding("Men", "browser_page", PA),
+    images: [{ url: "https://www.shop.example.com/files/guide.png", productUrl: PA, pages: [PA] }],
+    report: { status: "ok", guide_refused: true, pages_opened: 1, triggers_clicked: 1, tabs_clicked: 0, network_payloads: 0, methods: {},
+      blocked: { count: 1, examples: ["https://shop.example.com/ajax/Product-SizeChart (guide request: HTTP 403)"] }, errors: [] } };
+  const afterGr = await runWith(staticResult({ images: ["https://www.shop.example.com/cdn/size-chart.jpg", "https://cdn.example.net/files/size-chart.png"] }),
+    { browser: guideRefused, opts: { imageReader: async (src) => { grAsked.push(src.url); return { found: [], outcome: "not_a_chart", detail: "x" }; } } });
+  check("§1.17 a refused guide request with a product-scoped chart kept (browser status 'ok', guide_refused) -> no image on the store's own host is fetched; the CDN one is",
+    JSON.stringify(grAsked) === JSON.stringify(["https://cdn.example.net/files/size-chart.png"]) && afterGr.records.length === 1 && afterGr.records[0].product_key === PA,
+    JSON.stringify([grAsked, afterGr.records.map((r) => r.product_key)]));
 }
 
 console.log("\n── §2 one list, one buildRecords ──");
@@ -229,6 +246,26 @@ console.log("\n── §2 one list, one buildRecords ──");
   check("§2.19 only a product-scoped chart captured -> the store-wide static image guide is still read and kept store-wide",
     psAsked.length === 1 && ps.records.some((r) => r.source === "image_ocr" && r.product_key === "") && ps.records.some((r) => r.product_key === PA),
     JSON.stringify([psAsked, ps.records.map((r) => [r.source, r.product_key])]));
+
+  /* B2 (review, 2026-10-11): every stage names a page the same way. The browser opens a product
+     under its canonical spelling (/products/a), the static sample may carry another (?variant=2,
+     /collections/x/products/a - the home-page href fallback): merged by string, ONE product's
+     image chart was "seen on 2 pages" and saved as the store's (product_key ''). */
+  const IMG = "https://shop.example.com/files/size-chart.png";
+  const spelled = await runWith(staticResult({ images: [IMG], imagePages: { [IMG]: [PA + "?variant=2"] }, triggers: 1 }),
+    { browser: brImg({ url: IMG, productUrl: PA, pages: [PA], context: "Size guide" }), image: kids });
+  /* ...and a table: the static sample itself held both spellings (the home-page href fallback). */
+  const collPrefix = await runWith(staticResult({ found: [...finding("Men", "inline_table", "https://shop.example.com/collections/all/products/a"), ...finding("Men", "inline_table", PA)] }),
+    { opts: { noBrowser: true } });
+  check("§2.20 one product under two spellings (static ?variant=2 / the browser's canonical URL) is ONE page: its image chart stays product-scoped, 1 sighting (was: store-wide, 2); a /collections/ prefix too",
+    spelled.calls.images === 1 && spelled.records.length === 1 && spelled.records[0].product_key === PA && spelled.records[0].sightings === 1 &&
+    collPrefix.records.length === 1 && collPrefix.records[0].product_key === PA,
+    JSON.stringify({ spelled: spelled.records.map((r) => [r.product_key, r.sightings]), coll: collPrefix.records.map((r) => [r.product_key, r.sightings]) }));
+  const ids = ["https://shop.example.com/products/detail.php?product_id=1", "https://shop.example.com/products/detail.php?product_id=2"];
+  const twoIds = await runWith(staticResult({ images: [IMG], imagePages: { [IMG]: ids } }), { opts: { noBrowser: true }, image: kids });
+  check("§2.21 ...while two products a query names (detail.php?product_id=1 / =2) stay two pages - store-wide",
+    twoIds.records.length === 1 && twoIds.records[0].product_key === "",
+    JSON.stringify(twoIds.records.map((r) => [r.product_key, r.sightings])));
 }
 
 console.log("\n── §3 nothing found -> one reason + the manual command ──");
@@ -276,6 +313,14 @@ console.log("\n── §3 nothing found -> one reason + the manual command ─�
     { browser: brRep("blocked", { blocked: { count: 2, examples: ["https://shop.example.com/products/a (HTTP 403)"] } }) });
   check("§3.11 static kept nothing (an untyped Suits table) + the browser refused -> BLOCKED, not js_unreadable",
     suitsBlocked.reason.kind === "blocked" && /HTTP 403/.test(suitsBlocked.reason.extra), JSON.stringify(suitsBlocked.reason));
+  /* B3/F1/D1 (review, 2026-10-11): the browser read only an untyped table (never stored) and its
+     guide request was refused - its own status judged "nothing read" on raw readings and said
+     'ok', and the run said "JS GUIDE NOT OPENED ... open it yourself". Nothing KEPT + a refused
+     guide request is BLOCKED here too, whatever status an older browser stage reported. */
+  const grU = await runWith(staticResult({ triggers: 1 }), { browser: { ...brRep("ok", { guide_refused: true, pages_opened: 1, triggers_clicked: 1,
+    blocked: { count: 1, examples: ["https://shop.example.com/ajax/sizechart (guide request: HTTP 403)"] } }), found: finding("Suits", "browser_page", "https://shop.example.com/products/suit") } });
+  check("§3.18 the browser kept nothing (an untyped Suits table) and its guide request was refused (status 'ok', guide_refused) -> BLOCKED, not js_unreadable",
+    grU.records.length === 0 && grU.reason.kind === "blocked" && /guide request: HTTP 403/.test(grU.reason.extra), JSON.stringify(grU.reason));
   const brUnr = await runWith(staticResult(), { browser: brRep("unreachable", { errors: ["https://shop.example.com/products/a: net::ERR_NAME_NOT_RESOLVED"] }) });
   check("§3.12 the browser's navigations got no HTTP answer -> UNREACHABLE quoting its first error",
     brUnr.reason.kind === "unreachable" && /ERR_NAME_NOT_RESOLVED/.test(brUnr.reason.extra) &&
@@ -483,6 +528,26 @@ console.log("\n── §8 the CLI itself ──");
   check("§8.2 ...the same run without --dry-run saves (the control: the stub can see a save)", wet.saves === 1 && wet.exits.length === 0, JSON.stringify([wet.saves, wet.exits]));
   const skipped = await drive(["--yes"], { saved: 0, skipped: "table_missing" });
   check("§8.3 a save the database skipped -> exit code 1", skipped.exits.join() === "1", JSON.stringify(skipped.exits));
+  /* F3 (review, 2026-10-11): saveAndVerify's comment cited `capture ... --yes && echo captured`
+     as closed by the skipped-save exit code - but a run that captures NOTHING (BLOCKED, NO SIZE
+     GUIDE FOUND) returns before any save and exits 0, so that line still says captured. The
+     exit code is unchanged (owner); the comment must say what it does not cover. */
+  let nothingSaves = 0;
+  const nothingExits = [];
+  const origLog = console.log;
+  console.log = () => {};
+  try {
+    await captureMain(["node", "capture.js", "https://www.shop.example.com", "--yes"], {
+      loadEnv: () => {}, env: { SUPABASE_URL: "http://127.0.0.1:9", SUPABASE_SERVICE_ROLE_KEY: "dummy" },
+      capture: async () => ({ ...capOut, records: [], reason: { kind: "blocked", extra: "HTTP 403" } }),
+      save: async () => { nothingSaves++; }, setExitCode: (c) => nothingExits.push(c),
+    });
+  } finally { console.log = origLog; }
+  const cliSrc = (await import("node:fs")).readFileSync(new URL("../scanner/capture-cli.js", import.meta.url), "utf8");
+  const saveDoc = cliSrc.slice(cliSrc.lastIndexOf("/*", cliSrc.indexOf("export async function saveAndVerify")), cliSrc.indexOf("export async function saveAndVerify"));
+  check("§8.4 a run that captured nothing exits 0 with no save (unchanged) - and saveAndVerify's comment says so instead of promising `&& echo` only fires on a save",
+    nothingSaves === 0 && nothingExits.length === 0 && /captured nothing/.test(saveDoc) && /\bexits? 0\b/.test(saveDoc),
+    JSON.stringify({ nothingSaves, nothingExits, comment: saveDoc.slice(0, 400) }));
 }
 
 console.log("");

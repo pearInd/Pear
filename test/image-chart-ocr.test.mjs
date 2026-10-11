@@ -15,7 +15,8 @@
       label), and a GIF - not a Gemini input type - is refused before any model call. A
       file is judged by its bytes, not its extension (a Windows .jfif save is a JPEG); a
       name we accept with the wrong bytes is "not a raster image", never "unsupported";
-      the 8 MB cap holds for a file of any extension.
+      the 8 MB cap holds for a file of any extension, checked on its size BEFORE it is read
+      (the read is watched: an oversized file is never opened).
    §5 ONLY AN HTTP(S) URL IS DOWNLOADED: a data: image - most often a lazy-load placeholder -
       (or file:/blob:) is refused with no request, never reported as a GIF to convert, and
       the detail gives the --image way round an inline chart.
@@ -226,12 +227,36 @@ console.log("\n── §4 the bytes decide the mime type; a GIF never reaches th
     !hp.ok && hp.error === "image unreadable: not a raster image (.png file: bytes that are not png/jpeg/webp)" && fhp.calls.length === 0, hp.error);
   /* The cap is checked on the file's size before it is read: a video or an archive passed
      to --image by mistake is refused by its size, never loaded whole. (A sparse 9 MB file -
-     no 9 MB written to disk.) */
+     no 9 MB written to disk.)
+     THE READ IS WATCHED, not inferred (review r5, 2026-10-11). The first cut of this check
+     asserted only the error text, and the post-read length check words it identically - so
+     with the size-before-read check deleted (or moved below the read) every oversized file
+     was loaded whole again and this stayed green. Every public way node:fs reads a file is
+     wrapped for the call (module.syncBuiltinESMExports() carries the wrapper into
+     image-charts.js's own `import { readFile } from "node:fs/promises"` binding), and a read
+     of the big file fails the check. A small file read through the same wrappers must be
+     SEEN (§4.12b), so a watcher that sees nothing cannot pass it. */
   const big = join(dir, "turn.mp4"); writeFileSync(big, ""); truncateSync(big, 9 * 1024 * 1024);
+  const watchReads = async (fn) => {
+    const fs = (await import("node:fs")).default, fsp = (await import("node:fs/promises")).default;
+    const { syncBuiltinESMExports } = await import("node:module");
+    const seen = [], saved = [];
+    for (const [obj, name] of [[fsp, "readFile"], [fsp, "open"], [fs, "readFile"], [fs, "readFileSync"],
+      [fs, "createReadStream"], [fs, "open"], [fs, "openSync"]]) {
+      const orig = obj[name];
+      saved.push([obj, name, orig]);
+      obj[name] = function (p, ...rest) { seen.push(String(p)); return orig.call(this, p, ...rest); };
+    }
+    syncBuiltinESMExports();
+    try { return { out: await fn(), seen }; } finally { for (const [obj, name, orig] of saved) obj[name] = orig; syncBuiltinESMExports(); }
+  };
   const fbg = fakeFetch({ gemini: ok });
-  const bg = await transcribeChartImage({ file: big }, { apiKey: KEY, fetchImpl: fbg });
-  check("§4.12 a file over 8 MB (any extension) -> 'image larger than 8 MB', no request",
-    !bg.ok && bg.error === "image unreadable: image larger than 8 MB" && fbg.calls.length === 0, bg.error);
+  const { out: bg, seen: bgSeen } = await watchReads(() => transcribeChartImage({ file: big }, { apiKey: KEY, fetchImpl: fbg }));
+  check("§4.12 a file over 8 MB (any extension) -> 'image larger than 8 MB', no request, and the file is NEVER READ (refused by its size)",
+    !bg.ok && bg.error === "image unreadable: image larger than 8 MB" && fbg.calls.length === 0 && !bgSeen.includes(big),
+    JSON.stringify({ error: bg.error, readsOfBigFile: bgSeen.filter((p) => p === big).length }));
+  const { seen: smallSeen } = await watchReads(() => transcribeChartImage({ file: jpgFile }, { apiKey: KEY, fetchImpl: fakeFetch({ gemini: ok }) }));
+  check("§4.12b ...control: the watcher does see a file that IS read (the small .jpg)", smallSeen.includes(jpgFile), JSON.stringify(smallSeen));
 }
 
 console.log("\n── §5 only an http(s) URL is downloaded ──");
@@ -295,6 +320,24 @@ console.log("\n── §6 the image's own URL words label it, whichever stage fo
     cls(refType) && cls(refType).gender === "women" && cls(refType).garmentType === "tops" && cls(refType).typeFrom === "columns", JSON.stringify(cls(refType)));
   const rows = (r) => JSON.stringify(r.found.map((x) => x.chart.rows));
   check("§6.6 labels only - the rows are identical on both stages", rows(st) === rows(br) && rows(st) === rows(ref), rows(br));
+  /* The chart's words are not always in the path. Next.js serves every <img> as
+     /_next/image?url=%2Fimages%2Fsize-chart-women-tops.png&w=1080&q=75 - the src the static
+     scan reads and the currentSrc the browser collects - and a CDN asset can carry its name
+     in the query. The static stage reads the whole URL (its <title>); the browser branch read
+     the decoded PATH alone ("/_next/image"): women/tops 0.85 statically, unknown/tops 0.5 in
+     the guide modal - and capture.js keeps the browser's reading first. */
+  for (const [label, u, want] of [
+    ["a Next.js /_next/image?url=... chart", "https://shop.example.com/_next/image?url=%2Fimages%2Fsize-chart-women-tops.png&w=1080&q=75", ["women", "tops"]],
+    ["a CDN asset named in its query", "https://cdn.shopify.com/s/files/1/0001/files/chart.png?v=1&name=women-tops", ["women", "tops"]],
+    ["a percent-encoded Hebrew query (נשים)", "https://cdn.store.example/chart.png?alt=%D7%A0%D7%A9%D7%99%D7%9D", null],
+    ["a path in Hebrew (גברים)", "https://cdn.store.example/files/%D7%92%D7%91%D7%A8%D7%99%D7%9D-chart.png", null],
+  ]) {
+    const s = await read(u, { context: u, referrerText: null });
+    const b = await read(u, { context: "", referrerText: "Basic tee | Size guide" });
+    check(`§6.7 ${label}: the browser stage labels it exactly as the static stage${want ? ` (${want.join(" / ")})` : ""}`,
+      cls(s) && JSON.stringify(cls(b)) === JSON.stringify(cls(s)) && (!want || (cls(s).gender === want[0] && cls(s).garmentType === want[1])),
+      `${JSON.stringify(cls(b))} vs ${JSON.stringify(cls(s))}`);
+  }
 }
 
 console.log("");

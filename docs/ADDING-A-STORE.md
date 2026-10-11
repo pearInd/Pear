@@ -101,8 +101,10 @@ one of:
 If the table is missing or still has the v15 key, the run says which file to run once in
 the Supabase SQL editor (`archive/supabase_setup_v15.sql` or `archive/supabase_setup_v16.sql`),
 then run the same command again to save. A save skipped that way, or with
-`SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` unset, exits with code 1, so
-`npm run capture -- <url> --yes && echo saved` only says saved when something was.
+`SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` unset, exits with code 1: a save that was
+asked for and did not happen is never exit 0. A run that found nothing to save is not a
+failure: it prints its reason line (step 3) and exits 0, so read that line rather than
+the exit code to know whether anything was captured.
 
 ## 3. When nothing is found: the reason line tells you what to do
 
@@ -160,8 +162,11 @@ npm run import:chart -- --host example.co.il --image chart.png --gender women --
   client-side (save the page with it open, or screenshot it) or its table was refused for
   its values (not a body-measurement chart).
 - `--dry-run` previews; `--yes` saves without asking. Saving, the live check and the
-  skipped-save exit code are as in step 2; a source it cannot use (`BLOCKED`, a file it
-  cannot read) or a bad `--host` / label / `--only` value exits 2.
+  skipped-save exit code are as in step 2. A source it cannot use exits 2: `BLOCKED`, a
+  file that is missing or unreadable, an image type it does not take (GIF, over 8 MB),
+  no `GEMINI_API_KEY` for an image, a PDF, or an image read that failed (including a
+  Gemini error). So does a bad `--host` / label / `--only` value. `Nothing importable.`
+  (the source was read, no table passed) exits 0.
 - Manual charts are always store-wide.
 
 ## 4. What is never saved

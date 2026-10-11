@@ -8,7 +8,8 @@
       parser. A guide saved OPEN over a product page is typed by the guide, not the page -
       a real dialog always; a class-only popup unless the page's own <h1> names the guide.
       A saved page keeps the address it was saved from (§1.8), and a "Webpage, Single File"
-      (.mhtml) save is decoded - quoted-printable, base64, its charset - or refused (§1.9).
+      (.mhtml) save is decoded - quoted-printable, base64, in the charset its part header or
+      (a Blink save) its own serialized <meta> names - or refused (§1.9).
    §2 OVERRIDES LABEL, THEY NEVER VALIDATE. --gender/--age/--type replace the labels of
       the charts --only picked (and are checked against the table's enums); they cannot
       turn a price table or an implausible chart into a record. Every table the parser
@@ -16,13 +17,16 @@
       in a note); --only picks by it before the flags label; a collision is named.
    §3 INPUT ERRORS are errors (no host, a --host that is not a hostname, two sources, an
       unknown enum, a bad --only, an image URL with no --host), not guesses; a refusal
-      (403/429, a challenge page) is BLOCKED with the manual way in, asked once.
+      (403/429, a challenge page) is BLOCKED with the manual way in, asked once. A source it
+      cannot use - a missing or unreadable --image, GIF bytes, over 8 MB, no GEMINI_API_KEY, a
+      --url answering a PDF - exits 2 with its message; a source that was read where no table
+      passed is "Nothing importable.", exit 0 (§3.11-§3.13).
    §4 --DRY-RUN NEVER SAVES, even with --yes.
    ============================================================================= */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 import { importChart, validateOverrides, applyOverrides, parseOnly, PDF_NOTE } from "../scanner/import-chart.js";
@@ -203,6 +207,36 @@ console.log("\n── §1.7 a guide saved OPEN over a product page ──");
   const pd = await importChart({ host: "shop.example.com", htmlFile: pdFile, JSDOM });
   check("§1.7.11 ...the same class-only popup open on a PRODUCT page is still the guide: women's tops, not jeans",
     pd.records.length === 1 && pd.records[0].garment_type === "tops" && pd.records[0].gender === "women", JSON.stringify(pd.records.map((r) => [r.gender, r.garment_type])));
+  /* The guide's OWN title is not the page's <h1>. Bootstrap 5.3's documented modal puts its
+     title, an <h1 class="modal-title">, in .modal-header and the table in .modal-body, and
+     adds role/aria-modal only when it opens - so --url and a save with the guide closed hold
+     the class-only markup. The table's NEAREST boundary match is .modal-body; the "page <h1>
+     names a size guide" rule tested the modal's title against that inner box, read "Size
+     Guide" as the page's own heading, dropped the boundary, and the product's title typed
+     the chest+waist chart as women's JEANS at 0.9 (0.85 with the product title a <div>).
+     A class-only popup with its title in a header beside the body did the same in Hebrew. */
+  const BS5 = (prod) => `<html><head><title>Women's Slim Jeans | Shop</title></head><body>
+    <main>${prod}<button data-bs-toggle="modal" data-bs-target="#sg">Size guide</button></main>
+    <div class="modal fade" id="sg" tabindex="-1" aria-labelledby="sgLabel" aria-hidden="true"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h1 class="modal-title fs-5" id="sgLabel">Size Guide</h1><button type="button" class="btn-close"></button></div>
+    <div class="modal-body">${UNLABELLED}</div></div></div></div></body></html>`;
+  const HE_POPUP = `<html><head><title>מכנסי ג'ינס סלים - נשים</title></head><body><main><h1>מכנסי ג'ינס סלים - נשים</h1></main>
+    <div class="size-chart-popup"><div class="popup-header"><h1>טבלת מידות</h1></div><div class="popup-body">${TABLE_HE}</div></div></body></html>`;
+  for (const [label, html] of [
+    ["a closed Bootstrap 5.3 modal (its title an <h1> in .modal-header), the product title an <h1>", BS5("<h1>Women's Slim Jeans</h1>")],
+    ["...the product title a <div>", BS5("<div class=\"product-title\">Women's Slim Jeans</div>")],
+    ["a Hebrew .size-chart-popup, its <h1> in .popup-header beside .popup-body", HE_POPUP],
+  ]) {
+    const f = join(dir, `guide-title-${label.length}.html`); writeFileSync(f, html);
+    const r = await importChart({ host: "shop.example.com", htmlFile: f, JSDOM });
+    const ru = await importChart({ url: "https://shop.example.com/products/womens-slim-jeans", fetchText: async (x) => ({ ok: true, status: 200, url: x, contentType: "text/html", text: html }), JSDOM });
+    const br = chartsFromHtml(html, "https://shop.example.com/products/womens-slim-jeans", JSDOM, { source: "browser_modal" })[0].chart.classification;
+    const lab = (o) => JSON.stringify(o.records.map((x) => [x.gender, x.garment_type, x.confidence]));
+    check(`§1.7.12 ${label}: the guide's own title is not the page's <h1> - women's tops (--html and --url), as the browser path reads it`,
+      r.records.length === 1 && r.records[0].garment_type === "tops" && r.records[0].gender === "women" && lab(r) === lab(ru) &&
+      br.garmentType === "tops" && br.gender === "women",
+      JSON.stringify({ html: lab(r), url: lab(ru), browser: [br.gender, br.garmentType] }));
+  }
 }
 
 console.log("\n── §1.8 a saved page keeps the address it was saved from ──");
@@ -318,6 +352,87 @@ console.log("\n── §1.9 a \"Webpage, Single File\" (.mhtml) save ──");
   const notMime = join(dir, "renamed.mhtml"); writeFileSync(notMime, FOUR);
   const nm = await importChart({ host: "shop.example.com", htmlFile: notMime, JSDOM });
   check("§1.9.8 a plain HTML file that only carries an .mhtml name is read as HTML", sig(nm) === sig(want), sig(nm));
+
+  /* A NON-UTF-8 PAGE. Blink's part header is just "Content-Type: text/html" (no charset), the
+     multipart header names none either, and the bytes stay in the document's own encoding -
+     the charset is only in the <meta http-equiv="Content-Type"> Blink serializes as <head>'s
+     first child, with document.characterSet, even when the page declared it in its HTTP
+     header alone. Decoded as UTF-8 regardless, a windows-1255 page's Hebrew became U+FFFD:
+     Hebrew column headers found no table at all, a Hebrew heading lost its gender.
+     REAL_1255 is a real Blink save, verbatim (Chromium Page.captureSnapshot of a windows-1255
+     page whose charset came only from its HTTP header). */
+  const REAL_1255 = [
+    "From: <Saved by Blink>",
+    "Snapshot-Content-Location: https://shop.example.com/pages/size-guide-header-only",
+    "Subject: =?utf-8?Q?=D7=9E=D7=93=D7=A8=D7=99=D7=9A=20=D7=9E=D7=99=D7=93=D7=95=D7=AA?=",
+    "Date: Sun, 11 Oct 2026 16:36:59 +0000",
+    "MIME-Version: 1.0",
+    "Content-Type: multipart/related;",
+    "\ttype=\"text/html\";",
+    "\tboundary=\"----MultipartBoundary--IscNw7Ca4Bup6Ci3zat0eVf1nZvFpsX0Nf8xUE8MQY----\"",
+    "", "",
+    "------MultipartBoundary--IscNw7Ca4Bup6Ci3zat0eVf1nZvFpsX0Nf8xUE8MQY----",
+    "Content-Type: text/html",
+    "Content-ID: <frame-44398EA30606175B29629C6E432B59CB@mhtml.blink>",
+    "Content-Transfer-Encoding: quoted-printable",
+    "Content-Location: https://shop.example.com/pages/size-guide-header-only",
+    "",
+    "<!DOCTYPE html><html><head><meta http-equiv=3D\"Content-Type\" content=3D\"tex=",
+    "t/html; charset=3Dwindows-1255\"><title>=EE=E3=F8=E9=EA =EE=E9=E3=E5=FA</tit=",
+    "le></head><body><h2>=E2=E1=F8=E9=ED - =E7=E5=EC=F6=E5=FA</h2><table><tbody>=",
+    "<tr><th>=EE=E9=E3=E4</th><th>=E7=E6=E4</th><th>=EE=E5=FA=F0=E9=E9=ED</th></=",
+    "tr><tr><td>S</td><td>88=9694</td><td>74=9680</td></tr><tr><td>M</td><td>95=",
+    "=96101</td><td>81=9687</td></tr><tr><td>L</td><td>102=96108</td><td>88=9694=",
+    "</td></tr><tr><td>XL</td><td>109=96115</td><td>95=96101</td></tr></tbody></=",
+    "table></body></html>",
+    "------MultipartBoundary--IscNw7Ca4Bup6Ci3zat0eVf1nZvFpsX0Nf8xUE8MQY------",
+    "",
+  ].join("\r\n");
+  const HE_PAGE = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>מדריך מידות</title></head><body><h2>גברים - חולצות</h2><table><tbody>` +
+    `<tr><th>מידה</th><th>חזה</th><th>מותניים</th></tr><tr><td>S</td><td>88–94</td><td>74–80</td></tr><tr><td>M</td><td>95–101</td><td>81–87</td></tr>` +
+    `<tr><td>L</td><td>102–108</td><td>88–94</td></tr><tr><td>XL</td><td>109–115</td><td>95–101</td></tr></tbody></table></body></html>`;
+  const heF = join(dir, "he-utf8.html"); writeFileSync(heF, HE_PAGE);
+  const heWant = await importChart({ host: "shop.example.com", htmlFile: heF, JSDOM });
+  check("§1.9.9 control: the same Hebrew page as UTF-8 is one men's tops chart, S-XL, chest+waist",
+    heWant.records.length === 1 && heWant.records[0].gender === "men" && heWant.records[0].garment_type === "tops" && heWant.records[0].rows.length === 4, sig(heWant));
+  const realF = join(dir, "real-1255.mhtml"); writeFileSync(realF, REAL_1255, "latin1");
+  const real = await importChart({ host: "shop.example.com", htmlFile: realF, JSDOM });
+  check("§1.9.10 a REAL Blink save of a windows-1255 page (charset only in the serialized <meta>): read exactly as the UTF-8 page - men's tops, four rows",
+    sig(real) === sig(heWant), JSON.stringify({ recs: sig(real), notes: real.notes }));
+
+  /* Built the same way by hand, to vary what declares the charset. To windows-1255 bytes: */
+  const to1255 = (s) => Buffer.from([...s].map((ch) => { const c = ch.codePointAt(0); return c < 128 ? c : c >= 0x5d0 && c <= 0x5ea ? 0xe0 + c - 0x5d0 : ch === "–" ? 0x96 : 0x3f; }));
+  const qpBytes = (buf) => {
+    let out = "", line = "";
+    for (const b of buf) {
+      const tok = (b >= 33 && b <= 126 && b !== 61) || b === 32 ? String.fromCharCode(b) : "=" + b.toString(16).toUpperCase().padStart(2, "0");
+      if (line.length + tok.length > 75) { out += line + "=\r\n"; line = ""; }
+      line += tok;
+    }
+    return out + line;
+  };
+  const EN_HEAD = HE_PAGE.replace("<th>מידה</th><th>חזה</th><th>מותניים</th>", "<th>Size</th><th>Chest</th><th>Waist</th>");
+  const enWant = await importChart({ host: "shop.example.com", htmlFile: (() => { const f = join(dir, "en-utf8.html"); writeFileSync(f, EN_HEAD); return f; })(), JSDOM });
+  for (const [label, page, opts, wantSig] of [
+    ["English headers under a Hebrew heading, <meta http-equiv> windows-1255", EN_HEAD.replace('<meta charset="utf-8">', '<meta http-equiv="Content-Type" content="text/html; charset=windows-1255">'), {}, sig(enWant)],
+    ["<meta charset=windows-1255> (unquoted)", HE_PAGE.replace('<meta charset="utf-8">', "<meta charset=windows-1255>"), {}, sig(heWant)],
+    ["a part header naming the charset (an IE/Word .mht), no <meta>", HE_PAGE.replace('<meta charset="utf-8">', ""), { type: 'text/html; charset="windows-1255"' }, sig(heWant)],
+    ["iso-8859-8 in the <meta> (it has no en dash: plain hyphens)", HE_PAGE.replace('<meta charset="utf-8">', '<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-8">').replace(/–/g, "-"), {}, sig(heWant)],
+  ]) {
+    const f = join(dir, `cs-${label.length}.mhtml`); writeFileSync(f, mhtml(qpBytes(to1255(page)), opts));
+    const r = await importChart({ host: "shop.example.com", htmlFile: f, JSDOM });
+    check(`§1.9.11 ${label}: decoded in that charset, read as the UTF-8 page`, sig(r) === wantSig, JSON.stringify({ got: sig(r), want: wantSig, notes: r.notes }));
+  }
+  /* ...and what names no usable charset falls back to UTF-8 - a <meta> label no decoder
+     knows is skipped (the HTML sniffing rule), never a refusal of a page that reads fine. */
+  for (const [label, page] of [
+    ["no charset anywhere (UTF-8 bytes)", HE_PAGE.replace('<meta charset="utf-8">', "")],
+    ["a <meta> charset no decoder knows (UTF-8 bytes)", HE_PAGE.replace('<meta charset="utf-8">', '<meta charset="x-klingon">')],
+  ]) {
+    const f = join(dir, `fb-${label.length}.mhtml`); writeFileSync(f, mhtml(qp(page)));
+    const r = await importChart({ host: "shop.example.com", htmlFile: f, JSDOM });
+    check(`§1.9.12 ${label}: read as UTF-8`, sig(r) === sig(heWant), JSON.stringify({ got: sig(r), notes: r.notes }));
+  }
 }
 
 console.log("\n── §2 overrides label, they never validate ──");
@@ -542,6 +657,65 @@ console.log("\n── §3 input errors are errors ──");
     sh.status === 0 && /Nothing importable\./.test(sh.stdout) && !/add --gender\/--age\/--type/.test(sh.stdout) &&
     /save the page with the guide open and use --html/.test(sh.stdout) && /screenshot the table and use --image/.test(sh.stdout),
     JSON.stringify({ status: sh.status, stdout: sh.stdout.slice(0, 600) }));
+
+  /* A SOURCE IT CANNOT USE EXITS 2, whatever the source kind. --html already did (readFile
+     throws), but the image reader hands its failures back as a note: a missing --image file,
+     GIF bytes, a file over 8 MB, no GEMINI_API_KEY - and a --url that answered a PDF - printed
+     the note, then "Nothing importable." and exited 0, which a wrapper reads as success. Each
+     prints its own message and exits 2; nothing is summarised. "Nothing importable." (exit 0,
+     §3.11) stays for a source that WAS read where no table passed. GEMINI_API_KEY is a dummy
+     (every one of these fails before any request) or set EMPTY, which dotenv never fills. */
+  const gifPng = join(dir, "really-gif.png"); writeFileSync(gifPng, Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 1, 0]));
+  const bigPng = join(dir, "huge.png"); writeFileSync(bigPng, ""); truncateSync(bigPng, 9 * 1024 * 1024);
+  const pngFile = join(dir, "chart.png"); writeFileSync(pngFile, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  for (const [label, file, key, want] of [
+    ["a missing --image file", join(dir, "does-not-exist.png"), "dummy-not-a-key", /image unreadable: ENOENT/],
+    ["GIF bytes saved as .png", gifPng, "dummy-not-a-key", /GIF charts are not readable/],
+    ["an --image file over 8 MB", bigPng, "dummy-not-a-key", /image larger than 8 MB/],
+    ["no GEMINI_API_KEY for an image", pngFile, "", /GEMINI_API_KEY is not set/],
+  ]) {
+    const r = spawnSync(process.execPath, [cli, "--dry-run", "--host", "shop.example.com", "--image", file], { encoding: "utf8", timeout: 60000, env: { ...noDb, GEMINI_API_KEY: key } });
+    check(`§3.12 CLI: ${label} -> its message, exit 2 (never "Nothing importable.", exit 0)`,
+      r.status === 2 && want.test(r.stderr) && !/Nothing importable/.test(r.stdout) && !/chart\(s\) to import/.test(r.stdout),
+      JSON.stringify({ status: r.status, stderr: r.stderr.slice(0, 300), stdout: r.stdout.slice(0, 300) }));
+  }
+  /* --url, against a local server (the CLI's own fetch): a PDF, and an image that is not one. */
+  const { createServer } = await import("node:http");
+  const srv = createServer((req, res) => {
+    if (req.url.startsWith("/guide.pdf")) { res.writeHead(200, { "content-type": "application/pdf" }); return res.end("%PDF-1.4\n"); }
+    res.writeHead(200, { "content-type": "image/png" }); res.end("<html>403 Forbidden</html>");
+  });
+  await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const runAsync = (args, env) => new Promise((ok) => {
+    const p = spawn(process.execPath, [cli, ...args], { env });
+    let stdout = "", stderr = "";
+    p.stdout.on("data", (d) => { stdout += d; }); p.stderr.on("data", (d) => { stderr += d; });
+    const t = setTimeout(() => p.kill(), 60000);
+    p.on("close", (status) => { clearTimeout(t); ok({ status, stdout, stderr }); });
+  });
+  const urlEnv = { ...noDb, GEMINI_API_KEY: "dummy-not-a-key", NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost" };
+  for (const [label, path, want] of [
+    ["a --url that answers a PDF", "/guide.pdf", new RegExp(PDF_NOTE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))],
+    ["a --url image whose bytes are not an image", "/chart.png", /not a raster image/],
+  ]) {
+    const r = await runAsync(["--dry-run", "--host", "shop.example.com", "--url", base + path], urlEnv);
+    check(`§3.12 CLI: ${label} -> its message, exit 2`,
+      r.status === 2 && want.test(r.stderr) && !/Nothing importable/.test(r.stdout),
+      JSON.stringify({ status: r.status, stderr: r.stderr.slice(0, 300), stdout: r.stdout.slice(0, 300) }));
+  }
+  srv.close();
+  /* The library says which: `unusable` names a source that could not be used, and is null
+     for one that was read - Gemini answering "not a size chart", or every table refused. */
+  const reader = (outcome, detail) => async () => ({ outcome, detail, found: [] });
+  const err = await importChart({ host: "shop.example.com", imageFile: "x.png", imageReader: reader("error", "image unreadable: ENOENT"), JSDOM });
+  const notChart = await importChart({ host: "shop.example.com", imageFile: "x.png", imageReader: reader("not_a_chart", "Gemini: not a size chart"), JSDOM });
+  const rejected = await importChart({ host: "shop.example.com", imageFile: "x.png", imageReader: reader("rejected", "the shared parser accepted none"), JSDOM });
+  const pdf = await importChart({ url: "https://shop.example.com/g.pdf", fetchText: async (u) => ({ ok: true, status: 200, url: u, contentType: "application/pdf", text: "" }), JSDOM });
+  check("§3.13 importChart: `unusable` is the image error's note and the PDF note; null for an image read as not a chart or refused",
+    err.unusable === "image: error - image unreadable: ENOENT" && pdf.unusable === PDF_NOTE && notChart.unusable === null && rejected.unusable === null &&
+    err.notes.includes(err.unusable) && pdf.notes.includes(PDF_NOTE),
+    JSON.stringify({ err: err.unusable, pdf: pdf.unusable, notChart: notChart.unusable, rejected: rejected.unusable }));
 }
 
 console.log("\n── §4 --dry-run never saves ──");

@@ -88,6 +88,47 @@ export function applyOverrides(cls, ov) {
   return next;
 }
 
+/* WHICH CHARSET A SAVED PAGE'S HTML PART IS IN. Blink names it in neither MIME header: the
+   multipart header has none, the part's is just "Content-Type: text/html", and the bytes stay
+   in the document's own encoding. It is in the HTML: Blink drops the page's own charset
+   <meta>s and serializes <meta http-equiv="Content-Type" content="text/html; charset=X"> as
+   <head>'s first child, X being document.characterSet - also when the page declared its
+   charset in its HTTP header alone (checked on real Page.captureSnapshot output, 2026-10-11).
+   THE BUG THIS CLOSES (review r5): the part header was the only place read, so every Blink
+   save decoded as UTF-8 and a windows-1255 page's Hebrew became U+FFFD - Hebrew column
+   headers (חזה/מותניים) found no table at all ("Nothing importable"), a Hebrew heading
+   ("גברים - חולצות") lost its gender (unknown at 0.5 instead of men at 0.9).
+   The order is the HTML encoding-sniffing algorithm's: a byte-order mark; then the charset
+   the transport declares - here the part header (IE/Word .mht files write one); then the
+   first <meta charset> / <meta http-equiv=Content-Type> in the first 1024 bytes, comments
+   skipped; else UTF-8. A <meta> label no decoder knows is skipped as the algorithm skips it
+   (a page that reads fine as UTF-8 is never refused for it); UTF-16 named by a <meta> means
+   UTF-8 (the algorithm's own rule - an ASCII-compatible prescan cannot have found it in
+   UTF-16). An unknown label in the part header is still refused by the caller. */
+function mhtmlCharset(bytes, declared) {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
+  if (declared) return declared;
+  const head = bytes.subarray(0, 1024).toString("latin1").replace(/<!--[\s\S]*?(?:-->|$)/g, "");
+  for (const [, inner] of head.matchAll(/<meta(\s[^>]*)>/gi)) {
+    const attrs = {};
+    for (const [, name, dq, sq, bare] of inner.matchAll(/([^\s=\/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
+      const key = name.toLowerCase();
+      if (!(key in attrs)) attrs[key] = dq ?? sq ?? bare ?? "";
+    }
+    let label = attrs.charset;
+    if (label == null && /^\s*content-type\s*$/i.test(attrs["http-equiv"] || "")) {
+      label = (/charset\s*=\s*["']?([^"';\s]+)/i.exec(attrs.content || "") || [])[1];
+    }
+    if (!label) continue;
+    let enc;
+    try { enc = new TextDecoder(label.trim()).encoding; } catch { continue; }
+    return /^utf-16/.test(enc) ? "utf-8" : enc;
+  }
+  return "utf-8";
+}
+
 /* A "WEBPAGE, SINGLE FILE" SAVE. Chrome/Edge's Ctrl+S offers .mhtml and remembers the last
    type used, and every manual way in says "save it (Ctrl+S)". Blink writes a MIME message
    whose HTML part is quoted-printable: "=" is =3D, every non-ASCII byte =XX (Hebrew is
@@ -99,7 +140,7 @@ export function applyOverrides(cls, ov) {
    cannot decode is refused with the save that works - "Webpage, Complete", which serializes
    the page as shown, guide open; "HTML only" saves the page as first served, without it -
    never parsed raw. `raw` is the file as latin1 (one char per byte), so a part's bytes
-   survive to its own charset.
+   survive to its own charset - which mhtmlCharset() reads the way Blink writes it.
    @returns {{html:string, location:string}|null} null when the file is not MHTML. */
 const MHTML_RESAVE = 'save the page again as "Webpage, Complete" and use its .html ("HTML only" saves the page as first served, without the guide you opened)';
 export function decodeMhtml(raw, name = "the file") {
@@ -121,7 +162,7 @@ export function decodeMhtml(raw, name = "the file") {
     const hdr = part.slice(0, cut).replace(/\r?\n[ \t]+/g, " ");
     if (!/^Content-Type:\s*text\/html/im.test(hdr)) continue;   // the first HTML part is the page; later ones are its frames
     const cte = ((/^Content-Transfer-Encoding:\s*([^\s;]+)/im.exec(hdr) || [])[1] || "7bit").toLowerCase();
-    const charset = ((/charset="?([^";\s]+)"?/i.exec(hdr) || [])[1] || "utf-8").toLowerCase();
+    const declared = ((/^Content-Type:[^\r\n]*?;\s*charset\s*=\s*"?([^";\s]+)"?/im.exec(hdr) || [])[1] || "").toLowerCase();
     const body = part.slice(cut).replace(/^\r?\n\r?\n/, "").replace(/\r?\n$/, "");
     let bytes;
     if (cte === "quoted-printable") {
@@ -129,6 +170,7 @@ export function decodeMhtml(raw, name = "the file") {
     } else if (cte === "base64") bytes = Buffer.from(body.replace(/\s+/g, ""), "base64");
     else if (/^(?:7bit|8bit|binary)$/.test(cte)) bytes = Buffer.from(body, "latin1");
     else throw refuse(`its HTML is ${cte}-encoded`);
+    const charset = mhtmlCharset(bytes, declared);
     let html;
     try { html = new TextDecoder(charset).decode(bytes); } catch { throw refuse(`unknown charset "${charset}"`); }
     return { html, location: location || (/^Content-Location:\s*(\S+)/im.exec(hdr) || [])[1] || "" };
@@ -151,8 +193,9 @@ export function savedPageUrl(html, storeHost, location = "") {
 
 /**
  * Import one source for one host. Pure over its injectables (fetchText, imageReader).
- * @returns {Promise<{host:string, records:Array<object>, numbers:string[], total:number, report:object, notes:string[]}>}
- *   numbers[i] is records[i]'s chart number (THE NUMBERING); total is how many tables the source has.
+ * @returns {Promise<{host:string, records:Array<object>, numbers:string[], total:number, report:object, notes:string[], unusable:string|null}>}
+ *   numbers[i] is records[i]'s chart number (THE NUMBERING); total is how many tables the source has;
+ *   unusable is the note saying why the SOURCE could not be used (see A SOURCE IT CANNOT USE), else null.
  */
 export const NO_TABLE_NOTE = "no table the shared parser accepts was found in that source";
 export const PDF_NOTE = "PDF chart - not read automatically; screenshot it and use --image";   // capture.js's words
@@ -175,11 +218,21 @@ export async function importChart({ host, url = "", htmlFile = "", imageFile = "
   if (sources !== 1) throw new Error("give exactly one of --url, --html, --image");
   const ov = validateOverrides(overrides);
   const notes = [];
+  /* A SOURCE IT CANNOT USE. --html and --url failures throw (the CLI exits 2), but the image
+     reader hands every failure back as an outcome - a missing or unreadable --image file, GIF
+     bytes, a file over 8 MB, no GEMINI_API_KEY, an image URL that would not load, a Gemini
+     error - and a --url that answers a PDF is a note. The first cut listed those notes, said
+     "Nothing importable." and exited 0, so a script keyed on the documented exit 2 read a
+     failed import as a success. `unusable` carries that note to the CLI, which exits 2 with
+     it. It stays null for a source that WAS read where no table passed (Gemini: "not a size
+     chart", every table refused) - "Nothing importable.", exit 0, as before. */
+  let unusable = null;
   let found = [];
   const readImage = async (src, source, sourceUrl) => {
     const read = imageReader || (await import("./image-charts.js")).chartsFromImage;
     const res = await read(src, { apiKey, JSDOM: JSDOMCtor, source, sourceUrl, context: "" });
     notes.push(`image: ${res.outcome} - ${res.detail}`);
+    if (res.outcome === "error") unusable = notes[notes.length - 1];
     return res.found;
   };
   /* A GUIDE SAVED OPEN OVER A PRODUCT PAGE - what the JS_UNREADABLE reason tells the owner
@@ -207,15 +260,31 @@ export async function importChart({ host, url = "", htmlFile = "", imageFile = "
      matches (Debut's #PageContainer.drawer-page-content, Brooklyn's is-moved-by-drawer): the
      first cut took that for a dialog, and a men's jeans guide page saved on Debut lost its
      title and was stored as men's bottoms at 0.65 where "page-container" alone gave jeans at
-     0.85. */
+     0.85.
+     THE GUIDE'S OWN TITLE IS NOT THE PAGE'S <h1>. The <h1> test is made against the guide AS
+     A WHOLE - the table's OUTERMOST boundary match short of the page (<body>/<html>, <main>, a
+     wrapper holding <main>) - never against the nearest match alone. The first cut of the
+     rule used the nearest: Bootstrap 5.3's documented modal (.modal > .modal-dialog >
+     .modal-content > .modal-header h1.modal-title "Size Guide" + .modal-body table; role and
+     aria-modal are added only when it opens, so --url and a save with the guide closed hold
+     the class-only markup) has .modal-body as the nearest match, its own title sits outside
+     it, and that title was read as "the page's <h1> names a size guide": the boundary was
+     dropped and the product's title typed the chest+waist chart as women's JEANS at 0.9 (0.85
+     with the product title a <div>; a Hebrew .popup-header h1 "טבלת מידות" beside .popup-body
+     the same), where d2136b6 and the browser path read women's tops. */
   const readHtml = (html, pageUrl, source) => {
     const doc = new JSDOMCtor(html, { url: pageUrl }).window.document;
     const h1s = [...doc.querySelectorAll("h1")];
     const guide = [...doc.querySelectorAll('table,[role="table"]')].some((t) => {
       if (t.closest("[role=dialog],[aria-modal=true],dialog")) return true;
       const box = t.closest(GUIDE_BOUNDARY);
+      let whole = box;   // the guide as a whole: its outermost boundary match short of the page
+      for (let a = box && box.parentElement; a && a.tagName !== "BODY" && a.tagName !== "HTML" &&
+        !a.matches("main,[role=main]") && !a.querySelector("main,[role=main]"); a = a.parentElement) {
+        if (a.matches(GUIDE_BOUNDARY)) whole = a;
+      }
       return !!box && box.tagName !== "BODY" && box.tagName !== "HTML" &&
-        !h1s.some((h) => !box.contains(h) && SIZE_GUIDE_LINK_RE.test(h.textContent || "")) &&
+        !h1s.some((h) => !whole.contains(h) && SIZE_GUIDE_LINK_RE.test(h.textContent || "")) &&
         !box.matches("main,[role=main]") && !box.querySelector("main,[role=main]") &&
         !(h1s.length && h1s.every((h) => box.contains(h)));
     });
@@ -256,6 +325,7 @@ export async function importChart({ host, url = "", htmlFile = "", imageFile = "
     const ext = (re) => [url, r.url || ""].some((u) => re.test(u));
     if (/pdf/.test(ct) || ((!ct || octet) && ext(/\.pdf(?:$|[?#])/i))) {
       notes.push(PDF_NOTE);
+      unusable = PDF_NOTE;
     } else if (/^image\//.test(ct) || octet || (!ct && ext(/\.(?:png|jpe?g|webp|gif)(?:$|[?#])/i))) {
       /* No --host: the store key would be the IMAGE's host - usually a CDN
          (cdn.shopify.com), a key the room never asks for and the next store imported the
@@ -345,7 +415,7 @@ export async function importChart({ host, url = "", htmlFile = "", imageFile = "
     if (c.key && named.has(c.key)) continue;
     notes.push(c.reason + (c.source_url ? " - " + c.source_url : ""));
   }
-  return { host: storeHost, records, numbers, total, report, notes };
+  return { host: storeHost, records, numbers, total, report, notes, unusable };
 }
 
 /* ── CLI ─────────────────────────────────────────────────────────────────────── */
@@ -380,6 +450,7 @@ export async function main(argv, { persist = persistToSupabase } = {}) {
       overrides: { gender: label("--gender"), age_group: label("--age"), garment_type: label("--type") },
       only: flag("--only") ? parseOnly(val("--only")) : null,
     });
+    if (out.unusable) throw new Error(out.unusable);   // a source it cannot use exits 2 with its note (A SOURCE IT CANNOT USE)
   } catch (e) {
     console.error("✗ " + e.message);
     console.error("Usage: npm run import:chart -- --host <host> (--url <url> | --html <file> | --image <file>) [--gender ..] [--age ..] [--type ..] [--only 1,2] [--dry-run] [--yes]");
@@ -389,13 +460,14 @@ export async function main(argv, { persist = persistToSupabase } = {}) {
   console.log(formatChartSummary(out.records, out.numbers));
   for (const n of out.notes) console.log("  ! " + n);
   if (!out.records.length) {
-    /* A hint only where no note already says what went wrong (a PDF, an unreadable image, a
-       number --only does not have, an untyped table already named with its --type line).
+    /* A hint only where no note already says what went wrong (an image Gemini read as not a
+       chart, a number --only does not have, an untyped table already named with its --type
+       line; a PDF or an image that could not be read exited 2 above, never reaching here).
        It used to say "add --gender/--age/--type" - but every table the parser accepts is a
        record or a "#n" note now, and an unlabelled chart is stored as gender "unknown", so
        the line only printed when NO table was accepted, where a label changes nothing. What
        helps there: a guide rendered client-side is not in the page as served or saved closed. */
-    const told = out.notes.some((n) => n === PDF_NOTE || /^image: (?:error|not_a_chart)|^--only |^#\d+ \(/.test(n));
+    const told = out.notes.some((n) => /^image: not_a_chart|^--only |^#\d+ \(/.test(n));
     console.log("\nNothing importable." + (told ? "" : (out.notes.includes(NO_TABLE_NOTE)
       ? " If the guide opens client-side (behind a button or a tab), open it in your own browser, save the page with the guide open " +
         "and use --html, or screenshot the table and use --image. If the table is there, "

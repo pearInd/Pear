@@ -662,13 +662,16 @@ function scanPageSignals(doc, pageUrl, baseUrl, parser) {
   const containerSel = parser.SIZE_CHART_CONTAINERS.flatMap((c) => c[1]);
   const inContainer = (el) => containerSel.some((sel) => { try { return !!el.closest(sel); } catch { return false; } });
   for (const img of doc.querySelectorAll("img")) {
-    /* A lazy-loaded image (lazysizes and most themes) holds a data: placeholder in src and the
-       real file in data-src / data-lazy-src / data-original. src first recorded the placeholder:
-       the image reader got a 1px GIF and never the chart. */
+    /* A lazy-loaded image (lazysizes and most themes) holds a placeholder in src and the real
+       file in data-src / data-lazy-src / data-original. src first recorded the placeholder: the
+       image reader got a 1px GIF and never the chart. The placeholder is not always a data: URL
+       (review D4, 2026-10-11): lazysizes' blur-up and LQIP themes put a blank.gif or a _50x
+       thumbnail URL there - so a real URL in a lazy attribute wins whenever the image has one
+       (once loaded, lazysizes copies that same URL into src). */
     const lazySrc = ["data-src", "data-lazy-src", "data-original"]
       .map((a) => (img.getAttribute(a) || "").trim()).find((v) => v && !/^data:/i.test(v)) || "";
     const ownSrc = (img.getAttribute("src") || "").trim();
-    const src = (ownSrc && !/^data:/i.test(ownSrc) ? ownSrc : lazySrc) || ownSrc;
+    const src = lazySrc || ownSrc;
     const label = [src, img.getAttribute("alt"), img.getAttribute("class"), img.getAttribute("id"), img.getAttribute("title")]
       .filter(Boolean).join(" ");
     if ((IMAGE_CHART_RE.test(label) || inContainer(img)) && !isDecorativeChartImage(img)) {

@@ -651,6 +651,20 @@ console.log("\n── §11 where each static image hit was seen (imagePages) ─
   check("§11.8 a lazy-loaded chart image is recorded by its real file (data-src / data-lazy-src), never its data: placeholder",
     lz.images.includes(BASE + "/img/size-chart-lazy.png") && lz.images.includes(BASE + "/img/size-guide-lazy2.png") &&
     !lz.images.some((u) => /^data:/i.test(u)), JSON.stringify(lz.images));
+  /* Review D4 (2026-10-11): the placeholder is not always a data: URL. lazysizes' blur-up and
+     most LQIP themes put a URL in src - a 1px blank.gif or a _50x thumbnail - and the real file
+     in data-src. Only data: placeholders were skipped, so blank.gif went to the image reader
+     ("GIF charts are not readable") and a thumbnail to Gemini, never the chart. */
+  const lqip = fakeStore({
+    "/": pdp("<a href='/products/a'>A</a>", "Home"),
+    "/sitemap.xml": `<urlset><url><loc>${BASE}/products/a</loc></url></urlset>`,
+    "/products/a": pdp(`<img class="lazyload" src="/assets/blank.gif" data-src="/img/size-chart-real.png" alt="size chart">
+      <img class="lazyload blur-up" src="/img/size-guide_50x.png" data-original="/img/size-guide.png" alt="size guide">`, "Tee"),
+  });
+  const lq = await discoverSizeCharts(BASE, { fetchText: lqip.fetchText, delayMs: 0, log: () => {}, JSDOM });
+  check("§11.9 a URL placeholder in src (blank.gif, an LQIP _50x thumbnail) gives way to data-src / data-original",
+    lq.images.includes(BASE + "/img/size-chart-real.png") && lq.images.includes(BASE + "/img/size-guide.png") &&
+    !lq.images.some((u) => /blank\.gif|_50x/.test(u)), JSON.stringify(lq.images));
 }
 
 console.log("\n── §12 a guide's context stops at its OUTERMOST container ──");

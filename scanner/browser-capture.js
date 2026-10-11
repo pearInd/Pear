@@ -24,6 +24,8 @@
    403/429 or a challenge page is reported as BLOCKED and the run stops for that store -
    also when it answers the GUIDE's own request (the adidas Product-SizeChart pattern):
    no further guide is clicked there. The manual import (import-chart.js) is the way in.
+   report.guide_refused says the guide's own request was refused, whatever was read (capture.js
+   then fetches nothing more from the store's own site).
 
    report.status: "ok" | "blocked" (the store refused us) | "unreachable" (navigations
    failed with no HTTP answer at all - reset, protocol error, timeout - errors[0] says
@@ -32,7 +34,7 @@
    ============================================================================= */
 import { createHash } from "node:crypto";
 import { extractAllSizeCharts, SIZE_GUIDE_LINK_RE, isProductPathUrl, canonicalStoreHost,
-  normalizePageUrl, looksLikeBotChallenge, classifyChart, pageContextText, referrerAudience } from "./size-charts.js";
+  normalizePageUrl, looksLikeBotChallenge, classifyChart, pageContextText, referrerAudience, buildRecords } from "./size-charts.js";
 
 /* One product, one spelling. THE BUG THIS CLOSES (review, 2026-10-07): the home-page
    fallback de-duplicated RAW hrefs, so a product linked as /collections/all/products/linen-tee,
@@ -40,9 +42,20 @@ import { extractAllSizeCharts, SIZE_GUIDE_LINK_RE, isProductPathUrl, canonicalSt
    opened three times - and buildRecords, seeing its own inline chart on "3 pages", saved ONE
    product's chart as the store's (product_key ''). A product page is named by its PATH: the
    fragment, Shopify's /collections/<x>/ prefix and the query (variant, tracking) are dropped -
-   the query only when the path alone is product-shaped, so /product.php?id=12 keeps the
-   query that names it. Phase 1's sampler is not changed here. */
+   the query only when the path alone NAMES the product, so /product.php?id=12 keeps the
+   query that names it. Phase 1's sampler is not changed here; capture.js names every stage's
+   pages with this same function before it merges them (one product, one page, in all stages).
+   THE BUG THIS CLOSES (review, 2026-10-11): "product-shaped" (isProductPathUrl - any
+   /products/<x> at the root, any hyphenated last segment) was taken for "names the product",
+   so EC-CUBE's /products/detail.php?product_id=12, an ASP.NET /shop/product-details.aspx?
+   productid=5 and /products/view?id=99 lost the id: every sampled product became ONE id-less
+   page (a 404 there), opened once, nothing read. A path does not name the product when its last
+   segment is a SCRIPT (.php/.aspx/.jsp...: the query is its argument) or when the query carries
+   a key that identifies a product (id, pid, sku, product_id, handle...) - then the whole query is
+   kept, as before the canonical form existed. variant, utm_ tracking, fbclid and ref still go. */
 const ID_SHAPED_PATH_RE = /\/[^/]*\d{5,}[^/]*$/;
+const SCRIPT_SEGMENT_RE = /\.(?:php\d?|aspx?|jspx?|cfm|cgi|pl|do|action)$/i;
+const PRODUCT_ID_PARAM_RE = /^(?:id|pid|p|sku|handle|product|item|(?:product|prod|item|goods|style|article)s?[_-]?(?:id|code|no|num))$/i;
 export function canonicalProductUrl(u) {
   const n = normalizePageUrl(u);
   let x;
@@ -50,7 +63,9 @@ export function canonicalProductUrl(u) {
   const segs = x.pathname.split("/");
   const c = segs.findIndex((s, i) => s.toLowerCase() === "collections" && (segs[i + 2] || "").toLowerCase() === "products" && !!segs[i + 3]);
   if (c > 0) { segs.splice(c, 2); x.pathname = segs.join("/"); }
-  if (isProductPathUrl(x.origin + x.pathname) || ID_SHAPED_PATH_RE.test(x.pathname)) x.search = "";
+  const productShaped = isProductPathUrl(x.origin + x.pathname) || ID_SHAPED_PATH_RE.test(x.pathname);
+  const queryNamesIt = SCRIPT_SEGMENT_RE.test(x.pathname) || [...x.searchParams.keys()].some((k) => PRODUCT_ID_PARAM_RE.test(k));
+  if (productShaped && !queryNamesIt) x.search = "";
   return x.href;
 }
 
@@ -153,15 +168,29 @@ export const GUIDE_BOUNDARY = '[role=dialog],[aria-modal=true],dialog,[class*="m
    decided it, so a chart shown in the page inside <div class="product-info-drawer"> was
    replaced by the next click's whole-page re-read - typed off its columns, the product's
    "jeans" lost ("bottoms", or no type at all and dropped by buildRecords). The marker is
-   removed before parsing, so it never reaches a saved snapshot. */
+   removed before parsing, so it never reaches a saved snapshot.
+   A guide container is not the PAGE (review, 2026-10-11 - the lines import-chart.js's readHtml
+   draws for the same themes): a CLASS-only match ([class*=modal|drawer|popup]) is never a
+   wrapper that is or holds <main>, nor one that holds every <h1>; a real dialog ([role=dialog],
+   [aria-modal], <dialog>) is the guide whatever it holds. THE BUG THIS CLOSES: only <html>/
+   <body> were excluded, and Debut wraps the whole page in #PageContainer.drawer-page-content
+   (Timber/Brooklyn: .is-moved-by-drawer) - so a size chart in a product TAB, display:none until
+   its tab is clicked, read as a hidden guide, and the first click's whole-page re-read replaced
+   it: a "Slim Fit Jeans" chart saved as browser_modal "bottoms" where d2136b6 saved
+   browser_page "jeans" (or, with no type in the columns, dropped). A hidden popup INSIDE that
+   wrapper is still a guide container. */
 export function chartsFromHtml(html, pageUrl, JSDOM, { source, productUrl = "", referrerText = null } = {}) {
   const doc = new JSDOM(stripStyles(html), { url: pageUrl || "https://example.invalid/" }).window.document;
   const hidden = [...doc.querySelectorAll("[data-pear-hidden]")];
   for (const el of hidden) el.removeAttribute("data-pear-hidden");
   const guide = source === "browser_modal" || source === "browser_network";
   const ref = guide ? referrerAudience([referrerText != null ? referrerText : pageContextText(doc, pageUrl)]) : null;
+  const h1s = [...doc.querySelectorAll("h1")];
+  const isThePage = (el) => el === doc.documentElement || el === doc.body ||
+    (!el.matches("[role=dialog],[aria-modal=true],dialog") &&
+      (el.matches("main,[role=main]") || !!el.querySelector("main,[role=main]") || (h1s.length > 0 && h1s.every((h) => el.contains(h)))));
   const guideRoots = source === "browser_page"
-    ? [...doc.querySelectorAll(GUIDE_BOUNDARY)].filter((el) => el !== doc.documentElement && el !== doc.body) : [];
+    ? [...doc.querySelectorAll(GUIDE_BOUNDARY)].filter((el) => !isThePage(el)) : [];
   const hiddenInGuide = hidden.filter((el) => guideRoots.some((r) => r.contains(el)));
   return extractAllSizeCharts(doc, pageUrl, null, guide ? { contextBoundary: GUIDE_BOUNDARY } : {}).map((chart) => {
     if (guide) chart.classification = classifyChart(chart.rows, chart.localText, "", ref);
@@ -401,7 +430,7 @@ export async function captureWithBrowser(storeUrl, {
 } = {}) {
   const vlog = (m) => { if (verbose) log("    · " + m); };
   const errText = (e) => String((e && e.message) || e).split("\n")[0];
-  const report = { status: "ok", pages_opened: 0, pages_failed: 0, triggers_clicked: 0, tabs_clicked: 0,
+  const report = { status: "ok", guide_refused: false, pages_opened: 0, pages_failed: 0, triggers_clicked: 0, tabs_clicked: 0,
     unmeasured_guides: 0, unmeasured_examples: [],
     network_payloads: 0, blocked: { count: 0, examples: [] }, errors: [], methods: {} };
   const found = [], images = [];
@@ -446,14 +475,16 @@ export async function captureWithBrowser(storeUrl, {
      endpoint was asked again on every trigger of every page (up to 24 times) and the run
      said "JS GUIDE NOT OPENED". A 403/429 or a challenge body answering an xhr/fetch on the
      store's host AFTER a guide click - or the navigation a guide link made - is a refusal:
-     it is counted in report.blocked, no further guide is clicked on this store, and with no
-     chart read the run ends BLOCKED. Only what answers inside the guide's own window counts -
-     from a trigger or tab click to the read of what it opened (`guideWindow`): requests made
-     while a page loads, or after the guide was read (a recommendations call, a lazy-load, a
-     CSRF-refused POST on the same host), are not the guide's. */
+     it is counted in report.blocked (and report.guide_refused), no further guide - nor tab of
+     the open one - is clicked on this store, and with no chart KEPT the run ends BLOCKED. Only
+     what answers inside the guide's own window counts - from a trigger or tab click to the read
+     of what it opened (`guideWindow`): requests made while a page loads, or after the guide was
+     read (a recommendations call, a lazy-load, a CSRF-refused POST on the same host), are not
+     the guide's. */
   let guideRefused = false, guideWindow = false;
   const refuseGuide = (u, why) => {
     guideRefused = true;
+    report.guide_refused = true;
     report.blocked.count++;
     if (report.blocked.examples.length < 3) report.blocked.examples.push(u + " (guide request: " + why + ")");
   };
@@ -654,7 +685,24 @@ export async function captureWithBrowser(storeUrl, {
          [data-pear-trigger] matched nothing, timed out, and the real modal button after the
          link was never opened. Triggers that leave the page are clicked LAST, the marks are
          re-made after each goBack (a trigger found again by label, tag and position among
-         its namesakes), and both navigations are paced like any other. */
+         its namesakes), and both navigations are paced like any other.
+         THE WAY BACK IS A REQUEST TOO (review, 2026-10-11): goBack() reloads the product page
+         from the store (a no-store page is asked again), and its answer was discarded - outside
+         the guide's window, so the listener never saw it either. A 403/429 or a challenge there
+         went uncounted: the page's next trigger was looked for on the refusal page ("not found
+         again"), the next product was asked as if nothing had refused, and on the last product
+         the run ended 'ok' - "JS GUIDE NOT OPENED". It is the guide refused now (counted, no
+         further guide clicked) and a refusal in a row, like a refused product navigation: the
+         next product refusing too stops the run. A goBack with no response (nothing re-asked)
+         is not checked. */
+      const backFromGuide = async () => {
+        const back = await page.goBack({ timeout: navTimeoutMs }).catch(() => null);
+        const why = back ? await isBlocked(back) : null;
+        if (!why) return false;
+        refuseGuide(url, why + ", reloading the product page after its guide link");
+        refusedInARow++;
+        return true;
+      };
       const marked = await bounded(() => page.evaluate(MARK_TRIGGERS)).catch(() => []);
       const nthOf = (list, t) => list.filter((x) => x.label === t.label && x.tag === t.tag).indexOf(t);
       const triggers = marked.filter((t) => isSizeGuideTriggerLabel(t.label))
@@ -689,13 +737,16 @@ export async function captureWithBrowser(storeUrl, {
            own host - a third-party sizing page's challenge is not (the listener's rule). */
         if (navigated && onStoreHost(page.url()) && modalHtml && looksLikeBotChallenge({ text: modalHtml, contentType: "text/html" })) refuseGuide(page.url(), "bot challenge page");
         if (guideRefused) {
-          if (navigated) await page.goBack({ timeout: navTimeoutMs }).catch(() => {});
+          if (navigated) await backFromGuide();
           break;
         }
         if (modalHtml) readings += add(chartsFromHtml(modalHtml, page.url(), JSDOM, { source: "browser_modal", productUrl: url, referrerText: refText }), url);
         const tabs = (await bounded(() => page.evaluate(MARK_TABS)).catch(() => [])).filter((tab) => !NEVER_CLICK_RE.test(tab.label));
         for (const tab of tabs) {
-          if (stuck) break;
+          /* A TAB's own request refused is the guide refused (review, 2026-10-11): the loop only
+             stopped on a stuck page, so every remaining tab (up to 10) asked the refusing
+             endpoint again - and was counted again. */
+          if (stuck || guideRefused) break;
           guideWindow = true;
           try {
             await page.locator(`[data-pear-tab="${tab.id}"]`).first().click({ timeout: 3000 });
@@ -727,7 +778,7 @@ export async function captureWithBrowser(storeUrl, {
         if (stuck) break;
         if (navigated) {
           await sleep(delayMs);
-          await page.goBack({ timeout: navTimeoutMs }).catch(() => {});
+          if (await backFromGuide()) break;
           const again = await bounded(() => page.evaluate(MARK_TRIGGERS)).catch(() => []);
           for (const r of triggers.slice(k + 1)) {
             const m = again.filter((x) => x.label === r.label && x.tag === r.tag)[r.nth];
@@ -751,10 +802,15 @@ export async function captureWithBrowser(storeUrl, {
     await browser.close().catch(() => {});
   }
   /* One refusal with nothing opened (the in-a-row stop above needs two) is still BLOCKED -
-     and so is a refused guide request when no chart was read. A refusal outranks a page that
-     never answered: "unreachable" means nothing refused us. */
+     and so is a refused guide request when no chart was KEPT. A refusal outranks a page that
+     never answered: "unreachable" means nothing refused us.
+     THE BUG THIS CLOSES (review, 2026-10-11): "no chart read" was `!found.length` - RAW
+     readings - so a lone untyped "Suits" table on the PDP (buildRecords never stores it) kept a
+     refused guide 'ok', and the run said "JS GUIDE NOT OPENED ... open it yourself" (F35's
+     symptom, the raw-vs-kept mistake capture.js had just fixed for the static stage). It is
+     judged on what buildRecords would keep (a throwaway report, nothing counted twice). */
   if (report.status === "ok" && report.pages_opened === 0 && report.blocked.count) report.status = "blocked";
-  if (report.status === "ok" && guideRefused && !found.length) report.status = "blocked";
+  if (report.status === "ok" && guideRefused && !buildRecords(found, host, { charts: [], conflicts: [] }).length) report.status = "blocked";
   if (report.status === "ok" && report.pages_opened === 0 && firstUnanswered) {
     report.status = "unreachable";
     report.errors = [firstUnanswered, ...report.errors.filter((e) => e !== firstUnanswered)];

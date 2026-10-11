@@ -16,13 +16,17 @@
       playwright package or a page that will not open never throws away the run; one
       page's guide label and late responses never reach the next page (and the late
       response provably WAS delivered); a guide image keeps every product page it was seen
-      on; one product under several spellings is opened once; nothing to open is
-      no_products, no answer at all is UNREACHABLE, a refused GUIDE request is BLOCKED;
-      the PDP's own document is not a size payload; a hidden guide the click opened is
-      typed as the guide, a visible one in a "drawer" is not; a page that stops answering is
-      given up, not waited on forever, and nothing more is started on it; guide links go after
-      the modal button, paced, found again after the goBack; a refusal counts only inside the
-      guide's own window, and a challenge only on the store's host.
+      on; one product under several spellings is opened once, but a query that names the
+      product (detail.php?product_id=, ?id=) keeps them apart; nothing to open is
+      no_products, no answer at all is UNREACHABLE, a refused GUIDE request is BLOCKED when
+      nothing would be KEPT (an untyped table is not a chart) and always says guide_refused -
+      through runCapture too (no store image fetched after it); a refused TAB stops the tabs;
+      a refused goBack after a guide link is counted; the PDP's own document is not a size
+      payload; a hidden guide the click opened is typed as the guide, a visible one in a
+      "drawer" is not, nor a hidden tab under a page-wide "drawer" wrapper (Debut, Timber); a
+      page that stops answering is given up, not waited on forever, and nothing more is started
+      on it; guide links go after the modal button, paced, found again after the goBack; a
+      refusal counts only inside the guide's own window, and a challenge only on the store's host.
    §5 REAL CHROMIUM against a local fixture store: click the trigger (also one whose
       words sit in child spans), click each tab (also a second guide's), never the cart
       (not even with <body class="modal-open">), catch the JSON the guide fetched, count
@@ -30,8 +34,10 @@
       reported as BLOCKED; guide links go after the modal button, a refused guide fetch
       is asked once, a spinning renderer is given up (also one that stalls mid-guide, with
       nothing left running on it); a hidden guide is typed as the guide once opened, a chart
-      shown in a "drawer" keeps the product's context. Skipped (not failed) only when
-      Chromium cannot launch on this machine; any other throw is a FAIL.
+      shown in a "drawer" keeps the product's context, and so does a tab chart under Debut's
+      page-wide drawer wrapper; an untyped table + a refused guide is BLOCKED; refused tabs are
+      asked once; a 429 on the goBack is counted. Skipped (not failed) only when Chromium
+      cannot launch on this machine; any other throw is a FAIL.
    ============================================================================= */
 import { createServer } from "node:http";
 import { JSDOM } from "jsdom";
@@ -40,6 +46,7 @@ import {
   chartsFromNetworkBody, captureWithBrowser, canonicalProductUrl,
 } from "../scanner/browser-capture.js";
 import { buildRecords } from "../scanner/size-charts.js";
+import { runCapture } from "../scanner/capture.js";
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -155,7 +162,10 @@ console.log("\n── §4 (cont.) the run's own rules, on a scripted browser - n
    Trigger marks live in the document, as in a browser: a click on a [data-pear-trigger] the
    last MARK_TRIGGERS did not hand out fails like a timeout, and a navigation (goto, a click
    on a trigger listed in `clickNav` {id: url}, goBack) wipes them. `onEscape` responses are
-   delivered on the Escape key. rec.events logs every click / goBack with its time. */
+   delivered on the Escape key, `onTab` ones on a guide TAB click only (`onClick` fires on
+   every click, tabs included). A goBack answers like a navigation when the page it lands on
+   sets `backStatus` (the reload the store answers - a 429), else null (nothing re-asked).
+   rec.events logs every click / goBack with its time. */
 const scriptKind = (s) => s.includes("data-pear-hidden") ? "hidden" : s.includes("data-pear-trigger") ? "triggers" : s.includes("data-pear-tab") ? "tabs"
   : s.includes("naturalWidth") ? "images" : s.includes("__pearGridsBefore ||") ? "newGrids" : "remember";
 function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPage = null } = {}) {
@@ -215,12 +225,14 @@ function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPa
     } },
     locator(sel) {
       const trig = (/data-pear-trigger="([^"]*)"/.exec(sel) || [])[1];
+      const tab = (/data-pear-tab="([^"]*)"/.exec(sel) || [])[1];
       return { first: () => ({ async click() {
         if (trig != null && !marks.has(trig)) throw new Error(`locator.click: Timeout 4000ms exceeded waiting for ${sel}`);
         rec.clicks++;
-        rec.events.push({ ev: "click", id: trig, t: Date.now() });
+        rec.events.push({ ev: "click", id: trig != null ? trig : tab, t: Date.now() });
         const s = site(current) || {};
         for (const r of s.onClick || []) if (listener) await listener(response(r));
+        if (tab != null) for (const r of s.onTab || []) if (listener) await listener(response(r));
         const to = trig != null && s.clickNav && s.clickNav[trig];
         if (to) {
           history.push(current);
@@ -231,7 +243,10 @@ function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPa
     },
     async goBack() {
       rec.events.push({ ev: "goBack", t: Date.now() });
-      if (history.length) { current = history.pop(); reads = 0; marks = new Set(); }
+      if (!history.length) return null;
+      current = history.pop(); reads = 0; marks = new Set();
+      const s = site(current) || {};
+      return s.backStatus ? { status: () => s.backStatus } : null;
     },
   };
   const chromium = {
@@ -371,6 +386,22 @@ function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPa
     productUrls: [P("/products/a"), P("/products/a?variant=1"), P("/collections/x/products/a"), P("/products/b")] }));
   check("§4.13d a sample's spellings are de-duplicated BEFORE the page cap (b is still opened under maxPages 2)",
     JSON.stringify(dedupe.rec.gotos) === JSON.stringify([P("/products/a"), P("/products/b")]), JSON.stringify(dedupe.rec.gotos));
+  /* B4 (review, 2026-10-11): a PRODUCT-SHAPED path whose query still names the product - a
+     script (EC-CUBE's /products/detail.php?product_id=, an ASP.NET product-details.aspx) or an
+     id-like key (/products/view?id=) - lost its query, so N sampled products became ONE id-less
+     page (a 404 there) and nothing was read. Only a path that names the product drops it. */
+  const keeps = [P("/products/detail.php?product_id=12"), P("/shop/product-details.aspx?productid=5"), P("/products/view?id=99"),
+    P("/en/products/item?sku=AB12"), P("/product/blue-tee?pid=7")];
+  check("§4.13e a query that IDENTIFIES the product is kept on a product-shaped path (a script, or id/pid/sku/product_id...); variant/utm still go",
+    keeps.every((u) => canonicalProductUrl(u) === u) &&
+    canonicalProductUrl(P("/products/detail.php?product_id=12")) !== canonicalProductUrl(P("/products/detail.php?product_id=13")) &&
+    canonicalProductUrl(P("/products/linen-tee?variant=2&utm_source=x&fbclid=y")) === P("/products/linen-tee"),
+    [...keeps, P("/products/linen-tee?variant=2&utm_source=x&fbclid=y")].map(canonicalProductUrl).join(" "));
+  const ecCube = scriptedChromium({ site: () => ({ html: INLINE("Tee") }) });
+  const r13e = await captureWithBrowser(S, opts({ chromium: ecCube.chromium, productUrls: [1, 2, 3].map((i) => P(`/products/detail.php?product_id=${i}`)) }));
+  check("§4.13f ...so three sampled /products/detail.php?product_id=N pages are three pages, all opened (was: one id-less page)",
+    JSON.stringify(ecCube.rec.gotos) === JSON.stringify([1, 2, 3].map((i) => P(`/products/detail.php?product_id=${i}`))) && r13e.report.pages_opened === 3,
+    JSON.stringify(ecCube.rec.gotos));
 
   /* F5 - nothing to open is its own answer, not "ok" with 0 pages. */
   const logs14 = [];
@@ -458,6 +489,74 @@ function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPa
     r16f.report.status === "blocked" && /bot challenge/.test(r16f.report.blocked.examples[0]) &&
     r16g.report.status === "ok" && r16g.report.blocked.count === 0,
     JSON.stringify({ nav403: [r16e.report.status, r16e.report.blocked, nav403.rec.clicks, nav403.rec.gotos.length], chal: r16f.report.blocked, off: [r16g.report.status, r16g.report.blocked] }));
+  /* B3/F1/D1 (review, 2026-10-11): "no chart read" was judged on the RAW readings - a lone
+     untyped "Suits" table on the PDP (buildRecords never stores it) kept a refused guide 'ok',
+     read as "JS GUIDE NOT OPENED". It is judged on what would be KEPT; and the refusal itself
+     is reported (guide_refused) whatever was kept, so capture.js skips the store's images. */
+  const SUITS = `<h3>Suits</h3><table><tr><th>Size</th><th>Chest</th></tr><tr><td>S</td><td>88-94</td></tr><tr><td>M</td><td>95-101</td></tr><tr><td>L</td><td>102-108</td></tr></table>`;
+  const refusedWith = (title, chart) => scriptedChromium({
+    site: () => ({ html: `<html><head><title>${title}</title></head><body><h1>${title}</h1>${chart}</body></html>`,
+      onClick: [{ url: SIZECHART, type: "xhr", status: 403, html: "<html><body>Access Denied</body></html>" }] }),
+    evaluate: (kind) => kind === "triggers" ? TWO_TRIGGERS.map((t) => ({ ...t })) : undefined,
+  });
+  const r16h = await captureWithBrowser(S, opts({ chromium: refusedWith("Wool Suit", SUITS).chromium, productUrls: [P("/products/suit")] }));
+  const r16i = await captureWithBrowser(S, opts({ chromium: refusedWith("Run Tee", MEN_TABLE).chromium, productUrls: [P("/products/tee")] }));
+  check("§4.16e a refused guide with only an UNTYPED reading (never stored) is BLOCKED (was: 'ok'); with a reading buildRecords keeps it stays 'ok' - both say guide_refused",
+    r16h.found.length === 1 && r16h.found[0].chart.classification.garmentType === null && r16h.report.status === "blocked" && r16h.report.guide_refused === true &&
+    r16i.report.status === "ok" && r16i.report.guide_refused === true && r16i.report.blocked.count === 1 && buildRecords(r16i.found, "shop.example.com").length === 1,
+    JSON.stringify({ suit: [r16h.report.status, r16h.report.guide_refused, r16h.found.length], tee: [r16i.report.status, r16i.report.guide_refused] }));
+  /* ...end to end through runCapture: the real captureWithBrowser feeds the real flow. */
+  const flowWith = async (title, chart) => {
+    const asked = [];
+    const st = { report: { outcome: "js_app_detected", platform: "html", sampled_products: 1, errors: [], blocked: { count: 0, examples: [] },
+        paths: { js_app_detected: { triggers_without_link: 1, apps: [] }, image_chart_detected: { count: 1, examples: [] }, linked_page: {}, inline_table: {}, product_description: {} }, charts: [], conflicts: [] },
+      records: [], found: [], products: [P("/products/a")], images: [P("/cdn/shop/files/size-chart.jpg"), "https://cdn.example.net/files/size-chart.png"], imagePages: {} };
+    const out = await runCapture(S, { log: () => {}, JSDOM, imageDelayMs: 0, apiKey: "k", discover: async () => st,
+      browserCapture: (u, o) => captureWithBrowser(u, { ...o, chromium: refusedWith(title, chart).chromium, delayMs: 0 }),
+      imageReader: async (src) => { asked.push(src.url); return { found: [], outcome: "not_a_chart", detail: "x" }; } });
+    return { out, asked };
+  };
+  const e2eTee = await flowWith("Run Tee", MEN_TABLE), e2eSuit = await flowWith("Wool Suit", SUITS);
+  check("§4.16f ...through runCapture: after a refused guide no image on the store's own site is fetched, also when a product-scoped chart was kept (was: fetched); only the untyped table -> BLOCKED (was: JS GUIDE NOT OPENED)",
+    JSON.stringify(e2eTee.asked) === JSON.stringify(["https://cdn.example.net/files/size-chart.png"]) && e2eTee.out.records.length === 1 &&
+    e2eSuit.out.records.length === 0 && e2eSuit.out.reason && e2eSuit.out.reason.kind === "blocked" && /HTTP 403/.test(e2eSuit.out.reason.extra),
+    JSON.stringify({ teeAsked: e2eTee.asked, suitReason: e2eSuit.out.reason }));
+  /* B5: a guide whose TABS each fetch their chart - the first tab's 403 is the guide refused,
+     and the other tabs are not clicked into the same refusal (was: every tab, up to 10). */
+  const tabbed = scriptedChromium({
+    site: () => ({ html: "<html><head><title>Tee</title></head><body><h1>Tee</h1></body></html>",
+      onTab: [{ url: P("/ajax/tab"), type: "xhr", status: 403, html: "<html><body>Access Denied</body></html>" }] }),
+    evaluate: (kind) => kind === "triggers" ? [{ id: "pt0", label: "Size guide", tag: "BUTTON", href: "" }]
+      : kind === "tabs" ? [{ id: "pb0", label: "Men" }, { id: "pb1", label: "Women" }, { id: "pb2", label: "Kids" }] : undefined,
+  });
+  const r16j = await captureWithBrowser(S, opts({ chromium: tabbed.chromium, productUrls: [P("/products/a")] }));
+  check("§4.16g a guide TAB's request refused: no further tab is clicked - asked once, counted once, BLOCKED (was: 3 tabs, 3 refusals)",
+    r16j.report.status === "blocked" && r16j.report.tabs_clicked === 1 && r16j.report.blocked.count === 1 && tabbed.rec.clicks === 2,
+    JSON.stringify({ clicks: tabbed.rec.clicks, report: r16j.report }));
+  /* B6: the goBack after a guide LINK is a navigation too - the store's 429 on that reload went
+     uncounted (guideWindow is closed, the response was discarded): the page's next trigger was
+     looked for on the 429 page, the next product was asked as if nothing had refused, and the
+     run could end 'ok' (JS GUIDE NOT OPENED). */
+  const backRefused = scriptedChromium({
+    site: (u) => /\/pages\//.test(u) ? { html: "<html><head><title>Fit</title></head><body><p>Prose.</p></body></html>" }
+      : u.endsWith("/products/a") ? { html: "<html><head><title>Tee</title></head><body><h1>Tee</h1></body></html>", backStatus: 429,
+        clickNav: { pt0: P("/pages/fit-guide"), pt1: P("/pages/fit-guide-2") } }
+      : { status: 429, html: "<html><body>Too many requests</body></html>" },
+    evaluate: (kind, u) => kind === "triggers" && u.endsWith("/products/a")
+      ? [{ id: "pt0", label: "Size guide", tag: "A", href: "/pages/fit-guide" }, { id: "pt1", label: "Sizing help", tag: "A", href: "/pages/fit-guide-2" }] : undefined,
+  });
+  const r16k = await captureWithBrowser(S, opts({ chromium: backRefused.chromium, productUrls: [P("/products/a"), P("/products/b"), P("/products/c")] }));
+  const onlyA = scriptedChromium({
+    site: (u) => /\/pages\//.test(u) ? { html: "<html><head><title>Fit</title></head><body><p>Prose.</p></body></html>" }
+      : { html: "<html><head><title>Tee</title></head><body><h1>Tee</h1></body></html>", backStatus: 429, clickNav: { pt0: P("/pages/fit-guide") } },
+    evaluate: (kind, u) => kind === "triggers" && !/\/pages\//.test(u) ? [{ id: "pt0", label: "Size guide", tag: "A", href: "/pages/fit-guide" }] : undefined,
+  });
+  const r16l = await captureWithBrowser(S, opts({ chromium: onlyA.chromium, productUrls: [P("/products/a")] }));
+  check("§4.16h a 429 on the goBack after a guide link is a refusal: counted, the page's other link not clicked, and with the next product's refusal the run stops (2 in a row) - BLOCKED; on the only product too",
+    r16k.report.status === "blocked" && r16k.report.blocked.count === 2 && backRefused.rec.clicks === 1 &&
+    JSON.stringify(backRefused.rec.gotos) === JSON.stringify([P("/products/a"), P("/products/b")]) &&
+    r16l.report.status === "blocked" && r16l.report.blocked.count === 1 && /HTTP 429/.test(r16l.report.blocked.examples[0]),
+    JSON.stringify({ k: [r16k.report.status, r16k.report.blocked, backRefused.rec.clicks, backRefused.rec.gotos], l: [r16l.report.status, r16l.report.blocked] }));
 
   /* F4 - the product page's own document is not a size payload. */
   const DL = `<html><head><title>High Waist Mom Jeans</title></head><body><h1>High Waist Mom Jeans</h1><p>Free shipping</p>
@@ -496,6 +595,23 @@ function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPa
   const snaps18 = buildRecords([...r18.found, ...r18c.found], "shop.example.com").map((r) => r.raw_snapshot || "");
   check("§4.18d the in-page hidden marker never reaches a saved snapshot",
     snaps18.length === 2 && snaps18.every((x) => x.includes("<table") && !x.includes("data-pear-hidden")), JSON.stringify(snaps18.map((x) => x.slice(0, 40))));
+  /* B1 (review, 2026-10-11): Debut wraps the WHOLE page in #PageContainer.drawer-page-content
+     (Timber/Brooklyn: .is-moved-by-drawer) - a "drawer" by class - so a size chart in a product
+     TAB that is display:none until clicked sat "hidden inside a guide", and the first click's
+     whole-page re-read replaced it: the product's "jeans" lost (bottoms, off the columns). A
+     page-wide wrapper is not a guide container; a hidden popup inside it still is. */
+  const PAGE_WRAPPED = (wrap, inner) => `<html><head><title>Slim Fit Jeans</title></head><body><div id="PageContainer" class="${wrap}">${inner}</div></body></html>`;
+  const TAB_PANEL = `<h1>Slim Fit Jeans</h1><div class="product-tabs"><button>Description</button><button>Size chart</button></div>
+    <div class="panel"><p>Stretch denim.</p></div><div class="panel">${LEGS.replace("<table>", "<table data-pear-hidden>")}</div>`;
+  const debut = await captureWithBrowser(S, opts({ chromium: opens(PAGE_WRAPPED("page-container drawer-page-content", `<main>${TAB_PANEL}</main>`)).chromium, productUrls: [P("/products/slim-jeans")] }));
+  const timber = await captureWithBrowser(S, opts({ chromium: opens(PAGE_WRAPPED("is-moved-by-drawer", TAB_PANEL)).chromium, productUrls: [P("/products/slim-jeans")] }));
+  const popupIn = await captureWithBrowser(S, opts({ chromium: opens(PAGE_WRAPPED("page-container drawer-page-content",
+    `<main><h1>Slim Fit Jeans</h1></main><div class="product-popup-modal" style="visibility:hidden"><h2>Size guide</h2>${MEN_TABLE.replace("<table>", "<table data-pear-hidden>")}</div>`)).chromium,
+    productUrls: [P("/products/slim-jeans")] }));
+  check("§4.18e a hidden product-TAB chart under a page-wide 'drawer' wrapper (Debut: holds <main>; Timber: holds the <h1>) keeps the product's 'jeans' (was: browser_modal 'bottoms'); a hidden popup inside that wrapper is still the guide (tops)",
+    JSON.stringify(t18(debut)) === JSON.stringify([["browser_page", "jeans"]]) && JSON.stringify(t18(timber)) === JSON.stringify([["browser_page", "jeans"]]) &&
+    JSON.stringify(t18(popupIn)) === JSON.stringify([["browser_modal", "tops"]]),
+    JSON.stringify({ debut: t18(debut), timber: t18(timber), popupIn: t18(popupIn) }));
 
   /* F1 - a renderer that never yields. */
   const NEVER = new Promise(() => {});
@@ -689,7 +805,40 @@ console.log("\n── §5 real Chromium against a local fixture store ──");
     <script>document.getElementById('sg').onclick = () => document.getElementById('pm').setAttribute('open', '');</script></body></html>`;
   const DRAWER_JEANS = `<!doctype html><html lang="en"><head><title>Slim Fit Jeans</title></head><body><h1>Slim Fit Jeans</h1>
     <div class="product-info-drawer"><h2>Size guide</h2>${MEN_PANTS}</div><button type="button">Size chart</button></body></html>`;
+  /* B1: Debut's page-wide #PageContainer.drawer-page-content around a product whose size chart
+     is a TAB panel, display:none until its "Size chart" tab is clicked. */
+  const DEBUT_JEANS = `<!doctype html><html lang="en"><head><title>Slim Fit Jeans</title><style>.panel{display:none}.panel.on{display:block}</style></head><body>
+    <div class="page-container drawer-page-content" id="PageContainer"><main><h1>Slim Fit Jeans</h1><p class="vendor">Levi</p><div class="price">199</div>
+    <div class="product-tabs"><button type="button" id="t1">Description</button> <button type="button" id="t2">Size chart</button></div>
+    <div class="panel on" id="p1"><p>Stretch denim.</p></div><div class="panel" id="p2">${MEN_PANTS}</div></main></div>
+    <script>document.getElementById('t2').onclick = () => { document.getElementById('p1').classList.remove('on'); document.getElementById('p2').classList.add('on'); };
+      document.getElementById('t1').onclick = () => { document.getElementById('p2').classList.remove('on'); document.getElementById('p1').classList.add('on'); };</script></body></html>`;
+  /* B3: an untyped "Suits" chest table in the page (never stored) and a guide whose fetch is refused. */
+  const SUIT403 = `<!doctype html><html lang="en"><head><title>Wool Suit</title></head><body><h1>Wool Suit</h1>
+    <h3>Suits</h3><table><tr><th>Size</th><th>Chest</th></tr><tr><td>S</td><td>88-94</td></tr><tr><td>M</td><td>95-101</td></tr><tr><td>L</td><td>102-108</td></tr></table>
+    <button id="sg" type="button">Size guide</button>
+    <script>document.getElementById('sg').onclick = () => fetch('/ajax/suit-chart').catch(() => {});</script></body></html>`;
+  /* B5: a guide whose three tabs each fetch their chart from an endpoint that refuses. */
+  const TABS403 = `<!doctype html><html lang="en"><head><title>Run Tee</title></head><body><h1>Run Tee</h1>
+    <button id="sg" type="button">Size guide</button>
+    <script>document.getElementById('sg').onclick = () => { const d = document.createElement('div'); d.setAttribute('role', 'dialog');
+      d.style.cssText = 'width:600px;height:400px';
+      d.innerHTML = '<h2>Size guide</h2><div class="tabs"><button role="tab">Men</button><button role="tab">Women</button><button role="tab">Kids</button></div>';
+      document.body.appendChild(d);
+      for (const b of d.querySelectorAll('[role=tab]')) b.onclick = () => fetch('/ajax/tab?x=' + b.textContent).catch(() => {}); };</script></body></html>`;
+  /* B6: a guide LINK to a prose page; the product page is no-store and the store answers its
+     reload on the way back with 429. */
+  const GOBACK = `<!doctype html><html lang="en"><head><title>Linen Shirt</title></head><body><h1>Linen Shirt</h1>
+    <a href="/pages/prose-guide">Size guide</a></body></html>`;
+  let suitChartHits = 0, tabHits = 0, gobackHits = 0;
   const server = createServer((req, res) => {
+    if (req.url.startsWith("/ajax/suit-chart")) { suitChartHits++; res.writeHead(403, { "content-type": "text/html" }); return res.end("<html><body>Access Denied</body></html>"); }
+    if (req.url.startsWith("/ajax/tab")) { tabHits++; res.writeHead(403, { "content-type": "text/html" }); return res.end("<html><body>Access Denied</body></html>"); }
+    if (req.url.startsWith("/pages/prose-guide")) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end("<!doctype html><html><head><title>Fit</title></head><body><p>Prose only.</p></body></html>"); }
+    if (req.url === "/products/goback") {
+      if (++gobackHits >= 2) { res.writeHead(429, { "content-type": "text/html", "cache-control": "no-store" }); return res.end("<html><body>Too many requests</body></html>"); }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); return res.end(GOBACK);
+    }
     if (req.url.startsWith("/ajax/Product-SizeChart")) { sizeChartHits++; res.writeHead(403, { "content-type": "text/html" }); return res.end("<html><body>Access Denied</body></html>"); }
     if (req.url.startsWith("/pages/fit-guide")) { fitGuideHits++; res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end("<!doctype html><html><head><title>Fit guide</title></head><body><h1>How our clothes fit</h1><p>Prose only.</p></body></html>"); }
     if (req.url.startsWith("/blocked")) { hits403++; res.writeHead(403, { "content-type": "text/html" }); return res.end("<html><head><title>Forbidden</title></head><body>no</body></html>"); }
@@ -712,6 +861,9 @@ console.log("\n── §5 real Chromium against a local fixture store ──");
     if (req.url === "/products/spin-tab") return res.end(SPIN_TAB);
     if (req.url === "/products/dawn-jeans") return res.end(DAWN_JEANS);
     if (req.url === "/products/drawer-jeans") return res.end(DRAWER_JEANS);
+    if (req.url === "/products/debut-jeans") return res.end(DEBUT_JEANS);
+    if (req.url === "/products/suit403") return res.end(SUIT403);
+    if (req.url === "/products/tabs403") return res.end(TABS403);
     res.end(req.url === "/products/b" ? PDP("חולצה B", "<span>טבלת</span> <span>מידות</span>") : PDP("חולצה A", "מדריך מידות"));
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -814,6 +966,26 @@ console.log("\n── §5 real Chromium against a local fixture store ──");
       st !== "HANG" && unhandled.length === 0 && st.report.pages_opened === 2 &&
       st.report.errors.some((e) => /spin-tab: .*stopped answering/.test(e)),
       st === "HANG" ? "HANG" : JSON.stringify({ unhandled, report: st.report }));
+
+    const db = await captureWithBrowser(base, { productUrls: [`${base}/products/debut-jeans`], delayMs: 0, log: () => {}, JSDOM });
+    const dbAt = db.found.map((f) => [f.source, f.chart.classification.garmentType]);
+    check("§5.17 a size-chart TAB (display:none until clicked) under Debut's page-wide #PageContainer.drawer-page-content keeps the product's context (jeans), also after the tab is clicked (was: browser_modal bottoms)",
+      JSON.stringify(dbAt) === JSON.stringify([["browser_page", "jeans"]]) && db.report.triggers_clicked >= 1, JSON.stringify({ found: dbAt, report: db.report }));
+
+    const su = await captureWithBrowser(base, { productUrls: [`${base}/products/suit403`], delayMs: 0, log: () => {}, JSDOM });
+    check("§5.18 a refused guide fetch with only an untyped 'Suits' table on the page (never stored) -> BLOCKED, guide_refused (was: 'ok', read as JS GUIDE NOT OPENED)",
+      su.report.status === "blocked" && su.report.guide_refused === true && suitChartHits === 1 && su.found.length === 1 &&
+      buildRecords(su.found, "127.0.0.1.example").length === 0, JSON.stringify({ suitChartHits, found: su.found.length, report: su.report }));
+
+    const tb = await captureWithBrowser(base, { productUrls: [`${base}/products/tabs403`], delayMs: 0, log: () => {}, JSDOM });
+    check("§5.19 a guide whose tabs each fetch from a refusing endpoint: the first tab's 403 stops the tabs - asked once (was: every tab asked)",
+      tb.report.status === "blocked" && tb.report.tabs_clicked === 1 && tabHits === 1 && tb.report.blocked.count === 1,
+      JSON.stringify({ tabHits, report: tb.report }));
+
+    const gb = await captureWithBrowser(base, { productUrls: [`${base}/products/goback`], delayMs: 0, log: () => {}, JSDOM });
+    check("§5.20 the product page's reload on the way back from a guide link answered 429 -> counted, BLOCKED (was: 'ok', blocked 0)",
+      gobackHits === 2 && gb.report.status === "blocked" && gb.report.blocked.count === 1 && /HTTP 429/.test(gb.report.blocked.examples[0] || ""),
+      JSON.stringify({ gobackHits, report: gb.report }));
   }
   server.close();
 }

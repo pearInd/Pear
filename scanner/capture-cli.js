@@ -163,6 +163,11 @@ export function reasonLine(kind, host, extra = "") {
      code 1. It exited 0, so `npm run capture -- <url> --yes && echo captured` said captured
      with nothing written. Set here, so both CLIs that save through this get it. (Phase 1's
      scan-store.js --size-charts --save keeps its own clean exit.)
+     It covers THAT case only (review, 2026-10-11 - this comment once read as the whole
+     guarantee): a capture run that captured nothing (BLOCKED, UNREACHABLE, NO SIZE GUIDE
+     FOUND... - main() prints the reason and returns before any save), a --dry-run and a "no"
+     at the y/n all still exit 0. So `&& echo captured` is not a test that something was saved
+     - the "✓ saved N chart(s)" line is.
    - The migration hint names THIS command: saveSizeChartRecords()'s own says "re-run with
      --save", Phase 1's flag, which neither Phase 2 command has.
    - A live check that FAILED verified nothing: it used to go on to "0/N visible yet - the
