@@ -7513,7 +7513,7 @@ function referenceBackBand(url) {
   if (_refBandJobs.has(key)) return _refBandJobs.get(key);
   const job = (async () => {
     try {
-      const q = `image_url=${encodeURIComponent(url)}&region=${hint.region}&v=3`;
+      const q = `image_url=${encodeURIComponent(url)}&region=${hint.region}&v=4`;
       const r = await fetch(`${location.origin}/api/garment-box?${q}`,
         typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(REF_BAND_TIMEOUT_MS) } : {});
       if (!r.ok) { _refBandJobs.delete(key); refMaskNote({ did: "whole", why: "http-" + r.status }); return null; }
@@ -11635,7 +11635,7 @@ function lookGarmentBand(url, region) {
   if (_lookBandJobs.has(key)) return _lookBandJobs.get(key);
   const job = (async () => {
     try {
-      const r = await fetch(`${location.origin}/api/garment-box?image_url=${encodeURIComponent(url)}&region=${reg}&v=3`,
+      const r = await fetch(`${location.origin}/api/garment-box?image_url=${encodeURIComponent(url)}&region=${reg}&v=4`,
         typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(LOOK_BAND_TIMEOUT_MS) } : {});
       if (!r.ok) { _lookBandJobs.delete(key); return null; }
       const j = await r.json();

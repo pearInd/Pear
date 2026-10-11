@@ -75,8 +75,8 @@ console.log("\n── §2 each half cropped to its garment, in THE OUTFIT SHAPE 
   const asked = [];
   const ok = mk(async (u) => { asked.push(u); return { ok: true, json: async () => ({ band: { y0: 0.07, y1: 0.61, x0: 0.24, x1: 0.79 }, reason: "band" }) }; });
   const b1 = await ok.lookGarmentBand(SHORTS.img, "bottom"), b2 = await ok.lookGarmentBand(SHORTS.img, "bottom");
-  check("§2.5 the server's band for the region asked (v3), memoised per photo and region",
-    b1 && b1.y0 === 0.07 && b1.x1 === 0.79 && b2 === b1 && asked.length === 1 && /region=bottom&v=3$/.test(asked[0]) && /\/api\/garment-box\?image_url=/.test(asked[0]), asked.join(" "));
+  check("§2.5 the server's band for the region asked (v4), memoised per photo and region",
+    b1 && b1.y0 === 0.07 && b1.x1 === 0.79 && b2 === b1 && asked.length === 1 && /region=bottom&v=4$/.test(asked[0]) && /\/api\/garment-box\?image_url=/.test(asked[0]), asked.join(" "));
   const noX = mk(async () => ({ ok: true, json: async () => ({ band: { y0: 0.2, y1: 0.6 } }) }));
   const b3 = await noX.lookGarmentBand(PEAK.img, "top");
   check("§2.6 a band without x keeps the full width", b3 && b3.x0 === 0 && b3.x1 === 1);

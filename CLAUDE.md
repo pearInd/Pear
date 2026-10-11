@@ -1372,6 +1372,10 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   top 30% of the photo is IMPLAUSIBLE and no band (`BOTTOM_MIN_HEM`): the rear mask sends the photo whole (v1-v3 would have painted
   the shorts out), and the look shows the bottom's photo top 65%, 18% of it tucked under the shirt's hem (the tee under it, the
   lettering not). The API now returns the model's raw box(es) (`raw`, `both`).
+  **v4 - the actual cause, read off those raw boxes:** the model DID box the shorts in `lower_box_2d` on both photos ([112, 238, 494,
+  792] and [163, 184, 375, 825]) but also answered a `box_2d` of its own ([] / the tee), and `pickRegionBox` read the stray field
+  first. The two garments' boxes win now; v4 keeps the wrong v3 answers out of the cache. The plausibility guard and the tuck stay
+  as the fallback.
 - **The card (`lookViewThumbs`):** a full look shows four views - each half's front and back, as the swaps send them (a half
   with no back says "אין גב"); and "Custom upload" only for an uploaded crop - a store product reads "Store item".
 - **THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2726ee2)** and **THE EARLY VERDICT (24d9abf)** - two listener bugs found on the

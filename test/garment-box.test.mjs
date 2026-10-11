@@ -161,7 +161,7 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
   const c2 = await good.referenceBackBand("https://cdn.example.com/tee-3.jpg");
   check("a good answer comes back as the band, asked for with the photo and its region",
     c1 && c1.y0 === 0.3419 && c1.y1 === 0.8954 && c1.x0 === 0.17 &&
-      /\/api\/garment-box\?image_url=https%3A%2F%2Fcdn\.example\.com%2Ftee-3\.jpg%3Fwidth%3D1000&region=top&v=3$/.test(asked[0]),
+      /\/api\/garment-box\?image_url=https%3A%2F%2Fcdn\.example\.com%2Ftee-3\.jpg%3Fwidth%3D1000&region=top&v=4$/.test(asked[0]),
     asked[0]);
   check("...once per photo: another spelling of the same photo is the memo (canonical key)", asked.length === 1 && c2 === c1);
   check("THE FRONT IS NEVER ASKED ABOUT - it is sent exactly as before", good.referenceBackBand(item.img) === null && asked.length === 1);
@@ -214,7 +214,7 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
 console.log("\n── §7 the photo the model sees, and a bottom's hem (v2, 2026-10-11) ──");
 {
   const GB = await import("../lib/garment-box.js");
-  check("§7.1 v3 (both garments asked, the region by position)", GB.GARMENT_BOX_VERSION === 3);
+  check("§7.1 v4 (both garments asked, the region by position; their boxes win over a stray box_2d)", GB.GARMENT_BOX_VERSION === 4);
   const a = GB.analysisUrl("http://fox.co.il/cdn/shop/files/3108650200-1.jpg?v=1752403462");
   const b = GB.analysisUrl("https://cdn.shopify.com/s/files/1/0638/8252/6908/files/3108650200-4.jpg?crop=center&height=1499&width=2048&v=1");
   check("§7.2 a Shopify photo (the store's /cdn/shop/ or cdn.shopify.com) is analysed 768 wide - crop and height dropped, its version kept",
@@ -252,6 +252,13 @@ console.log("\n── §8 both garments asked, the region by POSITION (v3) ─�
     !!GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, upper_box_2d: [345, 167, 870, 833], lower_box_2d: null }, "top").band);
   check("§8.4 a v1/v2 answer (one box_2d) still reads as before", !!GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, box_2d: [345, 167, 870, 833] }, "top").band);
   const p = GB.garmentBoxPrompt("bottom");
+  /* LIVE (the preview, v3): the model answered a box_2d of its own too - [] for the front photo, the tee for the back one - and it
+     overrode the two garments' boxes: "no-box" with the shorts in lower_box_2d, and the tee for the back. */
+  const liveFront = { worn_by_person: true, confidence: 0.9, box_2d: [], upper_box_2d: null, lower_box_2d: [112, 238, 494, 792] };
+  const liveBack = { worn_by_person: true, confidence: 0.9, box_2d: [0, 156, 171, 844], upper_box_2d: [0, 156, 171, 844], lower_box_2d: [163, 184, 375, 825] };
+  const lf = GB.garmentBandFromDetection(liveFront, "bottom").band, lb = GB.garmentBandFromDetection(liveBack, "bottom").band;
+  check("§8.5b the two garments' boxes win over a stray box_2d: the shorts on both CHICAGO photos, as answered live",
+    lf && lb && Math.abs(lf.y1 - (0.494 + 0.25 * 0.382)) < 1e-3 && lf.y0 > 0.09 && lb.y0 > 0.15 && lb.y1 > 0.42, JSON.stringify([lf, lb]));
   check("§8.6 a lower-body box that ends in the top 30% of the photo is no band (the CHICAGO answers: [0, 0.17]) - the mask sends the photo whole",
     GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, upper_box_2d: null, lower_box_2d: [0, 156, 173, 844] }, "bottom").reason === "implausible" &&
     !!GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, lower_box_2d: [70, 238, 498, 793] }, "bottom").band);
