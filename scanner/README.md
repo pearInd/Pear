@@ -80,8 +80,9 @@ single stubborn image never stalls the whole scan.
 > static mode, then a headless-browser fallback (`browser-capture.js`) and image-chart OCR
 > (`image-charts.js`), shows every chart, asks y/n, saves through the same path and checks
 > the live API. Blocked or unreadable stores: `npm run import:chart` (`import-chart.js`).
-> Step by step: `docs/ADDING-A-STORE.md`. The static mode below is unchanged and is
-> stage 1 of that flow.
+> Step by step: `docs/ADDING-A-STORE.md`. The static mode below is stage 1 of that flow.
+> For a store that answers every request it reads the same pages as before Phase 2; what
+> changed is how it treats a store that refuses (below) and lazy-loaded chart images.
 
 A second, independent mode finds the store's OWN size guide - the chest/waist/hip
 table per size - so the fitting room can use it when the widget cannot read one off
@@ -92,8 +93,9 @@ the product page. It never calls Gemini.
 node scanner/scan-store.js --size-charts https://store-url.com
 node scanner/scan-store.js --size-charts --max-products=20 https://store-url.com
 
-# CAPTURE - writes into store_size_charts (run archive/supabase_setup_v15.sql first;
-# without it the scanner prints a pointer to that file and exits cleanly).
+# CAPTURE - writes into store_size_charts (run archive/supabase_setup_v15.sql and
+# archive/supabase_setup_v16.sql first; without them the scanner says which file to run,
+# saves nothing and exits cleanly).
 node scanner/scan-store.js --size-charts --save https://store-url.com
 ```
 
@@ -102,16 +104,30 @@ homepage's product links), and for each capture path reports whether it succeede
 `inline_table` (a table in the PDP's HTML), `product_description` (a table in a
 Shopify description), `linked_page` (a same-site "size guide" page the PDP links to,
 or `/pages/size-guide` and friends), `image_chart_detected` (the guide is an image or
-PDF - not parsed yet), `js_app_detected` (a size-chart app or a linkless trigger - the
-content is rendered client-side, or a chart id in the page's embedded state), and
-`blocked_by_bot_protection` when the store answers a plain HTTP client with a challenge
-page or a 403 (the answer is then unknown, not "none"). The last line is
-`COVERAGE_JSON {...}`.
+PDF - not parsed here; a lazy-loaded `<img>` is recorded by its `data-src` /
+`data-lazy-src` / `data-original`, not its placeholder), `js_app_detected` (a size-chart
+app or a linkless trigger - the content is rendered client-side, or a chart id in the
+page's embedded state), and `blocked_by_bot_protection` when the store answers a plain
+HTTP client with a challenge page, a 403 or a 429 and nothing else was found (the answer
+is then unknown, not "none"). The last line is `COVERAGE_JSON {...}`.
+
+When the store refuses (403, 429 or a challenge page):
+
+- **Polite stop:** after 3 refusals in a row it asks for nothing more - no further
+  product page and no guide page. Product descriptions already downloaded with
+  `/products.json` are still read. The report prints `✗ stopped after 3 refusals in a
+  row` and sets `polite_stop`; `refused_urls` lists what refused. So a store that
+  started refusing yields fewer charts than a run where it answered.
+- A flat 403/429 on a product page counts under `bot protection` like a challenge page.
+- **Guessed guide paths** (`/pages/size-guide` and friends, which the store never linked)
+  refusing are not the store refusing: 3 in a row only stop the guessing
+  (`✗ 3 guessed guide paths refused in a row - not guessing more`).
 
 Each table is labelled men/women/unisex/unknown, adult/kids and tops/bottoms/jeans
-from its own heading, tab or container first, then the page. The parser is the
-widget's own, copied mechanically into `size-chart-parser.js` - never edit that file;
-edit `widget/pear-widget.js` and run `npm run sync:size-chart-parser`.
+from its own heading, tab or container first, then the page. The parser is shared and
+copied mechanically into `size-chart-parser.js` - never edit that file; edit
+`size-chart-reader.src.js` (the reader) or the widget's `@pear-shared:size-token` block
+in `widget/pear-widget.js`, then run `npm run sync:size-chart-parser`.
 
 Needs `jsdom` (a dependency here and a devDependency in the repo root).
 

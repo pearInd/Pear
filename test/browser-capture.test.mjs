@@ -14,20 +14,30 @@
       in every environment - mutation:capture included): two refusals in a row stop the
       run, also after a page opened; a page that navigates while it is read, a missing
       playwright package or a page that will not open never throws away the run; one
-      page's guide label and late responses never reach the next page; a guide image
-      keeps every product page it was seen on.
+      page's guide label and late responses never reach the next page (and the late
+      response provably WAS delivered); a guide image keeps every product page it was seen
+      on; one product under several spellings is opened once; nothing to open is
+      no_products, no answer at all is UNREACHABLE, a refused GUIDE request is BLOCKED;
+      the PDP's own document is not a size payload; a hidden guide the click opened is
+      typed as the guide, a visible one in a "drawer" is not; a page that stops answering is
+      given up, not waited on forever, and nothing more is started on it; guide links go after
+      the modal button, paced, found again after the goBack; a refusal counts only inside the
+      guide's own window, and a challenge only on the store's host.
    §5 REAL CHROMIUM against a local fixture store: click the trigger (also one whose
       words sit in child spans), click each tab (also a second guide's), never the cart
       (not even with <body class="modal-open">), catch the JSON the guide fetched, count
       a conversion-only guide but not a click that opened nothing, and stop on a 403 -
-      reported as BLOCKED. Skipped (not failed) only when Chromium cannot launch on this
-      machine; any other throw is a FAIL.
+      reported as BLOCKED; guide links go after the modal button, a refused guide fetch
+      is asked once, a spinning renderer is given up (also one that stalls mid-guide, with
+      nothing left running on it); a hidden guide is typed as the guide once opened, a chart
+      shown in a "drawer" keeps the product's context. Skipped (not failed) only when
+      Chromium cannot launch on this machine; any other throw is a FAIL.
    ============================================================================= */
 import { createServer } from "node:http";
 import { JSDOM } from "jsdom";
 import {
   isSizeGuideTriggerLabel, looksLikeSizePayload, htmlCandidatesFromJson, chartsFromHtml,
-  chartsFromNetworkBody, captureWithBrowser,
+  chartsFromNetworkBody, captureWithBrowser, canonicalProductUrl,
 } from "../scanner/browser-capture.js";
 import { buildRecords } from "../scanner/size-charts.js";
 
@@ -132,28 +142,44 @@ console.log("\n── §4 (cont.) the run's own rules, on a scripted browser - n
 /* A stand-in for Playwright's chromium, so the rules that live in captureWithBrowser()'s
    loop are guarded on every machine (the real-Chromium §5 SKIPs where none launches, and a
    rule guarded only there is a rule mutation:capture cannot see). `site(url)` answers a
-   navigation: {status, html, read(n), responses, late}; read(n) replaces html for the n-th
-   content() call since that navigation (1 = the block check, 2 = the page read, 3 = the
-   first guide snapshot); `responses` are delivered to the page's response listener during
-   the navigation, `late` during the page's final wait with bodies that land only after the
-   NEXT navigation. `evaluate(kind, url)` answers the in-page scripts by kind. */
-const scriptKind = (s) => s.includes("data-pear-trigger") ? "triggers" : s.includes("data-pear-tab") ? "tabs"
+   navigation: {status, html, read(n), responses, late, onClick, links, throws}; read(n)
+   replaces html for the n-th content() call since that navigation (1 = the block check, 2 =
+   the page read, 3 = the first guide snapshot) and may return a promise that never settles
+   (a renderer that never yields); `responses` are delivered to the page's response listener
+   during the navigation (`nav: true` = the main frame's own document), `onClick` on every
+   trigger click, `late` on the FIRST wait after the navigation - whatever its length (F24:
+   tied to the 500 ms literal, a retuned wait delivered nothing and §4.11/§4.12 passed on an
+   empty delivery) - with bodies that land only after the NEXT navigation (`now: true`: at
+   once); rec.lateDelivered counts them. `links` is the rendered page's hrefs, `throws` a
+   goto that fails with no answer. `evaluate(kind, url)` answers the in-page scripts by kind.
+   Trigger marks live in the document, as in a browser: a click on a [data-pear-trigger] the
+   last MARK_TRIGGERS did not hand out fails like a timeout, and a navigation (goto, a click
+   on a trigger listed in `clickNav` {id: url}, goBack) wipes them. `onEscape` responses are
+   delivered on the Escape key. rec.events logs every click / goBack with its time. */
+const scriptKind = (s) => s.includes("data-pear-hidden") ? "hidden" : s.includes("data-pear-trigger") ? "triggers" : s.includes("data-pear-tab") ? "tabs"
   : s.includes("naturalWidth") ? "images" : s.includes("__pearGridsBefore ||") ? "newGrids" : "remember";
 function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPage = null } = {}) {
-  const rec = { gotos: [], closed: false };
-  let current = "about:blank", reads = 0, listener = null;
+  const rec = { gotos: [], closed: false, contexts: 0, clicks: 0, lateDelivered: 0, events: [] };
+  let current = "about:blank", reads = 0, listener = null, lateDue = false, marks = new Set();
+  const history = [];
   const landLate = [];
+  const mainFrame = { main: true }, subFrame = { main: false };
   const response = (r) => ({
-    request: () => ({ resourceType: () => r.type || "document" }),
+    request: () => ({ resourceType: () => r.type || "document", isNavigationRequest: () => !!r.nav }),
+    frame: () => (r.nav ? mainFrame : subFrame),
+    status: () => r.status || 200,
     headers: () => ({ "content-type": r.contentType || "text/html; charset=utf-8" }),
     text: r.text || (async () => r.html), url: () => r.url,
   });
   const page = {
     on(ev, fn) { if (ev === "response") listener = fn; },
+    mainFrame() { return mainFrame; },
     async goto(url) {
-      rec.gotos.push(url); current = url; reads = 0;
+      rec.gotos.push(url);
       for (const land of landLate.splice(0)) land();
       const s = site(url) || {};
+      if (s.throws) throw new Error(s.throws);
+      current = url; reads = 0; lateDue = true; marks = new Set(); history.length = 0;
       for (const r of s.responses || []) if (listener) await listener(response(r));
       await new Promise((r) => setTimeout(r, 0));
       return { status: () => s.status || 200 };
@@ -164,12 +190,14 @@ function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPa
       return s.read ? s.read(reads) : (s.html || "<html><head><title>x</title></head><body></body></html>");
     },
     async waitForLoadState() {},
-    async waitForTimeout(ms) {
+    async waitForTimeout() {
       const s = site(current) || {};
-      if (ms === 500 && listener) {
+      if (lateDue && listener) {
+        lateDue = false;
         for (const r of s.late || []) {
           let land; const body = new Promise((res) => { land = () => res(r.html); });
-          landLate.push(land);
+          if (r.now) land(); else landLate.push(land);
+          rec.lateDelivered++;
           listener(response({ ...r, text: () => body }));
         }
       }
@@ -177,18 +205,39 @@ function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPa
     async evaluate(script) {
       const kind = scriptKind(String(script));
       const v = evaluate(kind, current);
-      return v !== undefined ? v : (kind === "newGrids" || kind === "remember" ? 0 : []);
+      if (kind === "triggers" && Array.isArray(v)) marks = new Set(v.map((t) => t.id));
+      return v !== undefined ? v : (kind === "newGrids" || kind === "remember" || kind === "hidden" ? 0 : []);
     },
-    async $$eval() { return []; },
+    async $$eval() { return (site(current) || {}).links || []; },
     url() { return current; },
-    keyboard: { async press() {} },
-    locator() { return { first: () => ({ async click() {} }) }; },
-    async goBack() {},
+    keyboard: { async press(key) {
+      if (key === "Escape") for (const r of (site(current) || {}).onEscape || []) if (listener) await listener(response(r));
+    } },
+    locator(sel) {
+      const trig = (/data-pear-trigger="([^"]*)"/.exec(sel) || [])[1];
+      return { first: () => ({ async click() {
+        if (trig != null && !marks.has(trig)) throw new Error(`locator.click: Timeout 4000ms exceeded waiting for ${sel}`);
+        rec.clicks++;
+        rec.events.push({ ev: "click", id: trig, t: Date.now() });
+        const s = site(current) || {};
+        for (const r of s.onClick || []) if (listener) await listener(response(r));
+        const to = trig != null && s.clickNav && s.clickNav[trig];
+        if (to) {
+          history.push(current);
+          current = to; reads = 0; marks = new Set();
+          for (const r of (site(to) || {}).responses || []) if (listener) await listener(response(r));
+        }
+      } }) };
+    },
+    async goBack() {
+      rec.events.push({ ev: "goBack", t: Date.now() });
+      if (history.length) { current = history.pop(); reads = 0; marks = new Set(); }
+    },
   };
   const chromium = {
     async launch() {
       return {
-        async newContext() { return { async newPage() { if (newPage) return newPage(); return page; } }; },
+        async newContext() { rec.contexts++; return { async newPage() { if (newPage) return newPage(); return page; }, async close() {} }; },
         async close() { rec.closed = true; },
       };
     },
@@ -274,20 +323,256 @@ function scriptedChromium({ site = () => ({}), evaluate = () => undefined, newPa
     evaluate: (kind, u) => kind === "triggers" && u.endsWith("/a") && withA ? [{ id: "pt0", label: "טבלת מידות / VARLEY / נשים", tag: "BUTTON", href: "" }] : undefined,
   });
   const alone = await captureWithBrowser(S, opts({ chromium: carry(false).chromium, productUrls: [`${S}/products/b`] }));
-  const after = await captureWithBrowser(S, opts({ chromium: carry(true).chromium, productUrls: [`${S}/products/a`, `${S}/products/b`] }));
+  const carried = carry(true);
+  const after = await captureWithBrowser(S, opts({ chromium: carried.chromium, productUrls: [`${S}/products/a`, `${S}/products/b`] }));
   const bAlone = alone.found.filter((f) => f.productUrl === `${S}/products/b`);
   const bAfter = after.found.filter((f) => f.productUrl === `${S}/products/b`);
   check("§4.11 page A's guide label never reaches page B: B's chart has the same gender after A as alone (was: A's 'women' at 0.65)",
     bAlone.length === 1 && bAfter.length === 1 && bAfter[0].chart.classification.gender === bAlone[0].chart.classification.gender &&
     bAfter[0].chart.classification.gender !== "women",
     JSON.stringify({ alone: bAlone.map((f) => [f.source, f.chart.classification.gender]), after: bAfter.map((f) => [f.source, f.chart.classification.gender]) }));
-  check("§4.12 a response page A fetched that lands after B's navigation is not credited to B",
-    !after.found.some((f) => f.sourceUrl === LATE_URL), JSON.stringify(after.found.map((f) => [f.productUrl, f.sourceUrl])));
+  check("§4.12 a response page A fetched that lands after B's navigation is not credited to B (and it WAS delivered while A was open)",
+    carried.rec.lateDelivered === 1 && !after.found.some((f) => f.sourceUrl === LATE_URL),
+    JSON.stringify({ delivered: carried.rec.lateDelivered, found: after.found.map((f) => [f.productUrl, f.sourceUrl]) }));
+  /* F24's positive control: the same response landing while A is still open IS read and
+     credited to A - so §4.12's absence is the generation filter's doing, not the harness's. */
+  const lands = scriptedChromium({
+    site: () => ({ html: "<html><head><title>Jeans</title></head><body><h1>Jeans</h1></body></html>",
+      late: [{ url: LATE_URL, type: "fetch", contentType: "application/json", now: true, html: JSON.stringify({ title: "Size chart", content: WOMEN_TABLE }) }] }),
+  });
+  const onA = await captureWithBrowser(S, opts({ chromium: lands.chromium, productUrls: [`${S}/products/a`] }));
+  check("§4.12b ...positive control: that response landing while A is open is read and credited to A",
+    lands.rec.lateDelivered === 1 && onA.found.some((f) => f.sourceUrl === LATE_URL && f.productUrl === `${S}/products/a`),
+    JSON.stringify(onA.found.map((f) => [f.productUrl, f.sourceUrl])));
+
+  /* F0 - one product under several spellings on the rendered home page. */
+  const HOME = "<html><head><title>Shop</title></head><body><h1>Shop</h1></body></html>";
+  const P = (h) => S + h;
+  const dup = scriptedChromium({
+    site: (u) => u === S ? { html: HOME, links: [P("/collections/all/products/linen-tee"), P("/products/linen-tee"),
+      P("/products/linen-tee?variant=2"), P("/products/linen-tee#reviews"), P("/products/other-tee")] }
+      : u.endsWith("/products/linen-tee") ? { html: INLINE("Linen tee") }
+      : { html: "<html><head><title>Other tee</title></head><body><h1>Other tee</h1></body></html>" },
+  });
+  const r13 = await captureWithBrowser(S, opts({ chromium: dup.chromium }));
+  const recs13 = buildRecords(r13.found, "shop.example.com");
+  check("§4.13 one product linked from the home page as /collections/x/products/h, /products/h, ?variant= and #frag is opened ONCE",
+    JSON.stringify(dup.rec.gotos) === JSON.stringify([S, P("/products/linen-tee"), P("/products/other-tee")]), JSON.stringify(dup.rec.gotos));
+  check("§4.13b ...so its own inline chart stays product-scoped (was: seen on '3 pages' -> saved as the store's chart)",
+    recs13.length === 1 && recs13[0].product_key === P("/products/linen-tee"), JSON.stringify(recs13.map((r) => [r.product_key, r.sightings])));
+  check("§4.13c the canonical spelling: collection prefix, query and fragment dropped on a product-shaped path; a query that NAMES the product is kept",
+    canonicalProductUrl(P("/en/collections/sale/products/linen-tee?variant=2&utm_source=x#top")) === P("/en/products/linen-tee") &&
+    canonicalProductUrl(P("/w414418263?color=red")) === P("/w414418263") &&
+    canonicalProductUrl(P("/product.php?id=12")) === P("/product.php?id=12") &&
+    canonicalProductUrl(P("/collections/all")) === P("/collections/all"),
+    [P("/en/collections/sale/products/linen-tee?variant=2&utm_source=x#top"), P("/w414418263?color=red"), P("/product.php?id=12"), P("/collections/all")].map(canonicalProductUrl).join(" "));
+  const dedupe = scriptedChromium({ site: () => ({ html: INLINE("Tee") }) });
+  await captureWithBrowser(S, opts({ chromium: dedupe.chromium, maxPages: 2,
+    productUrls: [P("/products/a"), P("/products/a?variant=1"), P("/collections/x/products/a"), P("/products/b")] }));
+  check("§4.13d a sample's spellings are de-duplicated BEFORE the page cap (b is still opened under maxPages 2)",
+    JSON.stringify(dedupe.rec.gotos) === JSON.stringify([P("/products/a"), P("/products/b")]), JSON.stringify(dedupe.rec.gotos));
+
+  /* F5 - nothing to open is its own answer, not "ok" with 0 pages. */
+  const logs14 = [];
+  const bare = scriptedChromium({ site: (u) => u === S ? { html: HOME, links: [P("/about"), P("/collections/all")] } : {} });
+  const r14 = await captureWithBrowser(S, opts({ chromium: bare.chromium, log: (m) => logs14.push(m) }));
+  check("§4.14 no product link on the rendered home page -> status no_products (was: 'ok', read as JS GUIDE NOT OPENED), and the log says so",
+    r14.report.status === "no_products" && r14.report.errors.includes("no product pages to open") && bare.rec.gotos.length === 1 &&
+    logs14.some((m) => /no product page to open/.test(m)), JSON.stringify({ report: r14.report, logs: logs14 }));
+  const deadHome = scriptedChromium({ site: () => ({ throws: "page.goto: net::ERR_CONNECTION_RESET at " + S }) });
+  const r14b = await captureWithBrowser(S, opts({ chromium: deadHome.chromium }));
+  const wall14 = scriptedChromium({ site: () => ({ status: 403, html: "<html><head><title>Forbidden</title></head><body>no</body></html>" }) });
+  const r14c = await captureWithBrowser(S, opts({ chromium: wall14.chromium }));
+  check("§4.14b a home page that never answered (no HTTP answer) -> UNREACHABLE with the reason first, as a product page would be (was: no_products, read as 'no product page found'); a home page that REFUSED is still BLOCKED",
+    r14b.report.status === "unreachable" && /^home: .*ERR_CONNECTION_RESET/.test(r14b.report.errors[0]) && deadHome.rec.gotos.length === 1 &&
+    r14c.report.status === "blocked",
+    JSON.stringify({ dead: r14b.report, wall: r14c.report.status }));
+
+  /* F34 - no HTTP answer at all (an HTTP/2 reset on a headless client, a tarpit). */
+  const H2 = "page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at ";
+  const reset = scriptedChromium({ site: (u) => ({ throws: H2 + u }) });
+  const r15 = await captureWithBrowser(S, opts({ chromium: reset.chromium, productUrls: [1, 2, 3, 4, 5, 6].map((i) => P(`/p/${i}`)) }));
+  check("§4.15 two navigations with no answer in a row, nothing opened -> stop, UNREACHABLE, errors[0] the first error (was: all 6 asked, 'ok')",
+    r15.report.status === "unreachable" && reset.rec.gotos.length === 2 && r15.report.errors[0].includes("ERR_HTTP2_PROTOCOL_ERROR") &&
+    r15.report.errors[0].startsWith(P("/p/1")) && r15.report.blocked.count === 0, JSON.stringify({ gotos: reset.rec.gotos.length, report: r15.report }));
+  const one15 = scriptedChromium({ site: (u) => ({ throws: H2 + u }) });
+  const r15b = await captureWithBrowser(S, opts({ chromium: one15.chromium, productUrls: [P("/p/1")] }));
+  const blip = scriptedChromium({ site: (u) => u.endsWith("/p/1") ? { html: INLINE("Tee") } : { throws: H2 + u } });
+  const r15c = await captureWithBrowser(S, opts({ chromium: blip.chromium, productUrls: [1, 2, 3, 4].map((i) => P(`/p/${i}`)) }));
+  const mixed = scriptedChromium({ site: (u) => u.endsWith("/p/1") ? { status: 403, html: "<html><body>no</body></html>" } : { throws: H2 + u } });
+  const r15d = await captureWithBrowser(S, opts({ chromium: mixed.chromium, productUrls: [1, 2, 3, 4].map((i) => P(`/p/${i}`)) }));
+  check("§4.15b one unanswered page with nothing opened is UNREACHABLE; after a page opened failures do not stop the run; a refusal outranks it (BLOCKED)",
+    r15b.report.status === "unreachable" && r15c.report.status === "ok" && blip.rec.gotos.length === 4 &&
+    r15d.report.status === "blocked" && mixed.rec.gotos.length === 3,
+    JSON.stringify({ single: r15b.report.status, blip: [r15c.report.status, blip.rec.gotos.length], mixed: [r15d.report.status, mixed.rec.gotos.length] }));
+
+  /* F35 - the GUIDE's own request refused, the product pages served. */
+  const TWO_TRIGGERS = [{ id: "pt0", label: "Size guide", tag: "BUTTON", href: "" }, { id: "pt1", label: "Size chart", tag: "BUTTON", href: "" }];
+  const SIZECHART = P("/ajax/Product-SizeChart?pid=1");
+  const refuser = (onClick, extra = {}) => scriptedChromium({
+    site: () => ({ html: "<html><head><title>Tee</title></head><body><h1>Tee</h1></body></html>", onClick, ...extra }),
+    evaluate: (kind) => kind === "triggers" ? TWO_TRIGGERS.map((t) => ({ ...t })) : undefined,
+  });
+  const xhr403 = refuser([{ url: SIZECHART, type: "xhr", status: 403, html: "<html><body>Access Denied</body></html>" }]);
+  const r16 = await captureWithBrowser(S, opts({ chromium: xhr403.chromium, productUrls: [P("/products/a"), P("/products/b")] }));
+  check("§4.16 a 403 answering the guide's own XHR is a refusal: counted, no further guide clicked on the store, nothing read -> BLOCKED (was: asked on every trigger of every page, 'ok')",
+    r16.report.status === "blocked" && xhr403.rec.clicks === 1 && r16.report.blocked.count === 1 &&
+    /Product-SizeChart.*HTTP 403/.test(r16.report.blocked.examples[0]) && xhr403.rec.gotos.length === 2,
+    JSON.stringify({ clicks: xhr403.rec.clicks, gotos: xhr403.rec.gotos.length, report: r16.report }));
+  const challenge = refuser([{ url: SIZECHART, type: "fetch", contentType: "text/html",
+    html: '<html><head></head><body><script src="/_Incapsula_Resource?SWJIYLWA=1"></script></body></html>' }]);
+  const r16b = await captureWithBrowser(S, opts({ chromium: challenge.chromium, productUrls: [P("/products/a")] }));
+  const notGuide = refuser([{ url: "https://cdn.sizeapp.example.net/chart.json", type: "xhr", status: 403, html: "no" }],
+    { responses: [{ url: P("/api/recommendations"), type: "xhr", status: 429, html: "slow down" }] });
+  const r16c = await captureWithBrowser(S, opts({ chromium: notGuide.chromium, productUrls: [P("/products/a")] }));
+  check("§4.16b a challenge body is a refusal too; a 429 while the page LOADS (no guide clicked) or a 403 from another host is not the store refusing the guide",
+    r16b.report.status === "blocked" && challenge.rec.clicks === 1 &&
+    r16c.report.status === "ok" && r16c.report.blocked.count === 0 && notGuide.rec.clicks === 2,
+    JSON.stringify({ challenge: [r16b.report.status, challenge.rec.clicks], other: [r16c.report.status, r16c.report.blocked, notGuide.rec.clicks] }));
+  /* The refusal window is the guide's own: from a click to the read of what it opened. A
+     recommendations call refused on the store's host AFTER that read (here: on the Escape that
+     closes the guide) is the page's business, not the guide's. */
+  const afterRead = refuser([], { onEscape: [{ url: P("/api/recommendations"), type: "xhr", status: 403, html: "no" }] });
+  const r16d = await captureWithBrowser(S, opts({ chromium: afterRead.chromium, productUrls: [P("/products/a")] }));
+  check("§4.16c a 403 on the store's host after the guide was read (an unrelated xhr) is not the guide refused - both guides clicked, 'ok' (was: BLOCKED, the second guide skipped)",
+    r16d.report.status === "ok" && r16d.report.blocked.count === 0 && afterRead.rec.clicks === 2,
+    JSON.stringify({ clicks: afterRead.rec.clicks, report: r16d.report }));
+  /* A guide LINK whose page the store refuses (the navigation itself, or a challenge page) is
+     the guide refused; a challenge on ANOTHER host's sizing page is not the store refusing us. */
+  const CHALLENGE = '<html><head></head><body><script src="/_Incapsula_Resource?SWJIYLWA=1"></script></body></html>';
+  const linkTo = (to, page) => scriptedChromium({
+    site: (u) => u === to ? page : { html: "<html><head><title>Tee</title></head><body><h1>Tee</h1></body></html>", clickNav: { pt1: to } },
+    evaluate: (kind, u) => kind === "triggers" && u !== to
+      ? [{ id: "pt0", label: "Size guide", tag: "BUTTON", href: "" }, { id: "pt1", label: "Size chart", tag: "A", href: to }] : undefined,
+  });
+  const nav403 = linkTo(P("/pages/size-chart"), { status: 403, html: "<html><body>Access Denied</body></html>",
+    responses: [{ url: P("/pages/size-chart"), nav: true, status: 403 }] });
+  const r16e = await captureWithBrowser(S, opts({ chromium: nav403.chromium, productUrls: [P("/products/a"), P("/products/b")] }));
+  const navChal = linkTo(P("/pages/size-chart"), { html: CHALLENGE, responses: [{ url: P("/pages/size-chart"), nav: true }] });
+  const r16f = await captureWithBrowser(S, opts({ chromium: navChal.chromium, productUrls: [P("/products/a")] }));
+  const offHost = linkTo("https://sizing.example.net/guide", { html: CHALLENGE, responses: [{ url: "https://sizing.example.net/guide", nav: true }] });
+  const r16g = await captureWithBrowser(S, opts({ chromium: offHost.chromium, productUrls: [P("/products/a")] }));
+  check("§4.16d a guide link the store answers 403, or with a challenge page, is the guide refused (BLOCKED, page b's guides never clicked); a challenge on another host's sizing page is not (was: BLOCKED)",
+    r16e.report.status === "blocked" && r16e.report.blocked.count === 1 && /size-chart \(guide request: HTTP 403\)/.test(r16e.report.blocked.examples[0]) &&
+    nav403.rec.clicks === 2 && nav403.rec.gotos.length === 2 &&
+    r16f.report.status === "blocked" && /bot challenge/.test(r16f.report.blocked.examples[0]) &&
+    r16g.report.status === "ok" && r16g.report.blocked.count === 0,
+    JSON.stringify({ nav403: [r16e.report.status, r16e.report.blocked, nav403.rec.clicks, nav403.rec.gotos.length], chal: r16f.report.blocked, off: [r16g.report.status, r16g.report.blocked] }));
+
+  /* F4 - the product page's own document is not a size payload. */
+  const DL = `<html><head><title>High Waist Mom Jeans</title></head><body><h1>High Waist Mom Jeans</h1><p>Free shipping</p>
+    <script>dataLayer.push({"item_name":"High Waist Mom Jeans","size":"28"})</script></body></html>`;
+  const docOnly = scriptedChromium({ site: (u) => ({ html: DL, responses: [{ url: u, nav: true, html: DL }] }) });
+  const r17 = await captureWithBrowser(S, opts({ chromium: docOnly.chromium, productUrls: [P("/products/mom-jeans")] }));
+  const asFetch = scriptedChromium({ site: (u) => ({ html: DL, responses: [{ url: u + ".js", type: "fetch", html: DL }] }) });
+  const r17b = await captureWithBrowser(S, opts({ chromium: asFetch.chromium, productUrls: [P("/products/mom-jeans")] }));
+  check("§4.17 the PDP's own document (a dataLayer \"size\" + 'Waist') is not a size payload (was: 1 - 'JS GUIDE NOT OPENED' on a store with no guide); the same body fetched still is",
+    looksLikeSizePayload(DL) && r17.report.network_payloads === 0 && r17b.report.network_payloads === 1,
+    JSON.stringify({ doc: r17.report.network_payloads, fetch: r17b.report.network_payloads }));
+
+  /* F3 - a guide pre-rendered hidden in the DOM (Dawn) on a JEANS page. */
+  const JEANS = (body) => `<html><head><title>Slim Fit Jeans</title></head><body><h1>Slim Fit Jeans</h1>${body}</body></html>`;
+  /* data-pear-hidden is what the in-page MARK_HIDDEN_GRIDS leaves on a table a shopper could
+     not see at page read (no CSS here to compute it; §5.15 runs the real script). */
+  const HIDDEN_GUIDE = JEANS(`<div class="product-popup-modal" style="visibility:hidden"><h2>Size guide</h2>${MEN_TABLE.replace("<table>", "<table data-pear-hidden>")}</div>`);
+  const INLINE_CHART = JEANS(`<h2>Size guide</h2>${MEN_TABLE}<div role="dialog"></div>`);
+  const LEGS = `<table><tr><th>Size</th><th>Waist (cm)</th><th>Hips (cm)</th></tr><tr><td>28</td><td>71-73</td><td>89-91</td></tr><tr><td>30</td><td>76-78</td><td>94-96</td></tr><tr><td>32</td><td>81-83</td><td>99-101</td></tr></table>`;
+  const VISIBLE_DRAWER = JEANS(`<div class="product-info-drawer"><h2>Size guide</h2>${LEGS}</div>`);
+  const opens = (html) => scriptedChromium({ site: () => ({ html }),
+    evaluate: (kind) => kind === "triggers" ? [{ id: "pt0", label: "Size guide", tag: "BUTTON", href: "" }] : undefined });
+  const r18 = await captureWithBrowser(S, opts({ chromium: opens(HIDDEN_GUIDE).chromium, productUrls: [P("/products/slim-jeans")] }));
+  const r18b = await captureWithBrowser(S, opts({ chromium: opens(INLINE_CHART).chromium, productUrls: [P("/products/slim-jeans")] }));
+  const t18 = (r) => r.found.map((f) => [f.source, f.chart.classification.garmentType]);
+  check("§4.18 a hidden pre-rendered guide the click OPENED is typed by the guide (tops), not the product title (was: 'jeans' at 0.65, never replaced)",
+    r18.found.length === 1 && r18.found[0].source === "browser_modal" && r18.found[0].chart.classification.garmentType === "tops",
+    JSON.stringify(t18(r18)));
+  check("§4.18b ...while a chart rendered visibly IN the product page keeps the product's context (as static inline_table)",
+    r18b.found.length === 1 && r18b.found[0].source === "browser_page" && r18b.found[0].chart.classification.garmentType === "jeans",
+    JSON.stringify(t18(r18b)));
+  const r18c = await captureWithBrowser(S, opts({ chromium: opens(VISIBLE_DRAWER).chromium, productUrls: [P("/products/slim-jeans")] }));
+  check("§4.18c ...also when that visible chart sits in a container whose class says 'drawer' - a click re-reads the whole page, and that is not the click opening it (was: browser_modal 'bottoms' off the columns)",
+    r18c.found.length === 1 && r18c.found[0].source === "browser_page" && r18c.found[0].chart.classification.garmentType === "jeans",
+    JSON.stringify(t18(r18c)));
+  const snaps18 = buildRecords([...r18.found, ...r18c.found], "shop.example.com").map((r) => r.raw_snapshot || "");
+  check("§4.18d the in-page hidden marker never reaches a saved snapshot",
+    snaps18.length === 2 && snaps18.every((x) => x.includes("<table") && !x.includes("data-pear-hidden")), JSON.stringify(snaps18.map((x) => x.slice(0, 40))));
+
+  /* F1 - a renderer that never yields. */
+  const NEVER = new Promise(() => {});
+  const spin = scriptedChromium({
+    site: (u) => u.endsWith("/stuck-read") ? { read: (n) => n >= 2 ? NEVER : "<html><head><title>x</title></head><body><h1>x</h1></body></html>" }
+      : u.endsWith("/stuck-eval") ? { html: INLINE("Spinning tee") } : { html: INLINE("Good tee") },
+    evaluate: (kind, u) => kind === "triggers" && u.endsWith("/stuck-eval") ? NEVER : undefined,
+  });
+  const r19 = await Promise.race([
+    captureWithBrowser(S, opts({ chromium: spin.chromium, pageOpTimeoutMs: 50, productUrls: [P("/stuck-read"), P("/stuck-eval"), P("/good")] })),
+    new Promise((r) => setTimeout(() => r("HANG"), 5000)),
+  ]);
+  check("§4.19 a page whose renderer never answers is given up, the next URL opens in a FRESH context, Chromium is closed (was: the run hung forever)",
+    r19 !== "HANG" && spin.rec.gotos.length === 3 && spin.rec.contexts === 3 && spin.rec.closed &&
+    r19.report.pages_failed === 1 && r19.report.pages_opened === 2 &&
+    r19.report.errors.filter((e) => /stopped answering/.test(e)).length === 2 && r19.found.some((f) => f.productUrl === P("/good")),
+    r19 === "HANG" ? "HANG" : JSON.stringify({ gotos: spin.rec.gotos, contexts: spin.rec.contexts, report: r19.report }));
+  /* ...and NOTHING is started on it afterwards. A call started on a stuck page settles only
+     when its context is closed - with a rejection nothing handles, which kills Node (exit 1:
+     the static charts and the y/n lost, as surely as the hang). Here the page stalls on the
+     first REMEMBER script; every later in-page call would reject once its context closes. */
+  const unhandled = [];
+  const onUnhandled = (e) => unhandled.push(String((e && e.message) || e));
+  process.on("unhandledRejection", onUnhandled);
+  let stalled = false, startedAfter = 0;
+  const CLOSED = () => new Promise((_, rej) => setTimeout(() => rej(new Error("page.evaluate: Target page, context or browser has been closed")), 5));
+  const stall = scriptedChromium({
+    site: (u) => u.endsWith("/stall") ? { read: (n) => { if (stalled) { startedAfter++; return CLOSED(); } return INLINE("Stall tee").replace(MEN_TABLE, ""); } }
+      : { html: INLINE("Good tee") },
+    evaluate: (kind, u) => {
+      if (!u.endsWith("/stall")) return undefined;
+      if (kind === "triggers") return [{ id: "pt0", label: "Size guide", tag: "BUTTON", href: "" }];
+      if (stalled) { startedAfter++; return CLOSED(); }
+      if (kind === "remember") { stalled = true; return NEVER; }
+      return undefined;
+    },
+  });
+  const r19b = await Promise.race([
+    captureWithBrowser(S, opts({ chromium: stall.chromium, pageOpTimeoutMs: 50, productUrls: [P("/stall"), P("/good")] })),
+    new Promise((r) => setTimeout(() => r("HANG"), 5000)),
+  ]);
+  await new Promise((r) => setTimeout(r, 50));   // any rejection a stray call left behind has fired by now
+  process.off("unhandledRejection", onUnhandled);
+  check("§4.19b once a page stops answering no further in-page call is started on it - no unhandled rejection when its context closes (was: Node killed, exit 1)",
+    r19b !== "HANG" && startedAfter === 0 && unhandled.length === 0 && r19b.report.pages_opened === 2 &&
+    r19b.report.errors.some((e) => /stall: .*stopped answering/.test(e)) && r19b.found.some((f) => f.productUrl === P("/good")),
+    r19b === "HANG" ? "HANG" : JSON.stringify({ startedAfter, unhandled, report: r19b.report }));
+
+  /* F2 - triggers that navigate: the modal button first, the links last, each link paced like
+     any navigation (before the click and before the goBack), and the marks the goBack wiped
+     re-made - here they come back under NEW ids, so a stale id clicks nothing. */
+  let markRun = 0;
+  const LINKS = scriptedChromium({
+    site: (u) => /\/pages\//.test(u) ? { html: "<html><head><title>Fit</title></head><body><p>Prose.</p></body></html>" }
+      : { html: "<html><head><title>Tee</title></head><body><h1>Tee</h1></body></html>", clickNav: { pt0: P("/pages/fit-guide"), pt1: P("/pages/fit-guide-2"), pt7: P("/pages/fit-guide-2") } },
+    evaluate: (kind, u) => {
+      if (kind !== "triggers" || /\/pages\//.test(u)) return undefined;
+      return ++markRun === 1
+        ? [{ id: "pt0", label: "Size guide", tag: "A", href: "/pages/fit-guide" }, { id: "pt1", label: "Sizing help", tag: "A", href: "/pages/fit-guide-2" }, { id: "pt2", label: "Size chart", tag: "BUTTON", href: "" }]
+        : [{ id: "pt9", label: "Size chart", tag: "BUTTON", href: "" }, { id: "pt8", label: "Size guide", tag: "A", href: "/pages/fit-guide" }, { id: "pt7", label: "Sizing help", tag: "A", href: "/pages/fit-guide-2" }];
+    },
+  });
+  const DELAY = 60;
+  const r20 = await captureWithBrowser(S, opts({ chromium: LINKS.chromium, delayMs: DELAY, productUrls: [P("/products/a")] }));
+  const ev = LINKS.rec.events;
+  const clicks20 = ev.filter((e) => e.ev === "click").map((e) => e.id);
+  const gap = (i) => ev[i].t - ev[i - 1].t;
+  const paced = ev.every((e, i) => i === 0 || (e.ev === "click" && e.id === "pt2") || gap(i) >= DELAY - 5);
+  check("§4.20 the modal button is clicked before the guide links, every link is found again by its NEW id after the goBack, and each link click and goBack waits the store's pause",
+    JSON.stringify(clicks20) === JSON.stringify(["pt2", "pt0", "pt7"]) && r20.report.triggers_clicked === 3 &&
+    ev.filter((e) => e.ev === "goBack").length === 2 && paced,
+    JSON.stringify({ events: ev.map((e, i) => [e.ev, e.id || "", i ? gap(i) : 0]), report: r20.report }));
 }
 
 console.log("\n── §5 real Chromium against a local fixture store ──");
 {
-  let hits403 = 0, cartHits = 0, pageTabHits = 0;
+  let hits403 = 0, cartHits = 0, pageTabHits = 0, fitGuideHits = 0, sizeChartHits = 0;
   /* <body class="modal-open"> is what Bootstrap sets while any modal is open, and the cart
      button's "hidden-tablet" class contains "tab": the page-wide trap MARK_TABS once fell
      into (the cart POSTed). The cart is a fetch the SERVER counts - the page's own title
@@ -368,7 +653,45 @@ console.log("\n── §5 real Chromium against a local fixture store ──");
     <div class="product-popup-modal" id="pm" role="dialog"><h2>Size guide</h2>${CONVERSION}</div>
     <script>document.getElementById('sg').onclick = () => document.getElementById('pm').setAttribute('open', '');
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('pm').removeAttribute('open'); });</script></body></html>`;
+  /* F2: a guide LINK to a prose page (and a second one), then the real guide - a button
+     whose modal is filled by JS on click (nothing to read before it). Clicking a link first
+     reloaded the page on goBack and wiped every later trigger's mark. */
+  const LINK_FIRST = `<!doctype html><html lang="en"><head><title>Linen Shirt</title></head><body><h1>Linen Shirt</h1>
+    <a href="/pages/fit-guide">Size guide</a> <a href="/pages/fit-guide-2">Sizing help</a>
+    <button id="sg" type="button">Size chart</button>
+    <script>document.getElementById('sg').onclick = () => { const d = document.createElement('div'); d.setAttribute('role', 'dialog');
+      d.innerHTML = ${JSON.stringify(`<h2>Size chart</h2><h3>נשים</h3>${WOMEN_TABLE}`)}; document.body.appendChild(d); };</script></body></html>`;
+  /* F4: no guide at all - a dataLayer "size" and "Waist" in the title. */
+  const DATALAYER = `<!doctype html><html lang="en"><head><title>High Waist Mom Jeans</title></head><body><h1>High Waist Mom Jeans</h1>
+    <p>Free shipping</p><script>window.dataLayer = [{"item_name":"High Waist Mom Jeans","size":"28"}];</script></body></html>`;
+  /* F35: the product page is served, the guide's own request is refused (adidas). */
+  const XHR403 = `<!doctype html><html lang="en"><head><title>Run Tee</title></head><body><h1>Run Tee</h1>
+    <button class="sg" type="button">Size guide</button><button class="sg" type="button">Size chart</button>
+    <script>for (const b of document.querySelectorAll('.sg')) b.onclick = () => fetch('/ajax/Product-SizeChart?pid=1').catch(() => {});</script></body></html>`;
+  /* F1: a third-party script that spins the main thread after load. */
+  const SPIN = `<!doctype html><html lang="en"><head><title>Spin Tee</title></head><body><h1>Spin Tee</h1>
+    <script>setTimeout(() => { for (;;) {} }, 300);</script></body></html>`;
+  /* F1: the page answers until a guide TAB is clicked, whose handler spins - the stall lands
+     mid-guide, with more in-page calls still to come on that page. */
+  const SPIN_TAB = `<!doctype html><html lang="en"><head><title>Spin Tab Tee</title></head><body><h1>Spin Tab Tee</h1>
+    <button id="sg" type="button">Size guide</button>
+    <script>document.getElementById('sg').onclick = () => { const d = document.createElement('div'); d.setAttribute('role', 'dialog');
+      d.innerHTML = '<h2>Size guide</h2><div class="tabs"><button role="tab" id="t1">Men</button></div>'; document.body.appendChild(d);
+      document.getElementById('t1').onclick = () => { for (;;) {} }; };</script></body></html>`;
+  /* F3: on a JEANS page, a chest+waist guide pre-rendered hidden (Dawn) - opened, it is typed
+     by its columns; and a chart SHOWN in the page inside a "drawer" container next to an inert
+     guide button - it keeps the product's context. */
+  const DAWN_JEANS = `<!doctype html><html lang="en"><head><title>Slim Fit Jeans</title><style>
+    .product-popup-modal{position:fixed;inset:0;opacity:0;visibility:hidden;background:#fff}
+    .product-popup-modal[open]{opacity:1;visibility:visible}</style></head><body><h1>Slim Fit Jeans</h1>
+    <button id="sg" type="button">Size guide</button>
+    <div class="product-popup-modal" id="pm" role="dialog"><h2>Size guide</h2>${MEN_TABLE}</div>
+    <script>document.getElementById('sg').onclick = () => document.getElementById('pm').setAttribute('open', '');</script></body></html>`;
+  const DRAWER_JEANS = `<!doctype html><html lang="en"><head><title>Slim Fit Jeans</title></head><body><h1>Slim Fit Jeans</h1>
+    <div class="product-info-drawer"><h2>Size guide</h2>${MEN_PANTS}</div><button type="button">Size chart</button></body></html>`;
   const server = createServer((req, res) => {
+    if (req.url.startsWith("/ajax/Product-SizeChart")) { sizeChartHits++; res.writeHead(403, { "content-type": "text/html" }); return res.end("<html><body>Access Denied</body></html>"); }
+    if (req.url.startsWith("/pages/fit-guide")) { fitGuideHits++; res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end("<!doctype html><html><head><title>Fit guide</title></head><body><h1>How our clothes fit</h1><p>Prose only.</p></body></html>"); }
     if (req.url.startsWith("/blocked")) { hits403++; res.writeHead(403, { "content-type": "text/html" }); return res.end("<html><head><title>Forbidden</title></head><body>no</body></html>"); }
     if (req.url.startsWith("/cart/")) { cartHits++; res.writeHead(200, { "content-type": "application/json" }); return res.end("{}"); }
     if (req.url === "/page-tab") { pageTabHits++; res.writeHead(200, { "content-type": "application/json" }); return res.end("{}"); }
@@ -382,6 +705,13 @@ console.log("\n── §5 real Chromium against a local fixture store ──");
     if (req.url === "/products/conversion") return res.end(CONV_PAGE);
     if (req.url === "/products/reopen") return res.end(REOPEN);
     if (req.url === "/products/dawn") return res.end(DAWN);
+    if (req.url === "/products/link-first") return res.end(LINK_FIRST);
+    if (req.url === "/products/datalayer") return res.end(DATALAYER);
+    if (req.url === "/products/xhr403") return res.end(XHR403);
+    if (req.url === "/products/spin") return res.end(SPIN);
+    if (req.url === "/products/spin-tab") return res.end(SPIN_TAB);
+    if (req.url === "/products/dawn-jeans") return res.end(DAWN_JEANS);
+    if (req.url === "/products/drawer-jeans") return res.end(DRAWER_JEANS);
     res.end(req.url === "/products/b" ? PDP("חולצה B", "<span>טבלת</span> <span>מידות</span>") : PDP("חולצה A", "מדריך מידות"));
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -438,6 +768,52 @@ console.log("\n── §5 real Chromium against a local fixture store ──");
     check("§5.10 a guide hidden by visibility:hidden + opacity:0 (Dawn's popup - it keeps its box) that the click shows IS an opened guide",
       dawn.report.triggers_clicked === 1 && dawn.report.unmeasured_guides === 1 && dawn.report.unmeasured_examples.includes(`${base}/products/dawn`),
       JSON.stringify(dawn.report));
+
+    const lf = await captureWithBrowser(base, { productUrls: [`${base}/products/link-first`], delayMs: 0, log: () => {}, JSDOM });
+    check("§5.11 two guide LINKS before the modal button: the button is still opened (links go last, marks re-made after goBack) - every trigger clicked, the women's chart read",
+      lf.report.triggers_clicked === 3 && fitGuideHits === 2 &&
+      lf.found.some((f) => f.source === "browser_modal" && f.chart.classification.gender === "women"),
+      JSON.stringify({ report: lf.report, fitGuideHits, found: lf.found.map((f) => [f.source, f.chart.classification.gender]) }));
+
+    const dl = await captureWithBrowser(base, { productUrls: [`${base}/products/datalayer`], delayMs: 0, log: () => {}, JSDOM });
+    check("§5.12 a product page with no guide (dataLayer \"size\", 'Waist' in its title) has NO size payload - its own document is not one",
+      dl.report.pages_opened === 1 && dl.report.triggers_clicked === 0 && dl.report.network_payloads === 0, JSON.stringify(dl.report));
+
+    const x4 = await captureWithBrowser(base, { productUrls: [`${base}/products/xhr403`, `${base}/products/xhr403?variant=2`, `${base}/products/b`], delayMs: 0, log: () => {}, JSDOM });
+    check("§5.13 the guide's own fetch answered 403: asked ONCE, no further guide clicked, reported BLOCKED (was: once per trigger per page, 'ok')",
+      x4.report.status === "blocked" && sizeChartHits === 1 && x4.report.triggers_clicked === 1 && x4.report.pages_opened === 2 &&
+      /Product-SizeChart/.test(x4.report.blocked.examples[0]), JSON.stringify({ sizeChartHits, report: x4.report }));
+
+    const t0 = Date.now();
+    const sp = await Promise.race([
+      captureWithBrowser(base, { productUrls: [`${base}/products/spin`, `${base}/products/noop`], delayMs: 0, log: () => {}, JSDOM, pageOpTimeoutMs: 2000 }),
+      new Promise((r) => setTimeout(() => r("HANG"), 40000)),
+    ]);
+    check("§5.14 a page whose script spins the main thread is given up after the deadline; the next page opens and the run ends (was: hung forever)",
+      sp !== "HANG" && sp.report.pages_opened === 1 && sp.report.pages_failed === 1 && sp.report.triggers_clicked === 1 &&
+      sp.report.errors.some((e) => /spin: .*stopped answering/.test(e)),
+      sp === "HANG" ? "HANG after " + (Date.now() - t0) + "ms" : JSON.stringify(sp.report));
+
+    const gt = await captureWithBrowser(base, { productUrls: [`${base}/products/dawn-jeans`, `${base}/products/drawer-jeans`], delayMs: 0, log: () => {}, JSDOM });
+    const at = (u) => gt.found.filter((f) => f.productUrl === `${base}/products/${u}`).map((f) => [f.source, f.chart.classification.garmentType]);
+    check("§5.15 on a JEANS page a guide pre-rendered hidden is typed as the guide once opened (tops); a chart shown in a 'drawer' container keeps the product's context (jeans)",
+      JSON.stringify(at("dawn-jeans")) === JSON.stringify([["browser_modal", "tops"]]) &&
+      JSON.stringify(at("drawer-jeans")) === JSON.stringify([["browser_page", "jeans"]]) && gt.report.triggers_clicked >= 2,
+      JSON.stringify({ dawn: at("dawn-jeans"), drawer: at("drawer-jeans"), report: gt.report }));
+
+    const unhandled = [];
+    const onUnhandled = (e) => unhandled.push(String((e && e.message) || e));
+    process.on("unhandledRejection", onUnhandled);
+    const st = await Promise.race([
+      captureWithBrowser(base, { productUrls: [`${base}/products/spin-tab`, `${base}/products/noop`], delayMs: 0, log: () => {}, JSDOM, pageOpTimeoutMs: 1500 }),
+      new Promise((r) => setTimeout(() => r("HANG"), 60000)),
+    ]);
+    await new Promise((r) => setTimeout(r, 1000));   // a stray call rejects when its context closes
+    process.off("unhandledRejection", onUnhandled);
+    check("§5.16 a guide tab whose handler spins: the page is given up mid-guide, nothing more is started on it, the next page opens - no unhandled rejection (was: Node killed, exit 1)",
+      st !== "HANG" && unhandled.length === 0 && st.report.pages_opened === 2 &&
+      st.report.errors.some((e) => /spin-tab: .*stopped answering/.test(e)),
+      st === "HANG" ? "HANG" : JSON.stringify({ unhandled, report: st.report }));
   }
   server.close();
 }

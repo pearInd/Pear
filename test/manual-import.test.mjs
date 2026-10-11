@@ -5,14 +5,19 @@
       manual_url / manual_html / manual_image, store-wide.
       A URL is routed by what it answered: image/*, an octet-stream download or an untyped
       image file to the image reader, a PDF to the "screenshot it" note, a page to the
-      parser. A guide saved OPEN over a product page is typed by the guide, not the page.
+      parser. A guide saved OPEN over a product page is typed by the guide, not the page -
+      a real dialog always; a class-only popup unless the page's own <h1> names the guide.
+      A saved page keeps the address it was saved from (§1.8), and a "Webpage, Single File"
+      (.mhtml) save is decoded - quoted-printable, base64, its charset - or refused (§1.9).
    §2 OVERRIDES LABEL, THEY NEVER VALIDATE. --gender/--age/--type replace the labels of
       the charts --only picked (and are checked against the table's enums); they cannot
       turn a price table or an implausible chart into a record. Every table the parser
       accepted has ONE number, the same with or without flags (untyped tables too, named
       in a note); --only picks by it before the flags label; a collision is named.
-   §3 INPUT ERRORS are errors (no host, two sources, an unknown enum, a bad --only, an
-      image URL with no --host, a bot-protection challenge page), not guesses.
+   §3 INPUT ERRORS are errors (no host, a --host that is not a hostname, two sources, an
+      unknown enum, a bad --only, an image URL with no --host), not guesses; a refusal
+      (403/429, a challenge page) is BLOCKED with the manual way in, asked once.
+   §4 --DRY-RUN NEVER SAVES, even with --yes.
    ============================================================================= */
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -164,6 +169,155 @@ console.log("\n── §1.7 a guide saved OPEN over a product page ──");
   const dp = await importChart({ host: "terminalx.com", htmlFile: dpFile, JSDOM });
   check("§1.7.8 ...and a guide dialog over a product page on that theme is still the guide (tops, not the page's jeans)",
     dp.records.length === 1 && dp.records[0].garment_type === "tops" && dp.records[0].gender === "women", JSON.stringify(dp.records.map((r) => [r.gender, r.garment_type])));
+  /* A REAL dialog carrying the page's only <h1> ("מדריך מידות") over a product page whose
+     title is not an <h1>: "holds every <h1>" read the dialog as the page, and the product's
+     title typed the guide's chest+waist chart as women's JEANS at 0.85. A real dialog is the
+     guide whatever it holds - guideContainerOf()'s rule. */
+  const H1_DIALOG = `<html><head><title>מכנסי ג'ינס סלים - נשים</title></head><body>
+    <main><div class="product-name">מכנסי ג'ינס סלים</div></main>
+    <div role="dialog" aria-modal="true" class="size-guide-modal"><h1>מדריך מידות</h1>${TABLE_HE}</div></body></html>`;
+  const hdFile = join(dir, "h1-dialog.html"); writeFileSync(hdFile, H1_DIALOG);
+  const hd = await importChart({ host: "terminalx.com", htmlFile: hdFile, JSDOM });
+  const hdB = chartsFromHtml(H1_DIALOG, "https://terminalx.com/p/1", JSDOM, { source: "browser_modal" })[0].chart.classification;
+  check("§1.7.9 a real dialog holding the page's only <h1> is still the guide: women's tops, as the browser path reads it",
+    hd.records.length === 1 && hd.records[0].garment_type === "tops" && hd.records[0].gender === "women" &&
+    hdB.garmentType === hd.records[0].garment_type && hdB.gender === hd.records[0].gender,
+    JSON.stringify({ html: hd.records.map((r) => [r.gender, r.garment_type, r.confidence]), browser: [hdB.gender, hdB.garmentType] }));
+  /* A guide PAGE of its own whose table sits in a class-only popup wrapper inside <main>,
+     under the page's own <h1> naming the guide: that wrapper is not a dialog over another
+     page, so the title types it - as Phase 1 reads the same page (men's jeans). */
+  const POPUP_PAGE = `<html><head><title>Size guide</title></head><body><main><h1>Men's Jeans Size Guide</h1>
+    <div class="size-chart-popup-content">${JEANS}</div></main></body></html>`;
+  const ppFile = join(dir, "popup-page.html"); writeFileSync(ppFile, POPUP_PAGE);
+  const pp = await importChart({ host: "shop.example.com", htmlFile: ppFile, JSDOM });
+  const { extractAllSizeCharts: phase1 } = await import("../scanner/size-charts.js");
+  const p1 = phase1(new JSDOM(POPUP_PAGE, { url: "https://shop.example.com/" }).window.document, "https://shop.example.com/")[0].classification;
+  check("§1.7.10 a guide page whose table sits in a class-only popup wrapper under its own guide <h1>: men/jeans, as Phase 1 reads it",
+    pp.records.length === 1 && pp.records[0].gender === "men" && pp.records[0].garment_type === "jeans" &&
+    p1.gender === "men" && p1.garmentType === "jeans", JSON.stringify({ html: pp.records.map((r) => [r.gender, r.garment_type, r.confidence]), p1 }));
+  /* ...while the same markup on a PRODUCT page (its <h1> is the product, not a guide) is a
+     popup saved open: typed by the guide (tops), never by the product's title (jeans). */
+  const POPUP_PDP = `<html><head><title>Women's Slim Jeans</title></head><body><main><h1>Women's Slim Jeans</h1>
+    <div class="size-chart-popup-content">${UNLABELLED}</div></main></body></html>`;
+  const pdFile = join(dir, "popup-pdp.html"); writeFileSync(pdFile, POPUP_PDP);
+  const pd = await importChart({ host: "shop.example.com", htmlFile: pdFile, JSDOM });
+  check("§1.7.11 ...the same class-only popup open on a PRODUCT page is still the guide: women's tops, not jeans",
+    pd.records.length === 1 && pd.records[0].garment_type === "tops" && pd.records[0].gender === "women", JSON.stringify(pd.records.map((r) => [r.gender, r.garment_type])));
+}
+
+console.log("\n── §1.8 a saved page keeps the address it was saved from ──");
+{
+  /* Chrome's "Webpage, Complete" save writes the address it came from into the file. --html
+     read every page as https://<host>/, so a guide titled just "Size Guide" at
+     /pages/mens-jeans-size-guide was unknown/bottoms by file and men/jeans by URL. */
+  const Q = `<table><tr><th>Size</th><th>Waist</th><th>Hips</th></tr><tr><td>S</td><td>74-80</td><td>90-96</td></tr>
+    <tr><td>M</td><td>81-87</td><td>97-103</td></tr><tr><td>L</td><td>88-94</td><td>104-110</td></tr></table>`;
+  const page = `<html><head><title>Size Guide</title></head><body>${Q}</body></html>`;
+  const at = "https://www.shop.example.com/pages/mens-jeans-size-guide";
+  const saved = `<!DOCTYPE html>\n<!-- saved from url=(${String(at.length).padStart(4, "0")})${at} -->\n${page}`;
+  const sf = join(dir, "saved-from.html"); writeFileSync(sf, saved);
+  const byFile = await importChart({ host: "shop.example.com", htmlFile: sf, JSDOM });
+  const byUrl = await importChart({ url: at, fetchText: async (u) => ({ ok: true, status: 200, url: u, contentType: "text/html", text: page }), JSDOM });
+  const lab = (o) => JSON.stringify(o.records.map((r) => [r.gender, r.age_group, r.garment_type, r.confidence]));
+  check("§1.8.1 --html of a page saved from <store>/pages/mens-jeans-size-guide labels like --url of that address (men/jeans)",
+    byFile.records.length === 1 && byFile.records[0].garment_type === "jeans" && byFile.records[0].gender === "men" && lab(byFile) === lab(byUrl),
+    JSON.stringify({ file: lab(byFile), url: lab(byUrl) }));
+  check("§1.8.2 ...the rows are the file's and its source_url is still the file",
+    byFile.records[0] && byFile.records[0].source === "manual_html" && /^file:saved-from\.html$/.test(byFile.records[0].source_url) &&
+    JSON.stringify(byFile.records[0].rows) === JSON.stringify(byUrl.records[0].rows), byFile.records[0] && byFile.records[0].source_url);
+  const foreign = saved.replace(/www\.shop\.example\.com/, "other-store.example.org");
+  const ff = join(dir, "saved-from-other.html"); writeFileSync(ff, foreign);
+  const fo = await importChart({ host: "shop.example.com", htmlFile: ff, JSDOM });
+  check("§1.8.3 an address on ANOTHER host lends nothing (read as the store's root, as before)",
+    fo.records.length === 1 && fo.records[0].gender === "unknown" && fo.records[0].garment_type === "bottoms", lab(fo));
+}
+
+console.log("\n── §1.9 a \"Webpage, Single File\" (.mhtml) save ──");
+{
+  /* Chrome/Edge's Ctrl+S offers "Webpage, Single File" and remembers it. Blink writes the
+     page as a MIME message, its HTML part quoted-printable: every "=" is =3D, every non-ASCII
+     byte =XX, and a soft break "=\r\n" every 76 characters - inside a <td> or a <tr> as
+     often as not. Parsed raw, the shared parser dropped whichever rows or columns a break
+     landed in, and what was left still passed validation. */
+  const qp = (html, pad = 0) => {
+    const bytes = Buffer.from(" ".repeat(pad) + html, "utf8");
+    let out = "", line = "";
+    for (const b of bytes) {
+      if (b === 0x0a) { out += line + "\r\n"; line = ""; continue; }
+      const tok = (b >= 33 && b <= 126 && b !== 61) || b === 32 ? String.fromCharCode(b) : "=" + b.toString(16).toUpperCase().padStart(2, "0");
+      if (line.length + tok.length > 75) { out += line + "=\r\n"; line = ""; }
+      line += tok;
+    }
+    return out + line;
+  };
+  const B = "----MultipartBoundary--Xk3Lm9Qp----";
+  const mhtml = (part, { loc = "https://shop.example.com/pages/size-guide", cte = "quoted-printable", type = "text/html" } = {}) =>
+    `From: <Saved by Blink>\r\nSnapshot-Content-Location: ${loc}\r\nSubject: Size guide\r\nDate: Wed, 7 Oct 2026 09:00:00 -0000\r\n` +
+    `MIME-Version: 1.0\r\nContent-Type: multipart/related;\r\n\ttype="text/html";\r\n\tboundary="${B}"\r\n\r\n\r\n` +
+    `--${B}\r\nContent-Type: ${type}\r\nContent-ID: <frame-1@mhtml.blink>\r\nContent-Transfer-Encoding: ${cte}\r\nContent-Location: ${loc}\r\n\r\n` +
+    `${part}\r\n\r\n--${B}\r\nContent-Type: text/css\r\nContent-Transfer-Encoding: quoted-printable\r\nContent-Location: cid:css-1@mhtml.blink\r\n\r\n` +
+    `body { color: red; }\r\n\r\n--${B}--\r\n`;
+  const FOUR = `<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><title>Size guide</title></head><body><h2>Men</h2>` +
+    `<table class="size-table"><tr><th>Size</th><th>Chest</th><th>Waist</th></tr><tr><td>S</td><td>88–94</td><td>74–80</td></tr>` +
+    `<tr><td>M</td><td>95–101</td><td>81–87</td></tr><tr><td>L</td><td>102–108</td><td>88–94</td></tr><tr><td>XL</td><td>109–115</td><td>95–101</td></tr></table></body></html>`;
+  const plainF = join(dir, "four.html"); writeFileSync(plainF, FOUR);
+  const want = await importChart({ host: "shop.example.com", htmlFile: plainF, JSDOM });
+  const sig = (o) => JSON.stringify(o.records.map((r) => [r.gender, r.age_group, r.garment_type, r.rows]));
+  check("§1.9.0 control: the plain page is one men's tops chart, S-XL, chest+waist",
+    want.records.length === 1 && want.records[0].rows.length === 4 && want.records[0].rows.every((r) => r.body.chest && r.body.waist), sig(want));
+
+  /* By hand: a soft break INSIDE a <tr> (between two cells, and inside a cell's number),
+     =3D in the attributes, =E2=80=93 for the en dash of every range, and a Hebrew heading. */
+  const HAND = `<html><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3DUTF-8"><title>Size guide</title></he=\r\n` +
+    `ad><body><h2>=D7=92=D7=91=D7=A8=D7=99=D7=9D</h2><table class=3D"size-table"><tr><th>Size</th><th>Chest</th><th>Waist</th></tr>=\r\n` +
+    `<tr><td>S</td><td>88=E2=80=9394</td><td>74=E2=80=9380</td></tr><tr><td>M</td><td>95=E2=80=93=\r\n` +
+    `101</td><td>81=E2=80=9387</td></tr><tr><td>L</td><td>102=E2=80=93108</td>=\r\n<td>88=E2=80=9394</td></tr><tr><td>XL</td><td>109=E2=80=93115</td><td>95=E2=80=93101</td></tr></table></body></html>`;
+  const handF = join(dir, "hand.mhtml"); writeFileSync(handF, mhtml(HAND));
+  const hand = await importChart({ host: "shop.example.com", htmlFile: handF, JSDOM });
+  check("§1.9.1 a soft break inside a <tr> and a cell, =3D and =E2=80=93 escapes: decoded - four rows, chest+waist, the en-dash ranges read",
+    hand.records.length === 1 && hand.records[0].rows.length === 4 && JSON.stringify(hand.records[0].rows) === JSON.stringify(want.records[0].rows),
+    JSON.stringify({ recs: hand.records.map((r) => r.rows), notes: hand.notes }));
+  check("§1.9.2 ...the Hebrew heading (=D7=92...) decodes to UTF-8: גברים -> men",
+    hand.records[0] && hand.records[0].gender === "men", hand.records[0] && hand.records[0].gender);
+
+  /* Where the 76-column breaks fall moves with every byte before the table: 0-39 bytes of
+     padding put a break in every position of a row. Each must read exactly the plain page. */
+  const off = [];
+  for (let pad = 0; pad < 40; pad++) {
+    const f = join(dir, `shift-${pad}.mhtml`); writeFileSync(f, mhtml(qp(FOUR, pad)));
+    const r = await importChart({ host: "shop.example.com", htmlFile: f, JSDOM });
+    if (sig(r) !== sig(want)) off.push(pad + ":" + sig(r).slice(0, 80));
+  }
+  check("§1.9.3 the same page quoted-printable at 40 break offsets: every one reads exactly the plain page (no row or column lost)",
+    off.length === 0, off.join(" | "));
+
+  const b64F = join(dir, "b64.mht");
+  writeFileSync(b64F, mhtml(Buffer.from(FOUR, "utf8").toString("base64").replace(/.{76}/g, "$&\r\n"), { cte: "base64" }));
+  const b64 = await importChart({ host: "shop.example.com", htmlFile: b64F, JSDOM });
+  check("§1.9.4 a base64 HTML part (.mht) reads the same", sig(b64) === sig(want), sig(b64));
+
+  /* The page's own address rides in the MIME header: a guide titled just "Size Guide" at
+     /pages/mens-jeans-size-guide is labelled from it, as §1.8 does for "saved from url". */
+  const Q = `<html><head><title>Size Guide</title></head><body><table><tr><th>Size</th><th>Waist</th><th>Hips</th></tr><tr><td>S</td><td>74-80</td><td>90-96</td></tr>` +
+    `<tr><td>M</td><td>81-87</td><td>97-103</td></tr><tr><td>L</td><td>88-94</td><td>104-110</td></tr></table></body></html>`;
+  const locF = join(dir, "loc.mhtml"); writeFileSync(locF, mhtml(qp(Q), { loc: "https://shop.example.com/pages/mens-jeans-size-guide" }));
+  const loc = await importChart({ host: "shop.example.com", htmlFile: locF, JSDOM });
+  check("§1.9.5 Snapshot-Content-Location on the store's host is the page's address (men/jeans)",
+    loc.records.length === 1 && loc.records[0].gender === "men" && loc.records[0].garment_type === "jeans",
+    JSON.stringify(loc.records.map((r) => [r.gender, r.garment_type])));
+
+  /* What cannot be decoded is REFUSED, with the save that works - never parsed raw. */
+  const noHtmlF = join(dir, "nohtml.mhtml"); writeFileSync(noHtmlF, mhtml("body{}", { type: "text/css" }));
+  const m1 = await throwsMsg(() => importChart({ host: "shop.example.com", htmlFile: noHtmlF, JSDOM }));
+  check("§1.9.6 an .mhtml with no HTML part is refused, naming the save that keeps an opened guide (\"Webpage, Complete\")",
+    /Single File/.test(m1 || "") && /"Webpage, Complete"/.test(m1 || ""), m1);
+  const oddF = join(dir, "odd.mhtml"); writeFileSync(oddF, mhtml(qp(FOUR), { cte: "x-uuencode" }));
+  const m2 = await throwsMsg(() => importChart({ host: "shop.example.com", htmlFile: oddF, JSDOM }));
+  check("§1.9.7 ...and so is an encoding it does not decode (x-uuencode)",
+    /x-uuencode/.test(m2 || "") && /"Webpage, Complete"/.test(m2 || ""), m2);
+  const notMime = join(dir, "renamed.mhtml"); writeFileSync(notMime, FOUR);
+  const nm = await importChart({ host: "shop.example.com", htmlFile: notMime, JSDOM });
+  check("§1.9.8 a plain HTML file that only carries an .mhtml name is read as HTML", sig(nm) === sig(want), sig(nm));
 }
 
 console.log("\n── §2 overrides label, they never validate ──");
@@ -293,9 +447,35 @@ console.log("\n── §3 input errors are errors ──");
   check("§3.2 an unknown --type is refused", /--type must be one of/.test(await throwsMsg(() => validateOverrides({ garment_type: "shoes" }))));
   check("§3.3 no host and no URL -> error", /--host is required/.test(await throwsMsg(() => importChart({ htmlFile, JSDOM }))));
   check("§3.4 two sources at once -> error", /exactly one/.test(await throwsMsg(() => importChart({ host: "a.com", htmlFile, imageFile: "x.png", JSDOM }))));
-  const fetchFail = async () => ({ ok: false, status: 403, text: "" });
-  check("§3.5 a URL that refuses us -> error with the status, nothing imported",
-    /HTTP 403/.test(await throwsMsg(() => importChart({ url: "https://a.com/g", fetchText: fetchFail, JSDOM }))));
+  const fetchFail = async () => ({ ok: false, status: 404, text: "" });
+  check("§3.5 a URL that fails (404) -> error with the status, nothing imported",
+    /could not fetch https:\/\/a\.com\/g: HTTP 404/.test(await throwsMsg(() => importChart({ url: "https://a.com/g", fetchText: fetchFail, JSDOM })) || ""));
+  /* A REFUSAL is not a failed fetch: Cloudflare's managed challenge and Akamai's "Access
+     Denied" answer 403, a rate limit 429 (and Cloudflare now and then 503 with its
+     challenge). Only a 200 challenge was reported BLOCKED; these read "could not fetch:
+     HTTP 403" with no way in. Asked ONCE - a refusal is never retried. */
+  const CF_BODY = `<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script></body></html>`;
+  for (const [label, status, text] of [["403 (a challenge body)", 403, CF_BODY], ["403 (Access Denied)", 403, "<html><head><title>Access Denied</title></head><body>Reference #18</body></html>"],
+    ["429 (rate limit)", 429, ""], ["503 carrying a Cloudflare challenge", 503, CF_BODY]]) {
+    let asked = 0;
+    const refuse = async (u) => { asked++; return { ok: false, status, url: u, contentType: "text/html", text }; };
+    const m = await throwsMsg(() => importChart({ host: "adidas.co.il", url: "https://www.adidas.co.il/size-guide", fetchText: refuse, JSDOM }));
+    check(`§3.5b a URL answering ${label} -> BLOCKED with the manual way in (--html / --image), asked once, never retried`,
+      /^BLOCKED/.test(m || "") && /--html/.test(m) && /--image/.test(m) && /do not work around/.test(m) && asked === 1, JSON.stringify({ m, asked }));
+  }
+  const m429 = await throwsMsg(() => importChart({ host: "a.com", url: "https://a.com/g", fetchText: async (u) => ({ ok: false, status: 429, url: u, text: "" }), JSDOM }));
+  check("§3.5c ...naming what refused it (HTTP 429)", /refused us \(HTTP 429\)/.test(m429 || ""), m429);
+
+  /* A --host that IS given but is not a hostname was reported as "--host is required". */
+  for (const bad of ["חנות.co.il", "localhost", "foxcoil"]) {
+    const m = await throwsMsg(() => importChart({ host: bad, htmlFile, JSDOM }));
+    check(`§3.3b --host ${JSON.stringify(bad)} -> "not a valid store hostname", never "--host is required"`,
+      /is not a valid store hostname/.test(m || "") && m.includes(`"${bad}"`) && !/--host is required/.test(m || ""), m);
+  }
+  const idn = await throwsMsg(() => importChart({ host: "חנות.co.il", htmlFile, JSDOM }));
+  check("§3.3c ...an IDN is shown in the xn-- form the store key uses", /--host xn--[a-z0-9-]+\.co\.il/.test(idn || ""), idn);
+  const badWithUrl = await throwsMsg(() => importChart({ host: "foxcoil", url: "https://shop.example.com/size", fetchText: async () => { throw new Error("fetched"); }, JSDOM }));
+  check("§3.3d ...and with --url as well, nothing is fetched under a host that was refused", /not a valid store hostname/.test(badWithUrl || ""), badWithUrl);
 
   let read = 0;
   const countingReader = async () => { read++; return { outcome: "read", detail: "", found: [] }; };
@@ -351,6 +531,37 @@ console.log("\n── §3 input errors are errors ──");
   check("§3.10c an empty --type= -> exit 2 naming --type, never an unlabelled import",
     eqEmpty.status === 2 && /--type needs a value/.test(eqEmpty.stderr) && !/chart\(s\) to import/.test(eqEmpty.stdout),
     JSON.stringify({ status: eqEmpty.status, stderr: eqEmpty.stderr.slice(0, 200) }));
+
+  /* "Nothing importable" told the owner to add --gender/--age/--type - but every table the
+     parser accepts is either a record or a "#n" note now, so that line only printed when NO
+     table was accepted, where a label cannot help: a client-rendered guide saved closed. */
+  const shellFile = join(dir, "js-shell.html");
+  writeFileSync(shellFile, `<html><head><title>Size guide</title><script src="/apps/kiwi/sizing.js"></script></head><body><h1>Size guide</h1><div id="size-chart-root"></div></body></html>`);
+  const sh = spawnSync(process.execPath, [cli, "--dry-run", "--host", "shop.example.com", "--html", shellFile], { encoding: "utf8", timeout: 60000, env: noDb });
+  check("§3.11 nothing accepted -> the way in that can help (save the page with the guide OPEN / --image), never \"add --gender/--age/--type\"",
+    sh.status === 0 && /Nothing importable\./.test(sh.stdout) && !/add --gender\/--age\/--type/.test(sh.stdout) &&
+    /save the page with the guide open and use --html/.test(sh.stdout) && /screenshot the table and use --image/.test(sh.stdout),
+    JSON.stringify({ status: sh.status, stdout: sh.stdout.slice(0, 600) }));
+}
+
+console.log("\n── §4 --dry-run never saves ──");
+{
+  /* The CLI's save step is injectable (main(argv, { persist })), so the guard is tested
+     where it stands: with --yes, nothing else stands between a summary and a write. */
+  const { main } = await import("../scanner/import-chart.js");
+  const run = async (args) => {
+    const saves = [], lines = [], log = console.log;
+    console.log = (...a) => lines.push(a.join(" "));
+    try { await main(["node", "import-chart.js", "--host", "shop.example.com", "--html", htmlFile, ...args], { persist: async (out) => { saves.push(out); } }); }
+    finally { console.log = log; }
+    return { saves, out: lines.join("\n") };
+  };
+  const dry = await run(["--dry-run", "--yes"]);
+  check("§4.1 --dry-run --yes: the summary prints, the save is never called",
+    dry.saves.length === 0 && /1 chart\(s\) to import/.test(dry.out) && /Dry run - nothing written\./.test(dry.out), JSON.stringify(dry));
+  const wet = await run(["--yes"]);
+  check("§4.2 control: the same run without --dry-run reaches the save once, with the summarised records",
+    wet.saves.length === 1 && wet.saves[0].records.length === 1 && wet.saves[0].host === "shop.example.com", JSON.stringify({ saves: wet.saves.length }));
 }
 
 console.log("");

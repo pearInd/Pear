@@ -21,12 +21,28 @@ export function loadScannerEnv() {
   dotenv.config({ quiet: true });
 }
 
+/* The yes/no flags of both CLIs. They take no value: `--yes=no` used to split into `--yes`
+   and a stray "no", and flag("--yes") is only "is it there" - so it SAVED WITHOUT ASKING,
+   the opposite of what it says. An empty / true / 1 value is the bare flag; any other value
+   is a usage error (thrown before anything runs), never a set flag. The spaced form
+   (`--yes no`, `--dry-run off`) did the same and is refused the same way: a yes/no word
+   right after a yes/no flag can only be meant as its value. */
+export const BOOLEAN_FLAGS = ["--yes", "--dry-run", "--browser", "--no-browser", "--images", "--no-images"];
+
 /** The command line both CLIs read. `--only=1` and `--only 1` are the same flag: the
     equals form was once silently ignored, so `--only=1` imported every chart. */
 export function parseCliArgs(argv) {
   const args = argv.slice(2).flatMap((a) => {
     const m = /^(--[\w-]+)=([\s\S]*)$/.exec(a);
+    if (m && BOOLEAN_FLAGS.includes(m[1])) {
+      if (/^(?:|true|1)$/i.test(m[2])) return [m[1]];
+      throw new Error(`${m[1]} takes no value (got ${a}) - pass ${m[1]} alone, or leave it out`);
+    }
     return m ? [m[1], m[2]] : [a];
+  });
+  args.forEach((a, i) => {
+    if (BOOLEAN_FLAGS.includes(a) && /^(?:y(?:es)?|no?|true|false|on|off|0|1)$/i.test(args[i + 1] || ""))
+      throw new Error(`${a} takes no value (got ${a} ${args[i + 1]}) - pass ${a} alone, or leave it out`);
   });
   const flag = (f) => args.includes(f);
   const val = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; };
@@ -92,12 +108,26 @@ export function formatLive(live) {
 }
 
 /* Live serving is cached for 5 minutes (Cache-Control on the endpoint) and is
-   store-wide only; a product-scoped row is stored but not served in Phase 1. */
+   store-wide only; a product-scoped row is stored but not served in Phase 1.
+   A chart is LIVE when a served chart has its labels AND its numbers. Labels alone were
+   the first cut: a re-capture upserts onto the same key, the cache still serves the OLD
+   rows under those labels, and the run said "✓ all ... are live". `stale` counts a chart
+   served under its labels with different numbers - the old version still cached, or rows
+   the endpoint drops at serve time (toRoomChart() in lib/store-size-charts.js: a size
+   token it refuses, a band outside its clamps). The served shape is that function's:
+   { size, minChest/maxChest, minWaist/..., minHips/..., minLegs/maxLegs (the outseam) }. */
+const SERVED_BANDS = { chest: "Chest", waist: "Waist", hips: "Hips", outseam: "Legs" };
+const savedNumbers = (rows) => JSON.stringify(rows.map((x) => [String(x.size).trim().toUpperCase(),
+  ...Object.keys(SERVED_BANDS).map((k) => (x.body && x.body[k] ? x.body[k].map(Number) : null))]));
+const servedNumbers = (rows) => JSON.stringify((rows || []).map((x) => [x.size,
+  ...Object.values(SERVED_BANDS).map((k) => (x["min" + k] != null ? [Number(x["min" + k]), Number(x["max" + k])] : null))]));
 export function liveCoverage(records, live) {
   const want = records.filter((r) => !r.product_key && r.status === "active");
-  const has = (r) => live.charts.some((c) => c.gender === r.gender && c.age_group === r.age_group &&
+  const labelled = (r) => live.charts.filter((c) => c.gender === r.gender && c.age_group === r.age_group &&
     c.garment_type === r.garment_type && (c.size_system || "unknown") === r.size_system && c.source === r.source);
-  return { expected: want.length, live: want.filter(has).length };
+  const same = (r) => labelled(r).some((c) => servedNumbers(c.rows) === savedNumbers(r.rows));
+  return { expected: want.length, live: want.filter(same).length, stale: want.filter((r) => !same(r) && labelled(r).length).length,
+    productScoped: records.filter((r) => r.product_key).length };
 }
 
 /** The one-line reason when nothing was captured, with the manual way in. */
@@ -105,11 +135,19 @@ export function reasonLine(kind, host, extra = "") {
   const manual = `npm run import:chart -- --host ${host}`;
   const lines = {
     blocked: `BLOCKED - ${host} refused our requests${extra ? " (" + extra + ")" : ""}. We do not work around bot protection. ` +
-      `Manual way in: open the size guide in your own browser, save it (Ctrl+S) or screenshot it, then\n    ${manual} --html <saved-page.html>   (or --image <screenshot.png>)`,
+      `Manual way in: open the size guide in your own browser, save it (Ctrl+S, "Webpage, Complete") or screenshot it, then\n    ${manual} --html <saved-page.html>   (or --image <screenshot.png>)`,
     image_unreadable: `IMAGE UNREADABLE - the guide is an image and it could not be turned into a valid chart${extra ? " (" + extra + ")" : ""}. ` +
       `Manual way in: a sharper screenshot of just the table:\n    ${manual} --image <screenshot.png> --gender <men|women|unisex> --type <tops|bottoms|jeans|dresses|outerwear>`,
+    /* Neither of these is the image's fault, and the --image way in needs the same reader -
+       "a sharper screenshot" sent the operator to a path that fails the same way. */
+    no_ocr_key: `IMAGE NOT READ - the guide looks like an image${extra ? " (" + extra + ")" : ""}, and GEMINI_API_KEY is not set, so nothing could read it. ` +
+      `Set GEMINI_API_KEY in scanner/.env and run the same command again.`,
+    image_rate_limited: `IMAGE READER RATE-LIMITED - the guide looks like an image, and Gemini answered HTTP 429 (too many requests)${extra ? " (" + extra + ")" : ""}. ` +
+      `Nothing is wrong with the store or the image: retry later - wait a minute or two and run the same command again.`,
+    images_not_read: `IMAGE GUIDE NOT READ - image(s) that look like a size chart were found${extra ? " (" + extra + ")" : ""} but not read (--no-images). ` +
+      `Run again without --no-images, or screenshot the table:\n    ${manual} --image <screenshot.png> --gender <men|women|unisex> --type <tops|bottoms|jeans|dresses|outerwear>`,
     js_unreadable: `JS GUIDE NOT OPENED - the store renders its guide client-side and the browser fallback did not find a readable table${extra ? " (" + extra + ")" : ""}. ` +
-      `Manual way in: open it yourself, save the page with the guide open, then\n    ${manual} --html <saved-page.html>`,
+      `Manual way in: open it yourself, save the page with the guide open (Ctrl+S, "Webpage, Complete"), then\n    ${manual} --html <saved-page.html>`,
     browser_unavailable: `BROWSER UNAVAILABLE - ${extra || "Chromium could not start"}. Run \`npx playwright install chromium\` in the repo root, or:\n    ${manual} --url <size-guide-page-url>`,
     no_measurements: `GUIDE HAS NO BODY MEASUREMENTS - ${host}'s size guide opened, but it is a size-CONVERSION table ` +
       `(EU/IT/UK/US...) with no chest/waist/hip columns, so there is nothing to fit a body against${extra ? " (" + extra + ")" : ""}. ` +
@@ -120,19 +158,42 @@ export function reasonLine(kind, host, extra = "") {
   return lines[kind] || lines.none;
 }
 
-/** Save (the Phase 1 path), then confirm against the live endpoint. */
-export async function saveAndVerify({ supabase, records, host, saveSizeChartRecords, log = console.log, fetchImpl = fetch }) {
-  const res = await saveSizeChartRecords(supabase, records, log);
+/* Save (the Phase 1 path), then confirm against the live endpoint - and say only what is known:
+   - A SKIPPED save (no client, the v15 table or the v16 key missing) is a FAILED run: exit
+     code 1. It exited 0, so `npm run capture -- <url> --yes && echo captured` said captured
+     with nothing written. Set here, so both CLIs that save through this get it. (Phase 1's
+     scan-store.js --size-charts --save keeps its own clean exit.)
+   - The migration hint names THIS command: saveSizeChartRecords()'s own says "re-run with
+     --save", Phase 1's flag, which neither Phase 2 command has.
+   - A live check that FAILED verified nothing: it used to go on to "0/N visible yet - the
+     endpoint caches", sending the operator to wait for a cache when the check itself broke.
+   - Nothing store-wide saved (every chart product-scoped) is not "✓ all 0 ... are live":
+     the room serves none of those rows.
+   - "Live" means the numbers just saved, not just the labels (liveCoverage()). */
+export async function saveAndVerify({ supabase, records, host, saveSizeChartRecords, log = console.log, fetchImpl = fetch,
+  setExitCode = (c) => { process.exitCode = c; } }) {
+  const res = await saveSizeChartRecords(supabase, records, log, { rerunHint: "then run the same command again to save" });
   if (!res.saved) {
     log(`Nothing saved (${res.skipped || "no charts"}).`);
+    if (res.skipped) setExitCode(1);
     return { saved: 0, skipped: res.skipped || "no charts" };
   }
   log(`✓ saved ${res.saved} chart(s) to store_size_charts`);
   const live = await fetchLiveCharts(host, { fetchImpl });
   log(formatLive(live));
   const cov = liveCoverage(records, live);
-  log(cov.live === cov.expected
-    ? `✓ all ${cov.expected} store-wide chart(s) just saved are live`
-    : `… ${cov.live}/${cov.expected} store-wide chart(s) visible yet - the endpoint caches for up to 5 minutes; re-check with curl ${live.url}`);
+  const scoped = cov.productScoped ? `; ${cov.productScoped} product-scoped chart(s) saved are stored but not served (the room serves store-wide charts only)` : "";
+  if (!cov.expected) log(`… no store-wide chart saved: ${cov.productScoped || res.saved} product-scoped chart(s) stored, not served - the room serves store-wide charts only`);
+  /* A 200 carrying the endpoint's own failure note (its storage failed, or it reads another
+     database) verified nothing either - it is not a cache to wait out. */
+  else if (!live.ok || /^(?:query_failed|table_missing|storage_unavailable)$/.test(live.note || ""))
+    log(`? could not verify what the room receives - the live check ${live.ok ? "answered " + live.note : "failed"}; re-check with curl ${live.url}${scoped}`);
+  else if (cov.live === cov.expected) log(`✓ all ${cov.expected} store-wide chart(s) just saved are live${scoped}`);
+  else {
+    log(`… ${cov.live}/${cov.expected} store-wide chart(s) live with the numbers just saved` +
+      (cov.stale ? `; ${cov.stale} served with different numbers (the previous version, cached for up to 5 minutes - or rows the endpoint drops)` : "") +
+      (cov.expected - cov.live - cov.stale ? `; ${cov.expected - cov.live - cov.stale} not served yet (the endpoint caches for up to 5 minutes)` : "") +
+      `; re-check with curl ${live.url}${scoped}`);
+  }
   return { saved: res.saved, live, coverage: cov };
 }

@@ -12,9 +12,17 @@
       outside the clamps), a non-monotonic ladder, an SVG / non-image, an HTTP 429, no
       key, garbage JSON.
    §4 THE BYTES DECIDE THE MIME TYPE Gemini is sent (never "image/jpg", never a wrong
-      label), and a GIF - not a Gemini input type - is refused before any model call.
+      label), and a GIF - not a Gemini input type - is refused before any model call. A
+      file is judged by its bytes, not its extension (a Windows .jfif save is a JPEG); a
+      name we accept with the wrong bytes is "not a raster image", never "unsupported";
+      the 8 MB cap holds for a file of any extension.
+   §5 ONLY AN HTTP(S) URL IS DOWNLOADED: a data: image - most often a lazy-load placeholder -
+      (or file:/blob:) is refused with no request, never reported as a GIF to convert, and
+      the detail gives the --image way round an inline chart.
+   §6 THE IMAGE'S OWN URL WORDS LABEL IT on the browser path as on the static path - one
+      image, one label; the referrer still says WHO, never WHAT; rows never change.
    ============================================================================= */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JSDOM } from "jsdom";
@@ -122,8 +130,14 @@ console.log("\n── §3 every refusal is reported, never saved ──");
     : { ok: true, status: 200, headers: { get: () => "application/octet-stream" }, arrayBuffer: async () => new TextEncoder().encode("<html>no</html>").buffer };
   const ob = await chartsFromImage({ url: "https://cdn.example.com/x" }, { apiKey: KEY, fetchImpl: octFetch, JSDOM });
   check("§3 ...untyped bytes that are not an image are refused before any model call", ob.outcome === "error" && /not a raster/.test(ob.detail), ob.detail);
-  const nokey = await chartsFromImage({ url: "https://cdn.example.com/c.png" }, { apiKey: "", fetchImpl: fakeFetch({}), JSDOM });
-  check("§3 no GEMINI_API_KEY -> error by variable NAME, no request made", nokey.outcome === "error" && /GEMINI_API_KEY/.test(nokey.detail));
+  /* The fetch double is KEPT so "no request made" is checked, not only claimed: a key check
+     moved below the image download (or between the Gemini request and its answer) still
+     returned this error, and the first cut of this check stayed green on it. */
+  const fNokey = fakeFetch({ gemini: { is_size_chart: true, tables: [TABLE] } });
+  const nokey = await chartsFromImage({ url: "https://cdn.example.com/c.png" }, { apiKey: "", fetchImpl: fNokey, JSDOM });
+  check("§3 no GEMINI_API_KEY -> error by variable NAME, no request made",
+    nokey.outcome === "error" && nokey.detail === "GEMINI_API_KEY is not set" && fNokey.calls.length === 0,
+    JSON.stringify({ nokey, calls: fNokey.calls.map((c) => c.url) }));
   const fails2 = await chartsFromImage({ url: "https://cdn.example.com/c.png" }, { apiKey: KEY, fetchImpl: fakeFetch({ geminiStatus: 500 }), JSDOM });
   check("§3 an error message never carries the key", !JSON.stringify(fails2).includes(KEY));
   check("§3 tablesToHtml escapes markup in transcribed cells (no injection into the parser's DOM)",
@@ -185,6 +199,102 @@ console.log("\n── §4 the bytes decide the mime type; a GIF never reaches th
   const bm = await transcribeChartImage({ file: bmpFile }, { apiKey: KEY, fetchImpl: fbm });
   check("§4.7 an unsupported file type names what IS accepted - png, jpg, webp (not gif)",
     !bm.ok && /\(png, jpg, webp\)/.test(bm.error) && !/gif/i.test(bm.error) && fbm.calls.length === 0, bm.error);
+  /* Windows maps image/jpeg to .jfif, so Chrome/Edge "Save image as" on a store's JPEG chart
+     writes size-chart.jfif. The first cut refused it by its NAME before the bytes were
+     looked at - "unsupported image type .jfif" for an ordinary JPEG. */
+  const jfifFile = join(dir, "size-chart.jfif"); writeFileSync(jfifFile, JPEG);
+  const noExt = join(dir, "screenshot"); writeFileSync(noExt, PNG);
+  const fjf = fakeFetch({ gemini: ok });
+  const jf = await transcribeChartImage({ file: jfifFile }, { apiKey: KEY, fetchImpl: fjf });
+  const fne = fakeFetch({ gemini: ok });
+  await transcribeChartImage({ file: noExt }, { apiKey: KEY, fetchImpl: fne });
+  check("§4.8 a .jfif file with JPEG bytes (a Windows browser's save) -> read, sent as image/jpeg",
+    jf.ok && sent(fjf) === "image/jpeg", JSON.stringify({ jf, sent: sent(fjf) }));
+  check("§4.9 ...a file with no extension is judged by its bytes too (PNG bytes -> image/png)", sent(fne) === "image/png", sent(fne));
+  const gifAsPng = join(dir, "chart-really-gif.png"); writeFileSync(gifAsPng, GIF);
+  const fgp = fakeFetch({ gemini: ok });
+  const gp = await chartsFromImage({ file: gifAsPng }, { apiKey: KEY, fetchImpl: fgp, JSDOM });
+  check("§4.10 ...and GIF bytes saved as .png are still refused as GIF, no model call",
+    gp.outcome === "error" && /GIF/.test(gp.detail) && fgp.calls.length === 0, JSON.stringify(gp));
+  /* A name we accept is never called "unsupported": `curl -o chart.png` on a 403 page is a
+     .png whose BYTES are wrong, and the second cut answered "unsupported image type .png
+     (png, jpg, webp)" - a refusal that contradicts itself. */
+  const htmlAsPng = join(dir, "chart.png"); writeFileSync(htmlAsPng, new TextEncoder().encode("<html>403 Forbidden</html>"));
+  const fhp = fakeFetch({ gemini: ok });
+  const hp = await transcribeChartImage({ file: htmlAsPng }, { apiKey: KEY, fetchImpl: fhp });
+  check("§4.11 a .png file whose bytes are not an image -> 'not a raster image (.png file: ...)', never 'unsupported .png', no request",
+    !hp.ok && hp.error === "image unreadable: not a raster image (.png file: bytes that are not png/jpeg/webp)" && fhp.calls.length === 0, hp.error);
+  /* The cap is checked on the file's size before it is read: a video or an archive passed
+     to --image by mistake is refused by its size, never loaded whole. (A sparse 9 MB file -
+     no 9 MB written to disk.) */
+  const big = join(dir, "turn.mp4"); writeFileSync(big, ""); truncateSync(big, 9 * 1024 * 1024);
+  const fbg = fakeFetch({ gemini: ok });
+  const bg = await transcribeChartImage({ file: big }, { apiKey: KEY, fetchImpl: fbg });
+  check("§4.12 a file over 8 MB (any extension) -> 'image larger than 8 MB', no request",
+    !bg.ok && bg.error === "image unreadable: image larger than 8 MB" && fbg.calls.length === 0, bg.error);
+}
+
+console.log("\n── §5 only an http(s) URL is downloaded ──");
+{
+  /* A lazysizes image - <img class="lazyload" src="data:image/gif;base64,..." data-src=".../size-chart.png">
+     - reaches the image stage as its data: PLACEHOLDER (the static scan reads src before
+     data-src). Node's fetch decodes data: locally, so the 1x1 GIF was read and refused as
+     "GIF charts are not readable - save it as PNG": the operator was told to convert a GIF
+     that does not exist, and a data:image/png placeholder cost a Gemini call. Any scheme
+     but http(s) is refused before any request, and the detail names the placeholder. */
+  const ok = { is_size_chart: true, tables: [TABLE] };
+  const GIF_1x1 = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+  const PNG_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  for (const [label, url] of [
+    ["a data:image/gif lazy-load placeholder", GIF_1x1],
+    ["a data:image/png lazy-load placeholder", PNG_1x1],
+    ["a file: URL", "file:///etc/hostname"],
+    ["a blob: URL", "blob:https://shop.example.com/0b7e"],
+  ]) {
+    const f = fakeFetch({ gemini: ok, imageType: "image/gif", bytes: new Uint8Array([0x47, 0x49, 0x46, 0x38]) });
+    const r = await chartsFromImage({ url }, { apiKey: KEY, fetchImpl: f, JSDOM });
+    check(`§5.1 ${label} -> error, NO request (no download, no model call)`,
+      r.outcome === "error" && f.calls.length === 0 && /not an http\(s\) image URL/.test(r.detail), JSON.stringify({ r, calls: f.calls.length }));
+    check(`§5.2 ...and it is never reported as a GIF to convert`, !/GIF/.test(r.detail), r.detail);
+  }
+  /* ...without claiming every data: image is one: a chart pasted into a rich-text
+     description can be inline base64, so the detail hedges and gives the way round it. */
+  const dd = (await chartsFromImage({ url: GIF_1x1 }, { apiKey: KEY, fetchImpl: fakeFetch({}), JSDOM })).detail;
+  check("§5.3 a data: image is named as MOST OFTEN a lazy-load placeholder (the chart in data-src), with the --image way round an inline one",
+    /most often a lazy-load placeholder/.test(dd) && /data-src/.test(dd) && /screenshot it and use --image/.test(dd), dd);
+  const fh = fakeFetch({ gemini: ok });
+  const h = await chartsFromImage({ url: "HTTPS://cdn.example.com/size-chart.png" }, { apiKey: KEY, fetchImpl: fh, JSDOM });
+  check("§5.4 an https URL (any case) is still downloaded and read", h.outcome === "read" && fh.calls.length === 2, JSON.stringify(h));
+}
+
+console.log("\n── §6 the image's own URL words label it, whichever stage found it ──");
+{
+  /* capture.js reads a STATIC hit with context = the image URL and no referrer, and a
+     BROWSER hit with context "" and the referrer (product page | trigger). The referrer
+     branch reclassified with an empty page text - dropping the image URL's own words - so
+     .../size-chart-women-tops.png was women/tops (0.85) found statically and unknown/tops
+     off its columns (0.5) found in a guide modal: one image, two labels. */
+  const COLS = { title: "", unit: "cm", header: ["Size", "Chest", "Waist"],
+    rows: [["S", "88-92", "70-74"], ["M", "93-97", "75-79"], ["L", "98-102", "80-84"]] };
+  const read = (url, opts) => chartsFromImage({ url }, { apiKey: KEY, fetchImpl: fakeFetch({ gemini: { is_size_chart: true, tables: [COLS] } }), JSDOM, sourceUrl: url, ...opts });
+  const cls = (r) => r.found[0] && r.found[0].chart.classification;
+  const url = "https://cdn.store.example/files/size-chart-women-tops.png";
+  const st = await read(url, { context: url, referrerText: null });
+  const br = await read(url, { context: "", referrerText: "Basic tee | Size guide" });
+  const brEmpty = await read(url, { context: "", referrerText: "" });
+  check("§6.1 static stage: women / tops from the filename", cls(st) && cls(st).gender === "women" && cls(st).garmentType === "tops", JSON.stringify(cls(st)));
+  check("§6.2 browser stage, a gender-neutral referrer: the SAME label as the static stage",
+    JSON.stringify(cls(br)) === JSON.stringify(cls(st)), `${JSON.stringify(cls(br))} vs ${JSON.stringify(cls(st))}`);
+  check("§6.3 ...and with an empty referrer", JSON.stringify(cls(brEmpty)) === JSON.stringify(cls(st)), JSON.stringify(cls(brEmpty)));
+  const plain = "https://cdn.store.example/files/chart-01.png";
+  const ref = await read(plain, { context: "", referrerText: "Basic tee | Men | Size guide" });
+  check("§6.4 a filename with no words: the referrer still says WHO (men, from the referrer)",
+    cls(ref) && cls(ref).gender === "men", JSON.stringify(cls(ref)));
+  const refType = await read(plain, { context: "", referrerText: "Women's dresses | Size guide" });
+  check("§6.5 ...and never WHAT: the referrer's 'dresses' does not type the chart (columns say tops)",
+    cls(refType) && cls(refType).gender === "women" && cls(refType).garmentType === "tops" && cls(refType).typeFrom === "columns", JSON.stringify(cls(refType)));
+  const rows = (r) => JSON.stringify(r.found.map((x) => x.chart.rows));
+  check("§6.6 labels only - the rows are identical on both stages", rows(st) === rows(br) && rows(st) === rows(ref), rows(br));
 }
 
 console.log("");

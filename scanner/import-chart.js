@@ -11,7 +11,9 @@
 
    For a store the automatic capture cannot read (bot-protected, a guide only a logged-in
    or human session sees, an image the OCR could not settle): open the guide yourself,
-   then hand over its URL, the page saved with Ctrl+S, or a screenshot of the table.
+   then hand over its URL, the page saved with Ctrl+S ("Webpage, Complete" keeps a guide you
+   opened; a "Single File" .mhtml is decoded too), or a screenshot of the table. A URL that
+   refuses us (403/429, a challenge page) is BLOCKED with this way in - asked once, never retried.
 
    SAME PARSER, SAME VALIDATION, SAME SAVE as every other path: HTML goes through
    extractAllSizeCharts() (the shared widget parser), an image through Gemini ->
@@ -31,7 +33,7 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { extractAllSizeCharts, buildRecords, saveSizeChartRecords, canonicalStoreHost, defaultFetchText, unwrapHtmlEnvelope,
-  looksLikeBotChallenge, classifyChart, pageContextText, referrerAudience, toStoredRows, contentHash } from "./size-charts.js";
+  looksLikeBotChallenge, classifyChart, pageContextText, referrerAudience, toStoredRows, contentHash, SIZE_GUIDE_LINK_RE } from "./size-charts.js";
 import { GUIDE_BOUNDARY } from "./browser-capture.js";
 import { loadScannerEnv, parseCliArgs, formatChartSummary, askYesNo, saveAndVerify } from "./capture-cli.js";
 
@@ -86,6 +88,67 @@ export function applyOverrides(cls, ov) {
   return next;
 }
 
+/* A "WEBPAGE, SINGLE FILE" SAVE. Chrome/Edge's Ctrl+S offers .mhtml and remembers the last
+   type used, and every manual way in says "save it (Ctrl+S)". Blink writes a MIME message
+   whose HTML part is quoted-printable: "=" is =3D, every non-ASCII byte =XX (Hebrew is
+   =D7=..), and a soft break "=\r\n" every 76 characters - inside a <td> or a <tr> as often as
+   not. The first cut handed that raw to the parser, which dropped whichever rows or columns a
+   break landed in, and the rows left over (S/L/XL, no M; the waist column alone) still passed
+   validation - one y/n from a store-wide chart with sizes missing. The HTML part is DECODED
+   here (quoted-printable or base64, in its charset) and read as the page it is; anything this
+   cannot decode is refused with the save that works - "Webpage, Complete", which serializes
+   the page as shown, guide open; "HTML only" saves the page as first served, without it -
+   never parsed raw. `raw` is the file as latin1 (one char per byte), so a part's bytes
+   survive to its own charset.
+   @returns {{html:string, location:string}|null} null when the file is not MHTML. */
+const MHTML_RESAVE = 'save the page again as "Webpage, Complete" and use its .html ("HTML only" saves the page as first served, without the guide you opened)';
+export function decodeMhtml(raw, name = "the file") {
+  const top = raw.slice(0, 8192), end = top.search(/\r?\n\r?\n/);
+  const head = (end < 0 ? top : top.slice(0, end)).replace(/\r?\n[ \t]+/g, " ");
+  if (!/^MIME-Version:/im.test(head) || !/^Content-Type:\s*multipart\/related/im.test(head)) {
+    if (/\.mht(?:ml)?$/i.test(name) && /^MIME-Version:/im.test(raw.slice(0, 2048))) {
+      throw new Error(`${name} is a "Webpage, Single File" (.mhtml) save this cannot read (no multipart/related header) - ${MHTML_RESAVE}`);
+    }
+    return null;
+  }
+  const refuse = (why) => new Error(`${name} is a "Webpage, Single File" (.mhtml) save and its page could not be read (${why}) - ${MHTML_RESAVE}`);
+  const boundary = (/boundary="?([^";\s]+)"?/i.exec(head) || [])[1];
+  if (!boundary) throw refuse("no MIME boundary");
+  const location = (/^Snapshot-Content-Location:\s*(\S+)/im.exec(head) || [])[1] || "";
+  for (const part of raw.split("--" + boundary).slice(1)) {
+    const cut = part.search(/\r?\n\r?\n/);
+    if (cut < 0) continue;
+    const hdr = part.slice(0, cut).replace(/\r?\n[ \t]+/g, " ");
+    if (!/^Content-Type:\s*text\/html/im.test(hdr)) continue;   // the first HTML part is the page; later ones are its frames
+    const cte = ((/^Content-Transfer-Encoding:\s*([^\s;]+)/im.exec(hdr) || [])[1] || "7bit").toLowerCase();
+    const charset = ((/charset="?([^";\s]+)"?/i.exec(hdr) || [])[1] || "utf-8").toLowerCase();
+    const body = part.slice(cut).replace(/^\r?\n\r?\n/, "").replace(/\r?\n$/, "");
+    let bytes;
+    if (cte === "quoted-printable") {
+      bytes = Buffer.from(body.replace(/=\r?\n/g, "").replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))), "latin1");
+    } else if (cte === "base64") bytes = Buffer.from(body.replace(/\s+/g, ""), "base64");
+    else if (/^(?:7bit|8bit|binary)$/.test(cte)) bytes = Buffer.from(body, "latin1");
+    else throw refuse(`its HTML is ${cte}-encoded`);
+    let html;
+    try { html = new TextDecoder(charset).decode(bytes); } catch { throw refuse(`unknown charset "${charset}"`); }
+    return { html, location: location || (/^Content-Location:\s*(\S+)/im.exec(hdr) || [])[1] || "" };
+  }
+  throw refuse("no HTML part");
+}
+
+/* THE ADDRESS A SAVED PAGE CAME FROM. Read as https://<host>/, a guide titled just "Size
+   Guide" at /pages/mens-jeans-size-guide lost what its URL says (pageContextText reads the
+   path): unknown/bottoms at 0.5 by file, men/jeans at 0.85 by --url and Phase 1. Chrome
+   writes the address into the save - `<!-- saved from url=(NNNN)https://... -->` in a
+   "Webpage, Complete" save, Snapshot-Content-Location in an .mhtml. It is CONTEXT only (no
+   row changes), and it is used only on the store's own host: another store's address lends
+   nothing. */
+export function savedPageUrl(html, storeHost, location = "") {
+  const at = location || (/<!--\s*saved from url=\(\d+\)(https?:\/\/[^\s>]+?)\s*-->/i.exec(String(html).slice(0, 4096)) || [])[1] || "";
+  try { if (at && canonicalStoreHost(new URL(at).hostname) === storeHost) return new URL(at).href; } catch { /* not a URL */ }
+  return `https://${storeHost}/`;
+}
+
 /**
  * Import one source for one host. Pure over its injectables (fetchText, imageReader).
  * @returns {Promise<{host:string, records:Array<object>, numbers:string[], total:number, report:object, notes:string[]}>}
@@ -97,7 +160,16 @@ export const PDF_NOTE = "PDF chart - not read automatically; screenshot it and u
 export async function importChart({ host, url = "", htmlFile = "", imageFile = "", overrides = {}, only = null,
   fetchText = defaultFetchText, imageReader = null, JSDOM = null, apiKey = process.env.GEMINI_API_KEY || "" } = {}) {
   const JSDOMCtor = JSDOM || (await import("jsdom")).JSDOM;
+  /* A --host that is GIVEN but is not a hostname (a Hebrew IDN, "localhost", a dropped dot)
+     was reported as "--host is required" - and kept --url's own host from being used. It is
+     named as refused, with the xn-- form the store key takes when it is an IDN. */
   const storeHost = canonicalStoreHost(host || (url ? new URL(url).hostname : ""));
+  if (!storeHost && host) {
+    let ascii = "";
+    try { ascii = canonicalStoreHost(new URL("https://" + String(host).trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")).hostname); } catch { /* not a host at all */ }
+    throw new Error(`--host "${host}" is not a valid store hostname (letters, digits, dots and dashes, e.g. fox.co.il)` +
+      (ascii && ascii !== String(host).trim().toLowerCase() ? ` - an internationalised name is keyed in its xn-- form: --host ${ascii}` : ""));
+  }
   if (!storeHost) throw new Error("--host is required (the store's hostname, e.g. fox.co.il)");
   const sources = [url, htmlFile, imageFile].filter(Boolean).length;
   if (sources !== 1) throw new Error("give exactly one of --url, --html, --image");
@@ -119,19 +191,31 @@ export async function importChart({ host, url = "", htmlFile = "", imageFile = "
      stored as women's JEANS, store-wide at confidence 0.9, where the browser path read the
      same markup as women's tops. A page with no table inside a dialog/drawer/popup (a
      guide page of its own) keeps its title and headings, as Phase 1 reads it.
-     The nearest boundary match is a guide only if it is not the PAGE: never <body>/<html>
-     (Bootstrap marks <body> "modal-open"), never a wrapper that is or holds <main>, and
-     never one that holds every <h1> on the page - the same line guideContainerOf() draws.
-     Older Shopify themes wrap the whole page in a class the selector matches (Debut's
-     #PageContainer.drawer-page-content, Brooklyn's is-moved-by-drawer): the first cut took
-     that for a dialog, and a men's jeans guide page saved on Debut lost its title and was
-     stored as men's bottoms at 0.65 where "page-container" alone gave jeans at 0.85. */
+     A REAL dialog ([role=dialog], [aria-modal], <dialog>) around the table is the guide,
+     whatever it holds - guideContainerOf()'s first rule. The second cut put it through the
+     page-wrapper tests below too, and a terminalx-style dialog carrying the page's only <h1>
+     ("מדריך מידות", the product's title a <div>) "held every <h1>", read as the page, and its
+     chest+waist chart was stored as women's JEANS at 0.85 again.
+     A CLASS-ONLY match ([class*=modal|drawer|popup]) is a guide only if it is not the PAGE:
+     never <body>/<html> (Bootstrap marks <body> "modal-open"), never a wrapper that is or holds
+     <main>, never one that holds every <h1> on the page - the lines guideContainerOf() draws -
+     and never one under the page's own <h1> when that <h1> names a size guide: that page IS
+     the guide (a /pages/mens-jeans-size-guide whose table sits in a .size-chart-popup-content
+     inside <main> lost its title and was stored men's bottoms at 0.65 where Phase 1 reads
+     jeans). A product's <h1> names the product, so the same popup saved open on a product page
+     is still the guide. Older Shopify themes wrap the whole page in a class the selector
+     matches (Debut's #PageContainer.drawer-page-content, Brooklyn's is-moved-by-drawer): the
+     first cut took that for a dialog, and a men's jeans guide page saved on Debut lost its
+     title and was stored as men's bottoms at 0.65 where "page-container" alone gave jeans at
+     0.85. */
   const readHtml = (html, pageUrl, source) => {
     const doc = new JSDOMCtor(html, { url: pageUrl }).window.document;
     const h1s = [...doc.querySelectorAll("h1")];
     const guide = [...doc.querySelectorAll('table,[role="table"]')].some((t) => {
+      if (t.closest("[role=dialog],[aria-modal=true],dialog")) return true;
       const box = t.closest(GUIDE_BOUNDARY);
       return !!box && box.tagName !== "BODY" && box.tagName !== "HTML" &&
+        !h1s.some((h) => !box.contains(h) && SIZE_GUIDE_LINK_RE.test(h.textContent || "")) &&
         !box.matches("main,[role=main]") && !box.querySelector("main,[role=main]") &&
         !(h1s.length && h1s.every((h) => box.contains(h)));
     });
@@ -147,15 +231,21 @@ export async function importChart({ host, url = "", htmlFile = "", imageFile = "
     found = await readImage({ file: imageFile }, "manual_image", "file:" + imageFile.split(/[\\/]/).pop());
   } else if (url) {
     const r = unwrapHtmlEnvelope(await fetchText(url));
-    if (!r.ok) throw new Error(`could not fetch ${url}: ${r.error || "HTTP " + r.status}`);
-    /* A 200 that is a bot-protection CHALLENGE, not the guide (adidas.co.il answers a plain
-       HTTP client exactly so - see looksLikeBotChallenge). Parsed, it found nothing and the
-       owner was told to add --gender/--age/--type, which cannot help. It is BLOCKED, with
-       the manual way in, as the static and browser stages report it - never worked around. */
-    if (!r.envelope && looksLikeBotChallenge(r)) {
-      throw new Error(`BLOCKED - ${url} answered with a bot-protection challenge page, not the guide. We do not work around ` +
-        "bot protection: open the guide in your own browser, save it (Ctrl+S) or screenshot it, then use --html <saved page> or --image <screenshot>");
+    /* A REFUSAL - 403/429, or a bot-protection CHALLENGE page, not the guide (adidas.co.il
+       answers a plain HTTP client with a 200 one - see looksLikeBotChallenge). Parsed, the
+       200 found nothing and the owner was told to add --gender/--age/--type, which cannot
+       help. It is BLOCKED, with the manual way in, as the static and browser stages report
+       it - asked once, never retried, never worked around. The second cut tested only a 200:
+       Cloudflare's managed challenge and Akamai's "Access Denied" answer 403 (a rate limit
+       429, Cloudflare at times 503 with its challenge) and read "could not fetch: HTTP 403"
+       with no way in at all. */
+    const refused = !r.ok && (r.status === 403 || r.status === 429);
+    if (refused || (!r.envelope && looksLikeBotChallenge(r))) {
+      throw new Error(`BLOCKED - ${url} ${refused ? `refused us (HTTP ${r.status})` : "answered with a bot-protection challenge page, not the guide"}. ` +
+        "We do not work around bot protection: open the guide in your own browser, save it (Ctrl+S, \"Webpage, Complete\") or screenshot it, " +
+        "then use --html <saved page> or --image <screenshot>");
     }
+    if (!r.ok) throw new Error(`could not fetch ${url}: ${r.error || "HTTP " + r.status}`);
     /* WHAT the URL answered decides the reader. The first cut sent only image/* to the image
        reader, so an image served as application/octet-stream (cdn.kiwisizing.com's chart
        PNGs - the case image-charts.js sniffs the magic bytes for) or with no type at all went
@@ -174,11 +264,14 @@ export async function importChart({ host, url = "", htmlFile = "", imageFile = "
       found = await readImage({ url }, "manual_image", url);
     } else found = readHtml(r.text, r.url || url, "manual_url");
   } else {
-    let text = await readFile(htmlFile, "utf8");
+    const name = htmlFile.split(/[\\/]/).pop();
+    const buf = await readFile(htmlFile);
+    const mhtml = decodeMhtml(buf.toString("latin1"), name);   // a "Webpage, Single File" save, decoded (or refused)
+    let text = mhtml ? mhtml.html : buf.toString("utf8");
     const env = unwrapHtmlEnvelope({ ok: true, text });
     if (env.envelope) text = env.text;
-    found = readHtml(text, `https://${storeHost}/`, "manual_html");
-    for (const f of found) f.sourceUrl = "file:" + htmlFile.split(/[\\/]/).pop();
+    found = readHtml(text, savedPageUrl(text, storeHost, mhtml ? mhtml.location : ""), "manual_html");
+    for (const f of found) f.sourceUrl = "file:" + name;
   }
   if (!found.length && !notes.length) notes.push(NO_TABLE_NOTE);
 
@@ -256,7 +349,20 @@ export async function importChart({ host, url = "", htmlFile = "", imageFile = "
 }
 
 /* ── CLI ─────────────────────────────────────────────────────────────────────── */
-async function main(argv) {
+/* The write: Supabase from scanner/.env, then saveAndVerify(). */
+async function persistToSupabase(out) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error("✗ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set (scanner/.env) - nothing saved.");
+    process.exit(1);
+  }
+  const { createClient } = await import("@supabase/supabase-js");
+  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  await saveAndVerify({ supabase, records: out.records, host: out.host, saveSizeChartRecords });
+}
+
+/* `persist` is injectable so the --dry-run guard is tested where it stands (manual-import
+   §4): with --yes nothing else stands between the summary and a write. */
+export async function main(argv, { persist = persistToSupabase } = {}) {
   loadScannerEnv();
   const { val, flag } = parseCliArgs(argv);
   /* A label flag given with nothing after it (`--type=`, or `--type` last) is a typo, not
@@ -283,25 +389,24 @@ async function main(argv) {
   console.log(formatChartSummary(out.records, out.numbers));
   for (const n of out.notes) console.log("  ! " + n);
   if (!out.records.length) {
-    /* The label hint only where labels could help - not after a note that already says
-       what went wrong (a PDF, an unreadable image, a number --only does not have, an untyped
-       table already named with its --type line). */
+    /* A hint only where no note already says what went wrong (a PDF, an unreadable image, a
+       number --only does not have, an untyped table already named with its --type line).
+       It used to say "add --gender/--age/--type" - but every table the parser accepts is a
+       record or a "#n" note now, and an unlabelled chart is stored as gender "unknown", so
+       the line only printed when NO table was accepted, where a label changes nothing. What
+       helps there: a guide rendered client-side is not in the page as served or saved closed. */
     const told = out.notes.some((n) => n === PDF_NOTE || /^image: (?:error|not_a_chart)|^--only |^#\d+ \(/.test(n));
-    console.log("\nNothing importable." + (told ? "" : " If the table has no audience/garment words, add --gender/--age/--type; " +
-      "if it was refused for its values, the source is not a body-measurement chart the room can use."));
+    console.log("\nNothing importable." + (told ? "" : (out.notes.includes(NO_TABLE_NOTE)
+      ? " If the guide opens client-side (behind a button or a tab), open it in your own browser, save the page with the guide open " +
+        "and use --html, or screenshot the table and use --image. If the table is there, "
+      : " If ") + "it was refused for its values: the source is not a body-measurement chart the room can use."));
     return;
   }
   if (flag("--dry-run")) { console.log("\nDry run - nothing written."); return; }
   if (!(await askYesNo(`\nSave these ${out.records.length} chart(s) for ${out.host}?`, { assumeYes: flag("--yes") }))) {
     console.log("Not saved."); return;
   }
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    console.error("✗ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set (scanner/.env) - nothing saved.");
-    process.exit(1);
-  }
-  const { createClient } = await import("@supabase/supabase-js");
-  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
-  await saveAndVerify({ supabase, records: out.records, host: out.host, saveSizeChartRecords });
+  await persist(out);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

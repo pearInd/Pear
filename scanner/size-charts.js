@@ -662,7 +662,13 @@ function scanPageSignals(doc, pageUrl, baseUrl, parser) {
   const containerSel = parser.SIZE_CHART_CONTAINERS.flatMap((c) => c[1]);
   const inContainer = (el) => containerSel.some((sel) => { try { return !!el.closest(sel); } catch { return false; } });
   for (const img of doc.querySelectorAll("img")) {
-    const src = img.getAttribute("src") || img.getAttribute("data-src") || "";
+    /* A lazy-loaded image (lazysizes and most themes) holds a data: placeholder in src and the
+       real file in data-src / data-lazy-src / data-original. src first recorded the placeholder:
+       the image reader got a 1px GIF and never the chart. */
+    const lazySrc = ["data-src", "data-lazy-src", "data-original"]
+      .map((a) => (img.getAttribute(a) || "").trim()).find((v) => v && !/^data:/i.test(v)) || "";
+    const ownSrc = (img.getAttribute("src") || "").trim();
+    const src = (ownSrc && !/^data:/i.test(ownSrc) ? ownSrc : lazySrc) || ownSrc;
     const label = [src, img.getAttribute("alt"), img.getAttribute("class"), img.getAttribute("id"), img.getAttribute("title")]
       .filter(Boolean).join(" ");
     if ((IMAGE_CHART_RE.test(label) || inContainer(img)) && !isDecorativeChartImage(img)) {
@@ -996,7 +1002,11 @@ export function isMissingKeyError(err) {
     /no unique or exclusion constraint matching the ON CONFLICT/i.test(String(err.message || err));
 }
 
-export async function saveSizeChartRecords(supabase, records, log = console.log) {
+/* `rerunHint` ends the two migration warnings. Its default is Phase 1's own command
+   (scan-store.js --size-charts --save), unchanged; the Phase 2 CLIs (capture-cli.js
+   saveAndVerify) pass theirs - they have no --save flag, and told to use it, the operator
+   typed a flag that does nothing. */
+export async function saveSizeChartRecords(supabase, records, log = console.log, { rerunHint = "then re-run with --save" } = {}) {
   if (!supabase) return { saved: 0, skipped: "no_supabase" };
   if (!records.length) return { saved: 0 };
   const now = new Date().toISOString();
@@ -1005,11 +1015,11 @@ export async function saveSizeChartRecords(supabase, records, log = console.log)
     .upsert(payload, { onConflict: STORE_SIZE_CHARTS_KEY });
   if (error) {
     if (isMissingTableError(error)) {
-      log("  ⚠ store_size_charts does not exist - run archive/supabase_setup_v15.sql, then re-run with --save");
+      log(`  ⚠ store_size_charts does not exist - run archive/supabase_setup_v15.sql, ${rerunHint}`);
       return { saved: 0, skipped: "table_missing" };
     }
     if (isMissingKeyError(error)) {
-      log("  ⚠ store_size_charts still has the v15 key (no size_system) - run archive/supabase_setup_v16.sql, then re-run with --save. Nothing was written.");
+      log(`  ⚠ store_size_charts still has the v15 key (no size_system) - run archive/supabase_setup_v16.sql, ${rerunHint}. Nothing was written.`);
       return { saved: 0, skipped: "key_migration_missing" };
     }
     throw new Error("store_size_charts upsert failed: " + (error.message || error));

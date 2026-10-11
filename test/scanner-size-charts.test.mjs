@@ -254,6 +254,16 @@ console.log("\n── §5 saving ──");
   try { await saveSizeChartRecords(broken, records, () => {}); } catch { threw = true; }
   check("§5.6 any OTHER database error is loud (a real failure must not look like success)", threw);
   check("§5.7 no client -> nothing saved, no throw", (await saveSizeChartRecords(null, records)).skipped === "no_supabase");
+  /* The migration hints end with the command to run again: Phase 1's own (--save) by default,
+     unchanged; the Phase 2 CLIs, which have no --save, pass their own. */
+  check("§5.8 Phase 1's migration hints are unchanged (re-run with --save)",
+    keyLogs.some((l) => /supabase_setup_v16\.sql, then re-run with --save\. Nothing was written\./.test(l)) &&
+    logs.some((l) => /supabase_setup_v15\.sql, then re-run with --save$/.test(l)), JSON.stringify([keyLogs, logs]));
+  const hinted = [];
+  await saveSizeChartRecords(missing, records, (m) => hinted.push(m), { rerunHint: "then run the same command again to save" });
+  await saveSizeChartRecords(oldKey, records, (m) => hinted.push(m), { rerunHint: "then run the same command again to save" });
+  check("§5.9 ...and a caller's own hint replaces it in both", hinted.length === 2 && hinted.every((l) => /then run the same command again to save/.test(l) && !/--save/.test(l)),
+    JSON.stringify(hinted));
 }
 
 console.log("\n── §6 castro.com's shape ──");
@@ -628,6 +638,19 @@ console.log("\n── §11 where each static image hit was seen (imagePages) ─
     JSON.stringify([r.report.paths.image_chart_detected, r.report.outcome]));
   const down = await discoverSizeCharts(BASE, { fetchText: async () => ({ ok: false, status: 503, text: "" }), delayMs: 0, log: () => {}, JSDOM });
   check("§11.7 an unreachable store still returns the field (empty)", down.imagePages && !Object.keys(down.imagePages).length);
+  /* A lazy-loaded chart (lazysizes and most themes) carries a data: placeholder in src and the
+     real file in data-src. Reading src first sent the placeholder to the image reader and
+     never the chart. */
+  const lazy = fakeStore({
+    "/": pdp("<a href='/products/a'>A</a>", "Home"),
+    "/sitemap.xml": `<urlset><url><loc>${BASE}/products/a</loc></url></urlset>`,
+    "/products/a": pdp(`<img class="lazyload" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="/img/size-chart-lazy.png" alt="size chart">
+      <img class="lazyload" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-lazy-src="/img/size-guide-lazy2.png" alt="">`, "Tee"),
+  });
+  const lz = await discoverSizeCharts(BASE, { fetchText: lazy.fetchText, delayMs: 0, log: () => {}, JSDOM });
+  check("§11.8 a lazy-loaded chart image is recorded by its real file (data-src / data-lazy-src), never its data: placeholder",
+    lz.images.includes(BASE + "/img/size-chart-lazy.png") && lz.images.includes(BASE + "/img/size-guide-lazy2.png") &&
+    !lz.images.some((u) => /^data:/i.test(u)), JSON.stringify(lz.images));
 }
 
 console.log("\n── §12 a guide's context stops at its OUTERMOST container ──");

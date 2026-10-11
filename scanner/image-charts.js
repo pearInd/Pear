@@ -16,7 +16,7 @@
    The key is GEMINI_API_KEY (the scanner's existing variable). It travels in the
    x-goog-api-key HEADER, never the URL, so no log line or error message can carry it.
    ============================================================================= */
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { extractAllSizeCharts, classifyChart, referrerAudience } from "./size-charts.js";
 
 export const IMAGE_OCR_MODEL = "gemini-3.1-flash-lite";   // same model the scanner's classifier uses
@@ -106,18 +106,48 @@ function sniffedType(buf, label) {
   return t;
 }
 
+/* A FILE IS JUDGED BY ITS BYTES TOO. The first cut refused any extension outside
+   png/jpg/jpeg/webp before reading the file - and Windows maps image/jpeg to .jfif, so
+   Chrome/Edge "Save image as" on a store's JPEG chart wrote size-chart.jfif and --image
+   answered "unsupported image type .jfif" for an ordinary JPEG. The extension now only
+   words the refusal: a name we accept (.png/.jpg/.jpeg/.webp) whose bytes are not an image
+   (`curl -o chart.png` on a 403 page) is "not a raster image (.png file: ...)" - the
+   bytes are what is wrong, so the name is never called unsupported - and any other name
+   whose bytes are not png/jpeg/webp is "unsupported image type .bmp". A .gif is still
+   refused by name before it is read, and the 8 MB cap is checked on the file's SIZE
+   before it is read, so a video or an archive passed by mistake is never loaded whole.
+   ONLY AN HTTP(S) URL IS DOWNLOADED. A lazysizes chart (<img src="data:image/gif;base64,
+   ..." data-src=".../size-chart.png">) reached this stage as its data: PLACEHOLDER, which
+   Node's fetch decodes locally: the 1x1 GIF was refused as "GIF charts are not readable -
+   save it as PNG", telling the operator to convert a GIF that does not exist, and a
+   data:image/png placeholder cost a Gemini call. data:, file:, blob: - nothing but http(s)
+   is requested; the store's real image URL is the one to read. A data: image is not
+   ALWAYS a placeholder (a chart pasted into a rich-text description can be inline
+   base64), so the refusal says "most often" and gives the way round it (a screenshot
+   and --image). It is not decoded and read here: its URL would become the record's
+   source_url (the whole image, in base64) and its base64 the page words the classifier
+   reads - the browser stage skips data: images for the same reason. */
 async function loadImage(src, fetchImpl) {
   if (src.bytes) {
     const buf = Buffer.from(src.bytes);
     return { base64: buf.toString("base64"), mimeType: sniffedType(buf, src.mimeType || "bytes") };
   }
   if (src.file) {
-    const ext = String(src.file).toLowerCase().split(".").pop();
+    const name = String(src.file).split(/[\\/]/).pop();
+    const ext = name.includes(".") ? name.toLowerCase().split(".").pop() : "";
     if (ext === "gif") throw new Error(GIF_REFUSED);
-    if (!["png", "jpg", "jpeg", "webp"].includes(ext)) throw new Error("unsupported image type ." + ext + " (png, jpg, webp)");
+    if ((await stat(src.file)).size > MAX_IMAGE_BYTES) throw new Error("image larger than 8 MB");
     const buf = await readFile(src.file);
     if (buf.length > MAX_IMAGE_BYTES) throw new Error("image larger than 8 MB");
-    return { base64: buf.toString("base64"), mimeType: sniffedType(buf, "." + ext + " file") };
+    const named = ["png", "jpg", "jpeg", "webp"].includes(ext);
+    if (!named && !sniffImageType(buf)) throw new Error(`unsupported image type ${ext ? "." + ext : "(no extension)"} (png, jpg, webp)`);
+    return { base64: buf.toString("base64"), mimeType: sniffedType(buf, named ? "." + ext + " file" : "file") };
+  }
+  const scheme = (String(src.url || "").match(/^([a-z][a-z0-9+.-]*):/i) || [])[1] || "";
+  if (!/^https?$/i.test(scheme)) {
+    throw new Error(/^data$/i.test(scheme)
+      ? "not an http(s) image URL (a data: image - most often a lazy-load placeholder, the chart itself in the image's data-src; if the chart really is inline, screenshot it and use --image)"
+      : `not an http(s) image URL (${scheme ? scheme + ":" : "no scheme"})`);
   }
   const resp = await fetchImpl(src.url, { headers: { Accept: "image/*" }, signal: AbortSignal.timeout(20000) });
   if (!resp.ok) throw new Error("image HTTP " + resp.status);
@@ -173,6 +203,18 @@ export async function transcribeChartImage(src, { apiKey, fetchImpl = fetch } = 
   }
 }
 
+/* The path of an image URL, decoded - the words pageContextText() reads off a URL
+   ("/files/size-chart-women-tops.png"). "" for anything that is not an http(s) URL (a
+   data: URL's "path" is the image itself, in base64). */
+function imageUrlWords(u) {
+  try {
+    const url = new URL(String(u || ""));
+    if (!/^https?:$/.test(url.protocol)) return "";
+    const p = url.pathname;
+    try { return decodeURIComponent(p); } catch { return p; }
+  } catch { return ""; }
+}
+
 /**
  * One image -> found entries (for buildRecords) plus a one-line outcome.
  * @returns {Promise<{found:Array<object>, outcome:string, detail:string}>}
@@ -191,10 +233,19 @@ export async function chartsFromImage(src, { apiKey, fetchImpl = fetch, JSDOM, s
   const doc = new JSDOM(html, { url: /^https?:/.test(pageUrl) ? pageUrl : "https://image.invalid/" }).window.document;
   const charts = extractAllSizeCharts(doc, pageUrl);
   /* An image found inside a guide opened from a product page: like browser_modal, the
-     product page and the trigger may say WHO (gender/kids), never the garment type. */
+     product page and the trigger may say WHO (gender/kids), never the garment type.
+     THE IMAGE'S OWN URL WORDS ARE STILL ITS PAGE TEXT. The first cut reclassified with an
+     empty page text, so .../size-chart-women-tops.png was women/tops (0.85) when the static
+     stage found it (context = its URL) and gender-unknown "tops" off its columns (0.5) when
+     only the browser stage did - one image, two labels, and an unlabelled women's chart is
+     what the room serves a man when the store has no gendered chart (§2.5b). The filename
+     is the chart's own label, not the product page's, so it keeps the tier the static path
+     gives it; the referrer still fills only what it leaves open. Derived here from the
+     image's URL, so no caller has to pass it. */
   if (referrerText != null) {
     const ref = referrerAudience([referrerText]);
-    for (const c of charts) c.classification = classifyChart(c.rows, c.localText, "", ref);
+    const own = imageUrlWords(src.url || pageUrl);
+    for (const c of charts) c.classification = classifyChart(c.rows, c.localText, own, ref);
   }
   if (!charts.length) {
     return { found: [], outcome: "rejected",

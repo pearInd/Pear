@@ -21,12 +21,38 @@
    POLITE AND HONEST, by rule (owner, 2026-10-03): a stock headless Chromium with its
    own user agent, one page at a time, a pause between navigations, a hard page cap.
    No stealth plugin, no fingerprint or UA spoofing, no CAPTCHA solving, no proxies. A
-   403/429 or a challenge page is reported as BLOCKED and the run stops for that store;
-   the manual import (import-chart.js) is the way in.
+   403/429 or a challenge page is reported as BLOCKED and the run stops for that store -
+   also when it answers the GUIDE's own request (the adidas Product-SizeChart pattern):
+   no further guide is clicked there. The manual import (import-chart.js) is the way in.
+
+   report.status: "ok" | "blocked" (the store refused us) | "unreachable" (navigations
+   failed with no HTTP answer at all - reset, protocol error, timeout - errors[0] says
+   which; the home page too) | "no_products" (no product page to open, nothing refused) |
+   "browser_unavailable".
    ============================================================================= */
 import { createHash } from "node:crypto";
 import { extractAllSizeCharts, SIZE_GUIDE_LINK_RE, isProductPathUrl, canonicalStoreHost,
   normalizePageUrl, looksLikeBotChallenge, classifyChart, pageContextText, referrerAudience } from "./size-charts.js";
+
+/* One product, one spelling. THE BUG THIS CLOSES (review, 2026-10-07): the home-page
+   fallback de-duplicated RAW hrefs, so a product linked as /collections/all/products/linen-tee,
+   /products/linen-tee and /products/linen-tee?variant=2 (a collection grid, a swatch) was
+   opened three times - and buildRecords, seeing its own inline chart on "3 pages", saved ONE
+   product's chart as the store's (product_key ''). A product page is named by its PATH: the
+   fragment, Shopify's /collections/<x>/ prefix and the query (variant, tracking) are dropped -
+   the query only when the path alone is product-shaped, so /product.php?id=12 keeps the
+   query that names it. Phase 1's sampler is not changed here. */
+const ID_SHAPED_PATH_RE = /\/[^/]*\d{5,}[^/]*$/;
+export function canonicalProductUrl(u) {
+  const n = normalizePageUrl(u);
+  let x;
+  try { x = new URL(n); } catch { return n; }
+  const segs = x.pathname.split("/");
+  const c = segs.findIndex((s, i) => s.toLowerCase() === "collections" && (segs[i + 2] || "").toLowerCase() === "products" && !!segs[i + 3]);
+  if (c > 0) { segs.splice(c, 2); x.pathname = segs.join("/"); }
+  if (isProductPathUrl(x.origin + x.pathname) || ID_SHAPED_PATH_RE.test(x.pathname)) x.search = "";
+  return x.href;
+}
 
 /* A size-guide trigger, by its visible label / aria-label / title. SIZE_GUIDE_LINK_RE is
    the static scanner's own list (size guide / chart / table, sizing, fit guide, מדריך
@@ -117,14 +143,31 @@ export const GUIDE_BOUNDARY = '[role=dialog],[aria-modal=true],dialog,[class*="m
    terminalx a women's chest+waist tops chart opened from a pair of trousers was typed
    "bottoms" off the trousers' title. Its own caption/heading/tab, then its columns,
    type it. A chart rendered IN the product page itself (browser_page) keeps the
-   product's context, exactly like the static inline_table path. */
+   product's context, exactly like the static inline_table path.
+   A browser_page chart that a shopper could NOT see at page read (MARK_HIDDEN_GRIDS left
+   data-pear-hidden on it) and that sits inside a guide container (GUIDE_BOUNDARY, never
+   <html>/<body> - Bootstrap's "modal-open") is marked `inGuide`: a guide pre-rendered hidden
+   (Shopify Dawn's .product-popup-modal) is still read with the product's context here, as
+   Phase 1 reads it, but once a click OPENS it the guide's own reading replaces this one
+   (captureWithBrowser's add()). THE BUG THIS CLOSES (review, 2026-10-07): the container alone
+   decided it, so a chart shown in the page inside <div class="product-info-drawer"> was
+   replaced by the next click's whole-page re-read - typed off its columns, the product's
+   "jeans" lost ("bottoms", or no type at all and dropped by buildRecords). The marker is
+   removed before parsing, so it never reaches a saved snapshot. */
 export function chartsFromHtml(html, pageUrl, JSDOM, { source, productUrl = "", referrerText = null } = {}) {
   const doc = new JSDOM(stripStyles(html), { url: pageUrl || "https://example.invalid/" }).window.document;
+  const hidden = [...doc.querySelectorAll("[data-pear-hidden]")];
+  for (const el of hidden) el.removeAttribute("data-pear-hidden");
   const guide = source === "browser_modal" || source === "browser_network";
   const ref = guide ? referrerAudience([referrerText != null ? referrerText : pageContextText(doc, pageUrl)]) : null;
+  const guideRoots = source === "browser_page"
+    ? [...doc.querySelectorAll(GUIDE_BOUNDARY)].filter((el) => el !== doc.documentElement && el !== doc.body) : [];
+  const hiddenInGuide = hidden.filter((el) => guideRoots.some((r) => r.contains(el)));
   return extractAllSizeCharts(doc, pageUrl, null, guide ? { contextBoundary: GUIDE_BOUNDARY } : {}).map((chart) => {
     if (guide) chart.classification = classifyChart(chart.rows, chart.localText, "", ref);
-    return { chart, source, sourceUrl: pageUrl, productUrl };
+    const entry = { chart, source, sourceUrl: pageUrl, productUrl };
+    if (chart.rawSnapshot && hiddenInGuide.some((el) => el.outerHTML.includes(chart.rawSnapshot))) entry.inGuide = true;
+    return entry;
   });
 }
 
@@ -301,6 +344,18 @@ const NEW_VISIBLE_GRIDS = `(() => {
   const before = window.__pearGridsBefore || new Set();
   return [...document.querySelectorAll('table,[role=table]')].filter((t) => shown(t, 20, 20) && !before.has(t)).length;
 })()`;
+/* In-page script, run just before the product page is read: mark every table / ARIA grid a
+   shopper cannot see yet, so chartsFromHtml() can tell a guide pre-rendered HIDDEN (its later
+   opened reading wins) from a chart shown in the page (keeps the product's context). */
+const MARK_HIDDEN_GRIDS = `(() => {
+  const shown = ${SHOWN_FN};
+  let n = 0;
+  for (const t of document.querySelectorAll('table,[role=table],[role=grid]')) {
+    if (shown(t, 20, 20)) t.removeAttribute('data-pear-hidden');
+    else { t.setAttribute('data-pear-hidden', ''); n++; }
+  }
+  return n;
+})()`;
 
 export async function loadPlaywright() {
   try {
@@ -314,23 +369,35 @@ export async function loadPlaywright() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/* A trigger that LEAVES the page: a link to another document (a /pages/size-guide prose
+   page), not a "#" anchor or a javascript: one. See the trigger loop for why it goes last. */
+function leavesPage(t, pageUrl) {
+  if (t.tag !== "A" || !t.href || /^\s*(?:#|javascript:)/i.test(t.href)) return false;
+  try {
+    const to = new URL(t.href, pageUrl), from = new URL(pageUrl);
+    to.hash = ""; from.hash = "";
+    return to.href !== from.href;
+  } catch { return false; }
+}
+
 /**
  * Open product pages in headless Chromium and capture every size chart a shopper could
  * open there. Pure over `chromium` (injectable for tests, as is `loadChromium`, the
  * loader used when no `chromium` is passed).
  * @param {string} storeUrl
  * @param {{productUrls?: string[], maxPages?: number, delayMs?: number, log?: Function,
- *          JSDOM: Function, chromium?: object, loadChromium?: Function, maxTriggers?: number}} opts
+ *          JSDOM: Function, chromium?: object, loadChromium?: Function, maxTriggers?: number,
+ *          navTimeoutMs?: number, pageOpTimeoutMs?: number}} opts
  * @returns {Promise<{found: Array<object>,
  *          images: Array<{url:string, productUrl:string, pages:string[], context:string}>,
  *          report: object}>}  images: one entry per chart image, `pages` = every product
  *          page it was seen on (productUrl = the first), so buildRecords' "2+ pages =
- *          the store's chart" rule can apply to an image too.
+ *          the store's chart" rule can apply to an image too. report.status: see the header.
  */
 export async function captureWithBrowser(storeUrl, {
   productUrls = [], maxPages = 6, delayMs = 1500, log = console.log, JSDOM, chromium = null,
   loadChromium = loadPlaywright,
-  maxTriggers = 4, navTimeoutMs = 45000, verbose = !!process.env.PEAR_CAPTURE_VERBOSE,
+  maxTriggers = 4, navTimeoutMs = 45000, pageOpTimeoutMs = 15000, verbose = !!process.env.PEAR_CAPTURE_VERBOSE,
 } = {}) {
   const vlog = (m) => { if (verbose) log("    · " + m); };
   const errText = (e) => String((e && e.message) || e).split("\n")[0];
@@ -353,22 +420,15 @@ export async function captureWithBrowser(storeUrl, {
   }
   const base = new URL(storeUrl);
   const host = canonicalStoreHost(base.hostname);
+  const onStoreHost = (u) => {
+    try { const h = canonicalStoreHost(new URL(u).hostname); return h === host || (!!host && h.endsWith("." + host)); } catch { return false; }
+  };
   let browser;
   try {
     browser = await ch.launch({ headless: true });
   } catch (e) {
     report.status = "browser_unavailable";
     report.errors.push("could not launch Chromium: " + errText(e));
-    return { found, images, report };
-  }
-  let page;
-  try {
-    const context = await browser.newContext({ locale: "he-IL", viewport: { width: 1366, height: 900 } });
-    page = await context.newPage();
-  } catch (e) {
-    await browser.close().catch(() => {});
-    report.status = "browser_unavailable";
-    report.errors.push("could not open a page: " + errText(e));
     return { found, images, report };
   }
   const payloads = [];
@@ -380,18 +440,90 @@ export async function captureWithBrowser(storeUrl, {
   /* Which product page a response belongs to: bumped before each navigation. The label and
      the generation are read when the response ARRIVES, not after its body lands. */
   let pageGen = 0;
-  page.on("response", async (resp) => {
-    const gen = pageGen, trigger = lastTrigger;
+  /* THE GUIDE'S OWN REQUEST REFUSED (review, 2026-10-07). A store can serve its product
+     pages and refuse the size-guide request itself (adidas's Product-SizeChart, which STATUS
+     records as bot-challenged). Only the product navigation was ever checked, so the refused
+     endpoint was asked again on every trigger of every page (up to 24 times) and the run
+     said "JS GUIDE NOT OPENED". A 403/429 or a challenge body answering an xhr/fetch on the
+     store's host AFTER a guide click - or the navigation a guide link made - is a refusal:
+     it is counted in report.blocked, no further guide is clicked on this store, and with no
+     chart read the run ends BLOCKED. Only what answers inside the guide's own window counts -
+     from a trigger or tab click to the read of what it opened (`guideWindow`): requests made
+     while a page loads, or after the guide was read (a recommendations call, a lazy-load, a
+     CSRF-refused POST on the same host), are not the guide's. */
+  let guideRefused = false, guideWindow = false;
+  const refuseGuide = (u, why) => {
+    guideRefused = true;
+    report.blocked.count++;
+    if (report.blocked.examples.length < 3) report.blocked.examples.push(u + " (guide request: " + why + ")");
+  };
+  const listen = (pg) => pg.on("response", async (resp) => {
+    const gen = pageGen, trigger = lastTrigger, asked = guideWindow;
     try {
-      const type = resp.request().resourceType();
+      const req = resp.request();
+      const type = req.resourceType();
       if (type !== "xhr" && type !== "fetch" && type !== "document") return;
+      /* THE BUG THIS CLOSES (review, 2026-10-07): the product page's OWN document (and its
+         goBack reload) was a "size payload" whenever its HTML held a dataLayer `"size":` and
+         a word like "waist" or "shipping" - almost every apparel PDP - so a store with no
+         guide at all reported network_payloads >= 1 and read as "JS GUIDE NOT OPENED". The
+         main frame's document is read from page.content(); only its status matters here. */
+      const mainNav = type === "document" && req.isNavigationRequest() && resp.frame() === pg.mainFrame();
+      const guideReq = asked && (type !== "document" || mainNav) && onStoreHost(resp.url());
+      const status = resp.status();
+      if (guideReq && (status === 403 || status === 429)) { refuseGuide(resp.url(), `HTTP ${status}`); return; }
+      if (mainNav) return;
       const ct = (resp.headers()["content-type"] || "").toLowerCase();
       if (!/json|html|text/.test(ct)) return;
       if (payloads.length >= 60) return;
       const text = await resp.text();
-      if (looksLikeSizePayload(text)) payloads.push({ url: resp.url(), text, pageUrl: page.url(), trigger, gen });
+      if (guideReq && looksLikeBotChallenge({ text, contentType: ct })) { refuseGuide(resp.url(), "bot challenge page"); return; }
+      if (looksLikeSizePayload(text)) payloads.push({ url: resp.url(), text, pageUrl: pg.url(), trigger, gen });
     } catch { /* a body we cannot read is not evidence */ }
   });
+  let context, page;
+  const openPage = async () => {
+    context = await browser.newContext({ locale: "he-IL", viewport: { width: 1366, height: 900 } });
+    page = await context.newPage();
+    listen(page);
+  };
+  try {
+    await openPage();
+  } catch (e) {
+    await browser.close().catch(() => {});
+    report.status = "browser_unavailable";
+    report.errors.push("could not open a page: " + errText(e));
+    return { found, images, report };
+  }
+  /* A PAGE THAT STOPS ANSWERING (review, 2026-10-07). goto, the load waits, click and goBack
+     carry their own timeouts; content(), evaluate() and $$eval run INSIDE the page and carry
+     none - a product page whose script spins the main thread (a broken third-party script)
+     hung the whole capture: the next page never opened, Chromium was never closed, and the
+     static stage's charts were never summarised or offered for save. Every in-page call
+     races a deadline; on expiry the page is given up (a failed page when it had not been
+     read yet), its context is closed without waiting for it, and the next URL opens in a
+     fresh context - a fresh renderer.
+     bounded() takes the call, not its promise (review, 2026-10-07): handed a promise, the call
+     was already STARTED on a page known to be stuck; it settled only when the context closed,
+     with a rejection nothing handled - Node exits on that (code 1), so the static charts and
+     the y/n were lost after all. Once a page is stuck nothing more is started on it. */
+  let stuck = "";
+  const bounded = (call) => {
+    if (stuck) return Promise.reject(new Error(stuck));   // the same page: nothing new is started on it
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        if (!stuck) stuck = `the page stopped answering for ${Math.round(pageOpTimeoutMs / 100) / 10}s - given up`;
+        reject(new Error(stuck));
+      }, pageOpTimeoutMs);
+    });
+    return Promise.race([Promise.resolve().then(call), deadline]).finally(() => clearTimeout(timer));
+  };
+  const freshPage = async () => {
+    const old = context;
+    Promise.resolve().then(() => old.close()).catch(() => {});   // never awaited: a spinning renderer may never confirm
+    try { await openPage(); stuck = ""; return true; } catch (e) { report.errors.push("could not open a fresh page: " + errText(e)); return false; }
+  };
 
   const seen = new Map();   // key -> index in found
   /* Returns how many readings the parser produced, BEFORE de-duplication: a guide re-opened
@@ -403,9 +535,15 @@ export async function captureWithBrowser(storeUrl, {
       const key = pageUrl + "|" + rowsHash(f.chart.rows);
       if (seen.has(key)) {
         /* ...but the BETTER-LABELLED reading wins: terminalx's modal shows a bare table,
-           while the CMS response that filled it carries the block title ("women"). */
-        const i = seen.get(key);
-        if (f.chart.classification.confidence > found[i].chart.classification.confidence) found[i] = f;
+           while the CMS response that filled it carries the block title ("women").
+           And a guide the click OPENED wins over the page's reading of the same guide while
+           it sat pre-rendered and hidden (inGuide, Shopify Dawn): that reading took its type
+           from the PRODUCT title - a chest+waist tops guide on a "Slim Fit Jeans" page read
+           "jeans" at 0.65 - and the guide's own reading (tops, from its columns, 0.5) could
+           never replace it on confidence: the terminalx mistyping the guide path exists to stop. */
+        const i = seen.get(key), prev = found[i];
+        const openedGuide = prev.source === "browser_page" && prev.inGuide && (f.source === "browser_modal" || f.source === "browser_network");
+        if (openedGuide || f.chart.classification.confidence > prev.chart.classification.confidence) found[i] = f;
         continue;
       }
       seen.set(key, found.length);
@@ -417,35 +555,50 @@ export async function captureWithBrowser(storeUrl, {
   const isBlocked = async (resp) => {
     const status = resp ? resp.status() : 0;
     if (status === 403 || status === 429) return `HTTP ${status}`;
-    const html = await page.content().catch(() => "");
+    const html = await bounded(() => page.content()).catch(() => "");
     if (looksLikeBotChallenge({ text: html, contentType: "text/html" })) return "bot challenge page";
     return null;
   };
 
+  let noProducts = false, firstUnanswered = "";
   try {
     /* Which pages: the static run's sample when it had one; otherwise read product links
        off the rendered home page (a JS storefront's links exist only after render). */
     let urls = productUrls.slice();
     if (!urls.length) {
-      const resp = await page.goto(storeUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs }).catch((e) => { report.errors.push("home: " + e.message.split("\n")[0]); return null; });
+      /* A home page with no HTTP answer is UNREACHABLE, exactly like a product page (review,
+         2026-10-07): on a JS storefront - the only one that gets here - an HTTP/2 reset of the
+         home page read "no product page found" and sent the operator to --url / --html. */
+      const resp = await page.goto(storeUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
+        .catch((e) => { firstUnanswered = "home: " + e.message.split("\n")[0]; report.errors.push(firstUnanswered); return null; });
       const why = resp ? await isBlocked(resp) : "no response";
       if (why && why !== "no response") {
         report.status = "blocked"; report.blocked.count++; report.blocked.examples.push(storeUrl + " (" + why + ")");
         return { found, images, report };
       }
-      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-      const hrefs = await page.$$eval("a[href]", (as) => as.map((a) => a.href)).catch(() => []);
-      urls = [...new Set(hrefs.filter((h) => { try { return canonicalStoreHost(new URL(h).hostname) === host && isProductPathUrl(h); } catch { return false; } }))];
-      if (!urls.length) {
-        /* id-shaped product URLs (terminalx's /w414418263) carry no pattern word */
-        urls = [...new Set(hrefs.filter((h) => { try { const u = new URL(h); return canonicalStoreHost(u.hostname) === host && /\/[^/]*\d{5,}[^/]*$/.test(u.pathname); } catch { return false; } }))];
+      if (stuck) report.errors.push("home: " + stuck);
+      if (resp && !stuck) {
+        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+        const hrefs = await bounded(() => page.$$eval("a[href]", (as) => as.map((a) => a.href))).catch(() => []);
+        urls = hrefs.filter((h) => { try { return canonicalStoreHost(new URL(h).hostname) === host && isProductPathUrl(h); } catch { return false; } });
+        if (!urls.length) {
+          /* id-shaped product URLs (terminalx's /w414418263) carry no pattern word */
+          urls = hrefs.filter((h) => { try { const u = new URL(h); return canonicalStoreHost(u.hostname) === host && ID_SHAPED_PATH_RE.test(u.pathname); } catch { return false; } });
+        }
       }
     }
-    urls = urls.slice(0, maxPages).map(normalizePageUrl);
-    if (!urls.length) report.errors.push("no product pages to open");
+    /* De-duplicated on the canonical spelling, BEFORE the page cap (canonicalProductUrl). */
+    urls = [...new Set(urls.map(canonicalProductUrl))].slice(0, maxPages);
+    /* NO PRODUCT PAGE TO OPEN (review, 2026-10-07): an empty static sample and a rendered home
+       page with no product link used to end "ok" with 0 pages opened, which the caller could
+       only read as "JS GUIDE NOT OPENED ... (0 page(s))" and sent the operator after a
+       client-side guide. It is its own status now (a home page that never answered at all is
+       UNREACHABLE, below). */
+    if (!urls.length) { noProducts = true; report.errors.push("no product pages to open"); }
 
-    let refusedInARow = 0;
+    let refusedInARow = 0, unansweredInARow = 0;
     for (const url of urls) {
+      if (stuck && !(await freshPage())) break;
       await sleep(delayMs);
       /* THE BUG THIS CLOSES (review, 2026-10-05): the label and the payloads were reset only
          AFTER the next page had loaded, so page B's own document response and every fetch it
@@ -455,10 +608,23 @@ export async function captureWithBrowser(storeUrl, {
       lastTrigger = "";
       pageGen++;
       payloads.length = 0;
+      let navError = "";
       const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
-        .catch((e) => { report.errors.push(url + ": " + e.message.split("\n")[0]); return null; });
-      if (!resp) { report.pages_failed++; continue; }
+        .catch((e) => { navError = url + ": " + e.message.split("\n")[0]; report.errors.push(navError); return null; });
+      if (!resp) {
+        report.pages_failed++;
+        /* NO ANSWER AT ALL (review, 2026-10-07): a store that resets the stream on a headless
+           client (Akamai's net::ERR_HTTP2_PROTOCOL_ERROR) or tarpits it into timeouts never
+           sends a 403, so this used to ask every sampled page - 45s each on a tarpit - and
+           end "ok", read as "JS GUIDE NOT OPENED". Two in a row with nothing opened stop the
+           run, reported UNREACHABLE with the first error; after a page opened, one is a blip. */
+        if (!firstUnanswered) firstUnanswered = navError || url + ": no response";
+        if (++unansweredInARow >= 2 && !report.pages_opened) break;
+        continue;
+      }
+      unansweredInARow = 0;
       const why = await isBlocked(resp);
+      if (stuck) { report.pages_failed++; report.errors.push(url + ": " + stuck); continue; }
       if (why) {
         report.blocked.count++; if (report.blocked.examples.length < 3) report.blocked.examples.push(url + " (" + why + ")");
         report.pages_failed++;
@@ -475,40 +641,70 @@ export async function captureWithBrowser(storeUrl, {
          renderer: Playwright's "Unable to retrieve content because the page is navigating")
          is a failed page, like a failed goto. It used to throw out of the whole run and take
          the static stage's charts with it. */
-      const pdpHtml = await page.content().catch((e) => { report.errors.push(url + ": " + errText(e)); return null; });
+      await bounded(() => page.evaluate(MARK_HIDDEN_GRIDS)).catch(() => 0);   // see chartsFromHtml's inGuide
+      const pdpHtml = await bounded(() => page.content()).catch((e) => { report.errors.push(url + ": " + errText(e)); return null; });
       if (pdpHtml == null) { report.pages_failed++; continue; }
       report.pages_opened++;
       const pdpContext = pageContextText(new JSDOM(stripStyles(pdpHtml), { url }).window.document, url);
       add(chartsFromHtml(pdpHtml, url, JSDOM, { source: "browser_page", productUrl: url }), url);
 
-      const marked = await page.evaluate(MARK_TRIGGERS).catch(() => []);
-      const triggers = marked.filter((t) => isSizeGuideTriggerLabel(t.label)).slice(0, maxTriggers);
+      /* A TRIGGER THAT NAVIGATES (review, 2026-10-07). The marks are attributes in the live
+         document; a guide LINK (<a href="/pages/fit-guide">) navigates, and goBack() loads a
+         NEW document (Chromium here keeps no back/forward cache) - every later trigger's
+         [data-pear-trigger] matched nothing, timed out, and the real modal button after the
+         link was never opened. Triggers that leave the page are clicked LAST, the marks are
+         re-made after each goBack (a trigger found again by label, tag and position among
+         its namesakes), and both navigations are paced like any other. */
+      const marked = await bounded(() => page.evaluate(MARK_TRIGGERS)).catch(() => []);
+      const nthOf = (list, t) => list.filter((x) => x.label === t.label && x.tag === t.tag).indexOf(t);
+      const triggers = marked.filter((t) => isSizeGuideTriggerLabel(t.label))
+        .map((t) => ({ ...t, nth: nthOf(marked, t), away: leavesPage(t, url) }))
+        .sort((a, b) => a.away - b.away)
+        .slice(0, guideRefused ? 0 : maxTriggers);
       vlog(`${url}: ${marked.length} size-ish element(s), ${triggers.length} trigger(s): ${triggers.map((t) => t.tag + " " + JSON.stringify(t.label.slice(0, 40))).join(", ")}`);
-      for (const t of triggers) {
+      for (let k = 0; k < triggers.length; k++) {
+        const t = triggers[k];
+        if (guideRefused || stuck) break;
+        if (!t.id) continue;   // not found again after a goBack
         const before = page.url();
-        await page.evaluate(REMEMBER_VISIBLE_IMAGES).catch(() => 0);
-        await page.evaluate(REMEMBER_VISIBLE_GRIDS).catch(() => 0);
+        if (t.away) await sleep(delayMs);
+        await bounded(() => page.evaluate(REMEMBER_VISIBLE_IMAGES)).catch(() => 0);
+        await bounded(() => page.evaluate(REMEMBER_VISIBLE_GRIDS)).catch(() => 0);
+        if (stuck) break;
         lastTrigger = t.label;
         const refText = pdpContext + " | " + t.label;
         let readings = 0, imagesShown = 0;
+        guideWindow = true;
         try {
           await page.locator(`[data-pear-trigger="${t.id}"]`).first().click({ timeout: 4000 });
           report.triggers_clicked++;
-        } catch (e) { vlog("click failed: " + String(e.message).split("\n")[0]); continue; }
+        } catch (e) { guideWindow = false; vlog("click failed: " + String(e.message).split("\n")[0]); continue; }
         await page.waitForTimeout(1200).catch(() => {});
         await page.waitForLoadState("networkidle", { timeout: 6000 }).catch(() => {});
-        const modalHtml = await page.content().catch(() => "");
+        const modalHtml = await bounded(() => page.content()).catch(() => "");
+        guideWindow = false;
+        if (stuck) break;
+        const navigated = page.url() !== before;
+        /* A challenge page a guide LINK landed on is the store refusing us only on the store's
+           own host - a third-party sizing page's challenge is not (the listener's rule). */
+        if (navigated && onStoreHost(page.url()) && modalHtml && looksLikeBotChallenge({ text: modalHtml, contentType: "text/html" })) refuseGuide(page.url(), "bot challenge page");
+        if (guideRefused) {
+          if (navigated) await page.goBack({ timeout: navTimeoutMs }).catch(() => {});
+          break;
+        }
         if (modalHtml) readings += add(chartsFromHtml(modalHtml, page.url(), JSDOM, { source: "browser_modal", productUrl: url, referrerText: refText }), url);
-        const tabs = (await page.evaluate(MARK_TABS).catch(() => [])).filter((tab) => !NEVER_CLICK_RE.test(tab.label));
+        const tabs = (await bounded(() => page.evaluate(MARK_TABS)).catch(() => [])).filter((tab) => !NEVER_CLICK_RE.test(tab.label));
         for (const tab of tabs) {
+          if (stuck) break;
+          guideWindow = true;
           try {
             await page.locator(`[data-pear-tab="${tab.id}"]`).first().click({ timeout: 3000 });
             report.tabs_clicked++;
             await page.waitForTimeout(700);
-            readings += add(chartsFromHtml(await page.content(), page.url(), JSDOM, { source: "browser_modal", productUrl: url, referrerText: refText }), url);
-          } catch { /* a tab that will not click is skipped */ }
+            readings += add(chartsFromHtml(await bounded(() => page.content()), page.url(), JSDOM, { source: "browser_modal", productUrl: url, referrerText: refText }), url);
+          } catch { /* a tab that will not click is skipped */ } finally { guideWindow = false; }
         }
-        for (const src of await page.evaluate(COLLECT_CHART_IMAGES).catch(() => [])) {
+        for (const src of await bounded(() => page.evaluate(COLLECT_CHART_IMAGES)).catch(() => [])) {
           imagesShown++;
           /* Every product page an image was seen on is kept: a store's one guide image opened
              from six PDPs used to be tagged with the FIRST page only - product-scoped forever,
@@ -522,19 +718,27 @@ export async function captureWithBrowser(storeUrl, {
            IT | UK | US | JEANS) with no body measurement. Correctly not a chart - but it is
            a different answer from "could not open the guide", so it is counted. */
         if (readings === 0 && imagesShown === 0) {
-          const grids = await page.evaluate(NEW_VISIBLE_GRIDS).catch(() => 0);
+          const grids = await bounded(() => page.evaluate(NEW_VISIBLE_GRIDS)).catch(() => 0);
           if (grids > 0) {
             report.unmeasured_guides++;
             if (report.unmeasured_examples.length < 2) report.unmeasured_examples.push(url);
           }
         }
-        if (page.url() !== before) {
+        if (stuck) break;
+        if (navigated) {
+          await sleep(delayMs);
           await page.goBack({ timeout: navTimeoutMs }).catch(() => {});
+          const again = await bounded(() => page.evaluate(MARK_TRIGGERS)).catch(() => []);
+          for (const r of triggers.slice(k + 1)) {
+            const m = again.filter((x) => x.label === r.label && x.tag === r.tag)[r.nth];
+            r.id = m ? m.id : "";
+          }
         } else {
-          await page.keyboard.press("Escape").catch(() => {});
+          await bounded(() => page.keyboard.press("Escape")).catch(() => {});
           await page.waitForTimeout(300).catch(() => {});
         }
       }
+      if (stuck) report.errors.push(url + ": " + stuck);
       await page.waitForTimeout(500).catch(() => {});   // let in-flight response bodies land
       vlog(`${payloads.length} size payload(s): ${payloads.map((p) => p.url.slice(0, 80)).join(" | ")}`);
       for (const p of payloads.splice(0)) {
@@ -546,10 +750,20 @@ export async function captureWithBrowser(storeUrl, {
   } finally {
     await browser.close().catch(() => {});
   }
-  /* One refusal with nothing opened (the in-a-row stop above needs two) is still BLOCKED. */
+  /* One refusal with nothing opened (the in-a-row stop above needs two) is still BLOCKED -
+     and so is a refused guide request when no chart was read. A refusal outranks a page that
+     never answered: "unreachable" means nothing refused us. */
   if (report.status === "ok" && report.pages_opened === 0 && report.blocked.count) report.status = "blocked";
+  if (report.status === "ok" && guideRefused && !found.length) report.status = "blocked";
+  if (report.status === "ok" && report.pages_opened === 0 && firstUnanswered) {
+    report.status = "unreachable";
+    report.errors = [firstUnanswered, ...report.errors.filter((e) => e !== firstUnanswered)];
+  }
+  if (report.status === "ok" && noProducts) report.status = "no_products";
   log(`  browser: ${report.pages_opened} page(s) opened, ${report.triggers_clicked} trigger(s) + ${report.tabs_clicked} tab(s) clicked, ` +
     `${report.network_payloads} size payload(s), ${found.length} chart reading(s), ${images.length} chart image(s)` +
-    (report.blocked.count ? `, BLOCKED ${report.blocked.count}x` : ""));
+    (report.blocked.count ? `, BLOCKED ${report.blocked.count}x` : "") +
+    (report.status === "unreachable" ? `, UNREACHABLE - no answer: ${report.errors[0]}` : "") +
+    (report.status === "no_products" ? `, no product page to open${report.errors[0] && report.errors[0].startsWith("home: ") ? " (" + report.errors[0] + ")" : ""}` : ""));
   return { found, images, report };
 }

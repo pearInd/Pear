@@ -9,10 +9,13 @@
    §4 THE HUMAN END: summary text, y/n never auto-saves off a TTY, the live read-back.
    §5 POLITE STATIC STOP: three refusals in a row and the static stage stops asking.
    §6 A BROWSER STAGE THAT THROWS is browser_unavailable - the static charts survive.
+   §7 THE COMMAND LINE: `--flag=value` is `--flag value`; a yes/no flag takes no value.
+   §8 THE CLI ITSELF (main): --dry-run never saves, not even with --yes; a save the
+      database skipped is a non-zero exit.
    ============================================================================= */
 import { JSDOM } from "jsdom";
-import { runCapture, browserFallbackReason } from "../scanner/capture.js";
-import { formatChartSummary, askYesNo, reasonLine, fetchLiveCharts, liveCoverage, parseCliArgs } from "../scanner/capture-cli.js";
+import { runCapture, browserFallbackReason, main as captureMain } from "../scanner/capture.js";
+import { formatChartSummary, askYesNo, reasonLine, fetchLiveCharts, liveCoverage, parseCliArgs, saveAndVerify } from "../scanner/capture-cli.js";
 import { extractAllSizeCharts, discoverSizeCharts } from "../scanner/size-charts.js";
 
 let fails = 0;
@@ -37,7 +40,7 @@ const staticResult = ({ found = [], triggers = 0, apps = [], outcome = null, ima
 const quiet = () => {};
 const runWith = (st, extra = {}) => {
   const calls = { browser: 0, images: 0 };
-  return runCapture("https://www.shop.example.com", {
+  return runCapture(extra.store || "https://www.shop.example.com", {
     log: quiet, JSDOM, imageDelayMs: 0, apiKey: "k",
     discover: async () => st,
     browserCapture: async () => { calls.browser++; return extra.browser || { found: [], images: [], report: { status: "ok", pages_opened: 2, triggers_clicked: 1, tabs_clicked: 0, network_payloads: 0, methods: {}, blocked: { count: 0, examples: [] }, errors: [] } }; },
@@ -105,6 +108,26 @@ console.log("\n── §1 when the browser runs ──");
   await runWith(refusedImgs, { opts: { imageReader: async (src) => { imgAsked.push(src.url); return { found: [], outcome: "not_a_chart", detail: "x" }; } } });
   check("§1.14 after a refusal, image charts on the store's own host are not fetched - only the CDN one is read",
     JSON.stringify(imgAsked) === JSON.stringify(["https://cdn.example.net/files/size-chart.png"]), JSON.stringify(imgAsked));
+  /* A refusal of the BROWSER is a refusal too: the static stage answered, the browser was
+     then refused twice in a row - and the image stage used to fetch the static hits on the
+     store's own host anyway (only a static refusal filtered them), the browser's too. */
+  const brAsked = [];
+  const brBlocked = { found: [], images: [{ url: "https://www.shop.example.com/files/guide.png", productUrl: "https://shop.example.com/products/a", pages: ["https://shop.example.com/products/a"] }],
+    report: { status: "blocked", pages_opened: 0, triggers_clicked: 0, tabs_clicked: 0, network_payloads: 0, methods: {}, blocked: { count: 2, examples: ["https://shop.example.com/products/a (HTTP 403)"] }, errors: [] } };
+  const afterBr = await runWith(staticResult({ images: ["https://www.shop.example.com/cdn/size-chart.jpg", "https://cdn.example.net/files/size-chart.png"] }),
+    { browser: brBlocked, opts: { imageReader: async (src) => { brAsked.push(src.url); return { found: [], outcome: "not_a_chart", detail: "x" }; } } });
+  check("§1.15 the BROWSER refused (static answered) -> no image on the store's own host is fetched, static or browser; the CDN one is",
+    JSON.stringify(brAsked) === JSON.stringify(["https://cdn.example.net/files/size-chart.png"]) && afterBr.reason && afterBr.reason.kind === "blocked",
+    JSON.stringify([brAsked, afterBr.reason]));
+  /* The store is its registrable domain, not the one hostname typed: a store at
+     shop.example.co.il that refused us also serves www./cdn./bare example.co.il. */
+  const subAsked = [];
+  const sub = staticResult({ outcome: "image_chart_detected",
+    images: ["https://www.example.co.il/a.jpg", "https://cdn.example.co.il/size-chart.png", "https://example.co.il/b.png", "https://cdn.example-cdn.co.il/c.png"] });
+  sub.report.polite_stop = true;
+  await runWith(sub, { store: "https://shop.example.co.il", opts: { imageReader: async (src) => { subAsked.push(src.url); return { found: [], outcome: "not_a_chart", detail: "x" }; } } });
+  check("§1.16 ...the store's parent domain and sibling subdomains are the store too (co.il); a lookalike domain is not",
+    JSON.stringify(subAsked) === JSON.stringify(["https://cdn.example-cdn.co.il/c.png"]), JSON.stringify(subAsked));
 }
 
 console.log("\n── §2 one list, one buildRecords ──");
@@ -184,6 +207,28 @@ console.log("\n── §2 one list, one buildRecords ──");
     suits.length === 1 && suits[0].chart.classification.garmentType === null && untyped.calls.images === 1 &&
     untyped.records.length === 1 && untyped.records[0].source === "image_ocr" && untyped.reason === null,
     JSON.stringify([untyped.calls.images, untyped.records.map((r) => r.source), untyped.reason]));
+
+  /* Images that APPEARED when a guide was clicked are read first: static banner hits came
+     first and used up the 4 Gemini slots, so the guide's real chart image was never read. */
+  const order = [];
+  const banners4 = staticResult({ images: [1, 2, 3, 4].map((i) => `https://s.example/banner${i}.jpg`) });
+  const guideFirst = await runWith(banners4, { browser: brImg({ url: "https://cdn.example/guide-chart.png", productUrl: PA, pages: [PA, PB], context: "Size guide" }),
+    opts: { imageReader: async (src) => { order.push(src.url); return src.url === "https://cdn.example/guide-chart.png" ? kids : { found: [], outcome: "not_a_chart", detail: "Gemini: not a size chart" }; } } });
+  check("§2.18 4 static banner hits + 1 image a guide showed -> the guide's image is read (first), its chart captured",
+    order[0] === "https://cdn.example/guide-chart.png" && order.length === 4 && guideFirst.records.length === 1 && guideFirst.reason === null,
+    JSON.stringify([order, guideFirst.reason]));
+
+  /* "Captured" is a chart the room will SERVE: a product-scoped browser chart (one PDP) is
+     stored but never served, and it used to skip the store-wide image guide the static
+     stage had found. */
+  const psAsked = [];
+  const psBrowser = { found: finding("Women", "browser_page", PA), images: [],
+    report: { status: "ok", pages_opened: 1, triggers_clicked: 0, tabs_clicked: 0, network_payloads: 0, methods: {}, blocked: { count: 0, examples: [] }, errors: [] } };
+  const ps = await runWith(staticResult({ images: ["https://shop.example.com/pages/guide.png"], imagePages: { "https://shop.example.com/pages/guide.png": [""] } }),
+    { browser: psBrowser, opts: { imageReader: async (src, o) => { psAsked.push(src.url); return { ...kids, found: kids.found.map((f) => ({ ...f, productUrl: o.productUrl || "" })) }; } } });
+  check("§2.19 only a product-scoped chart captured -> the store-wide static image guide is still read and kept store-wide",
+    psAsked.length === 1 && ps.records.some((r) => r.source === "image_ocr" && r.product_key === "") && ps.records.some((r) => r.product_key === PA),
+    JSON.stringify([psAsked, ps.records.map((r) => [r.source, r.product_key])]));
 }
 
 console.log("\n── §3 nothing found -> one reason + the manual command ──");
@@ -223,6 +268,47 @@ console.log("\n── §3 nothing found -> one reason + the manual command ─�
     browser: { found: [], images: [], report: { status: "browser_unavailable", errors: ["could not launch Chromium"], blocked: { count: 0, examples: [] } } } });
   check("§3.10 a store that refused us is BLOCKED, never 'install Chromium' (blocked outranks browser_unavailable)",
     refusedNoChrome.reason.kind === "blocked" && refusedNoChrome.calls.browser === 0, JSON.stringify(refusedNoChrome.reason));
+  const brRep = (status, more = {}) => ({ found: [], images: [], report: { status, pages_opened: 0, triggers_clicked: 0, tabs_clicked: 0, network_payloads: 0,
+    methods: {}, unmeasured_guides: 0, unmeasured_examples: [], blocked: { count: 0, examples: [] }, errors: [], ...more } });
+  /* A refused browser is BLOCKED whatever RAW finding the static stage made: a lone "Suits"
+     table (never stored) used to send it to "JS GUIDE NOT OPENED". */
+  const suitsBlocked = await runWith(staticResult({ found: finding("Suits", "linked_page"), records: [] }),
+    { browser: brRep("blocked", { blocked: { count: 2, examples: ["https://shop.example.com/products/a (HTTP 403)"] } }) });
+  check("§3.11 static kept nothing (an untyped Suits table) + the browser refused -> BLOCKED, not js_unreadable",
+    suitsBlocked.reason.kind === "blocked" && /HTTP 403/.test(suitsBlocked.reason.extra), JSON.stringify(suitsBlocked.reason));
+  const brUnr = await runWith(staticResult(), { browser: brRep("unreachable", { errors: ["https://shop.example.com/products/a: net::ERR_NAME_NOT_RESOLVED"] }) });
+  check("§3.12 the browser's navigations got no HTTP answer -> UNREACHABLE quoting its first error",
+    brUnr.reason.kind === "unreachable" && /ERR_NAME_NOT_RESOLVED/.test(brUnr.reason.extra) &&
+    /UNREACHABLE.*ERR_NAME_NOT_RESOLVED/.test(reasonLine(brUnr.reason.kind, "shop.example.com", brUnr.reason.extra)), JSON.stringify(brUnr.reason));
+  const brNone = await runWith(staticResult({ triggers: 0 }), { browser: brRep("no_products") });
+  const brNoneLine = reasonLine(brNone.reason.kind, "shop.example.com", brNone.reason.extra);
+  check("§3.13 the browser found no product page to open -> none, saying so and pointing at --url (not 'JS GUIDE NOT OPENED')",
+    brNone.reason.kind === "none" && /no product page/.test(brNone.reason.extra) && /--url/.test(brNoneLine) && /product or size-guide page/.test(brNone.reason.extra),
+    JSON.stringify(brNone.reason));
+  /* No GEMINI_API_KEY: every read failed before reaching Gemini, the run said IMAGE
+     UNREADABLE and advised "a sharper screenshot" - through --image, which needs the same key. */
+  const noKey = await runWith(staticResult({ images: ["https://cdn/a.png", "https://cdn/b.png"] }), { opts: { apiKey: "" } });
+  const noKeyLine = reasonLine(noKey.reason.kind, "shop.example.com", noKey.reason.extra);
+  check("§3.14 no GEMINI_API_KEY -> the images are not sent to the reader, and the reason says to set it in scanner/.env",
+    noKey.calls.images === 0 && noKey.reason.kind === "no_ocr_key" && /GEMINI_API_KEY/.test(noKeyLine) && /scanner\/\.env/.test(noKeyLine) &&
+    !/sharper screenshot/.test(noKeyLine), JSON.stringify([noKey.calls, noKey.reason, noKeyLine]));
+  const limited = await runWith(staticResult({ images: ["https://cdn/a.png", "https://cdn/b.png"] }),
+    { image: { found: [], outcome: "error", detail: "Gemini HTTP 429 (rate limited - retry later)" } });
+  const limitedLine = reasonLine(limited.reason.kind, "shop.example.com", limited.reason.extra);
+  check("§3.15 Gemini answered 429 -> no further image is read, and the reason says retry later (not 'a sharper screenshot')",
+    limited.calls.images === 1 && limited.reason.kind === "image_rate_limited" && /retry later|try again later|run the same command again/i.test(limitedLine) &&
+    !/sharper screenshot/.test(limitedLine), JSON.stringify([limited.calls, limited.reason, limitedLine]));
+  /* --no-images on a store whose guide is an image: the run said "NO SIZE GUIDE FOUND" (or,
+     after a browser opened a guide that showed one, "JS GUIDE NOT OPENED"). */
+  const skipImg = await runWith(staticResult({ outcome: "image_chart_detected", images: ["https://cdn/chart.png"] }), { opts: { noBrowser: true, noImages: true } });
+  const skipLine = reasonLine(skipImg.reason.kind, "shop.example.com", skipImg.reason.extra);
+  check("§3.16 an image guide found but not read (--no-images) -> says so, not 'NO SIZE GUIDE FOUND'",
+    skipImg.calls.images === 0 && skipImg.reason.kind === "images_not_read" && /--no-images/.test(skipLine) && !/NO SIZE GUIDE FOUND/.test(skipLine),
+    JSON.stringify([skipImg.reason, skipLine]));
+  const skipBr = await runWith(staticResult({ triggers: 2 }), { browser: { ...brRep("ok", { pages_opened: 2, triggers_clicked: 2 }), images: [{ url: "https://cdn/guide.png", productUrl: "https://shop.example.com/products/a" }] },
+    opts: { noImages: true } });
+  check("§3.17 ...and when the browser opened a guide that showed an image, not 'JS GUIDE NOT OPENED'",
+    skipBr.reason.kind === "images_not_read", JSON.stringify(skipBr.reason));
 }
 
 console.log("\n── §4 the human end ──");
@@ -237,12 +323,56 @@ console.log("\n── §4 the human end ──");
   check("§4.2 not a TTY -> answers NO and says how to save (--yes)", yes === false && /--yes/.test(written.join("")));
   check("§4.3 --yes saves without a prompt", (await askYesNo("Save?", { assumeYes: true })) === true);
   let asked = "";
+  /* What GET /api/store-size-chart serves for that chart (lib/store-size-charts.js toRoomChart). */
+  const served = (more = {}) => ({ gender: "men", age_group: "adult", garment_type: "tops", size_system: "alpha", source: "linked_page",
+    rows: [{ size: "S", minChest: 88, maxChest: 94 }, { size: "M", minChest: 95, maxChest: 101 }, { size: "L", minChest: 102, maxChest: 108 }], ...more });
   const live = await fetchLiveCharts("shop.example.com", { apiBase: "https://api.example.com/", fetchImpl: async (u) => {
-    asked = u; return { ok: true, json: async () => ({ host: "shop.example.com", charts: [{ gender: "men", age_group: "adult", garment_type: "tops", size_system: "alpha", source: "linked_page", rows: [{ size: "S" }] }] }) };
+    asked = u; return { ok: true, json: async () => ({ host: "shop.example.com", charts: [served()] }) };
   } });
   check("§4.4 the live check asks GET /api/store-size-chart for the canonical host", asked === "https://api.example.com/api/store-size-chart?host=shop.example.com" && live.ok, asked);
   const cov = liveCoverage(out.records, live);
   check("§4.5 ...and matches what was saved against what is served", cov.expected === 1 && cov.live === 1, JSON.stringify(cov));
+
+  /* The read-back has to be honest about what it does NOT know. */
+  const verify = async (records, fetchImpl, save = async () => ({ saved: records.length })) => {
+    const said = [], exits = [];
+    const res = await saveAndVerify({ supabase: {}, records, host: "shop.example.com", saveSizeChartRecords: save, log: (m) => said.push(m),
+      fetchImpl, setExitCode: (c) => exits.push(c) });
+    return { res, said: said.join("\n"), exits };
+  };
+  const answer = (charts) => async () => ({ ok: true, json: async () => ({ host: "shop.example.com", charts }) });
+  const down = await verify(out.records, async () => ({ ok: false, status: 404 }));
+  check("§4.6 a live check that FAILED is 'could not verify' - not 'the endpoint caches, wait'",
+    /could not verify/.test(down.said) && !/caches/.test(down.said) && !/✓ all/.test(down.said), down.said);
+  const scoped = out.records.map((r) => ({ ...r, product_key: "https://shop.example.com/products/a" }));
+  const onlyScoped = await verify(scoped, answer([]));
+  check("§4.7 only product-scoped charts saved -> no success tick: says the room serves none of them",
+    !/✓ all/.test(onlyScoped.said) && /product-scoped/.test(onlyScoped.said) && /not served/.test(onlyScoped.said), onlyScoped.said);
+  /* A re-capture upserts onto the same key; the 5-minute cache still serves the OLD
+     numbers under the same labels - that used to read "✓ all 1 ... are live". */
+  const stale = await verify(out.records, answer([served({ rows: [{ size: "S", minChest: 80, maxChest: 84 }, { size: "M", minChest: 85, maxChest: 90 }, { size: "L", minChest: 91, maxChest: 96 }] })]));
+  check("§4.8 the endpoint serves the same labels with DIFFERENT numbers -> not live: says the numbers differ",
+    !/✓ all/.test(stale.said) && /different numbers/.test(stale.said), stale.said);
+  const fresh = await verify(out.records, answer([served()]));
+  check("§4.9 ...the same labels and the numbers just saved -> live", /✓ all 1 store-wide chart\(s\) just saved are live/.test(fresh.said), fresh.said);
+  /* A save the database skipped (a migration not run) used to exit 0: `capture ... --yes &&
+     echo captured` said captured. The hint used to say "re-run with --save" - a Phase 1 flag
+     neither Phase 2 command has. */
+  const real = (await import("../scanner/size-charts.js")).saveSizeChartRecords;
+  const v16 = await verify(out.records, answer([]), (sb, recs, log, o) =>
+    real({ from: () => ({ upsert: async () => ({ error: { code: "42P10", message: "no unique or exclusion constraint matching the ON CONFLICT specification" } }) }) }, recs, log, o));
+  check("§4.10 a save skipped for a missing migration -> exit code 1, and no live check", v16.res.saved === 0 && v16.exits.join() === "1" && !/live/.test(v16.said),
+    JSON.stringify([v16.res, v16.exits]));
+  check("§4.11 ...and its hint names this command, not Phase 1's --save", /supabase_setup_v16\.sql/.test(v16.said) && !/--save/.test(v16.said) &&
+    /run the same command again/.test(v16.said), v16.said);
+  check("§4.12 a real save leaves the exit code alone", fresh.exits.length === 0, JSON.stringify(fresh.exits));
+  /* A 200 that carries the endpoint's own failure note verified nothing either: its storage
+     failed or it reads another database. That still read "not served yet (the endpoint
+     caches...)" - the same wait-for-a-cache advice §4.6 removed for a failed request. */
+  const noteSays = async (note) => (await verify(out.records, async () => ({ ok: true, json: async () => ({ host: "shop.example.com", charts: [], note }) }))).said;
+  const qf = await noteSays("query_failed"), tm = await noteSays("table_missing"), su = await noteSays("storage_unavailable");
+  check("§4.13 a 200 with query_failed / table_missing / storage_unavailable is 'could not verify', never 'caches, wait'",
+    [qf, tm, su].every((t) => /could not verify/.test(t) && !/caches/.test(t) && !/✓ all/.test(t)) && /query_failed/.test(qf), [qf, tm, su].join("\n---\n"));
 }
 
 console.log("\n── §5 the static stage stops after three refusals ──");
@@ -304,6 +434,55 @@ console.log("\n── §7 the command line ──");
   check("§7.2 an empty --type= is an empty value, not the next flag", a.val("--type") === "" && a.flag("--x"), JSON.stringify(a.args));
   const b = parseCliArgs(["node", "import-chart.js", "--only", "2", "--host=shop.example.com"]);
   check("§7.3 the spaced form is unchanged", b.val("--only") === "2" && b.val("--host") === "shop.example.com", JSON.stringify(b.args));
+  /* `--yes=no` was `--yes` followed by a stray "no": it saved without asking. A yes/no flag
+     takes no value; anything but an empty / true / 1 is a usage error, never a set flag. */
+  const bad = (argv) => { try { parseCliArgs(["node", "capture.js", "https://s.co.il", ...argv]); return null; } catch (e) { return e.message; } };
+  check("§7.4 --yes=no / --yes=false / --dry-run=false / --browser=0 are usage errors, not set flags",
+    ["--yes=no", "--yes=false", "--dry-run=false", "--browser=0"].every((a) => /takes no value/.test(bad([a]) || "")),
+    JSON.stringify(["--yes=no", "--dry-run=false"].map((a) => bad([a]))));
+  const ok = parseCliArgs(["node", "capture.js", "https://s.co.il", "--yes=true", "--dry-run=", "--images=1"]);
+  check("§7.5 --yes=true / --dry-run= / --images=1 read as the bare flag (no stray value)",
+    ok.flag("--yes") && ok.flag("--dry-run") && ok.flag("--images") && ok.args.length === 4, JSON.stringify(ok.args));
+  /* The spaced form did the same as `--yes=no` once did: `--yes no` is `--yes` plus a stray
+     positional, so the charts were saved without a y/n. */
+  check("§7.6 --yes no / --yes false / --dry-run off (spaced) are usage errors too",
+    [["--yes", "no"], ["--yes", "false"], ["--dry-run", "off"], ["--browser", "0"]].every((a) => /takes no value/.test(bad(a) || "")),
+    JSON.stringify([["--yes", "no"], ["--dry-run", "off"]].map((a) => bad(a))));
+  const pos = parseCliArgs(["node", "capture.js", "--dry-run", "https://s.co.il", "--yes", "--only", "1"]);
+  check("§7.7 ...while a URL or another flag after a yes/no flag is read as before",
+    pos.flag("--dry-run") && pos.flag("--yes") && pos.args.includes("https://s.co.il") && pos.val("--only") === "1", JSON.stringify(pos.args));
+}
+
+console.log("\n── §8 the CLI itself ──");
+{
+  /* Requirement 4: --dry-run never saves. Nothing ran main() before, so deleting the dry-run
+     guard left every suite green. main() is driven with the capture and the save stubbed;
+     the Supabase variables are set (dummies) so only the guard stands between --yes and a save. */
+  const capOut = await runWith(staticResult({ found: finding("Men", "linked_page") }));
+  const drive = async (argv, saveRes = null) => {
+    let saves = 0;
+    const printed = [];
+    const orig = console.log;
+    console.log = (...a) => printed.push(a.join(" "));
+    const exits = [];
+    try {
+      await captureMain(["node", "capture.js", "https://www.shop.example.com", ...argv], {
+        loadEnv: () => {}, env: { SUPABASE_URL: "http://127.0.0.1:9", SUPABASE_SERVICE_ROLE_KEY: "dummy" },
+        capture: async () => capOut,
+        /* The real saveAndVerify over a stubbed database save: main() hands it the exit code. */
+        save: (o) => saveAndVerify({ ...o, log: () => {}, fetchImpl: async () => ({ ok: false, status: 503 }),
+          saveSizeChartRecords: async (sb, recs) => { saves++; return saveRes || { saved: recs.length }; } }),
+        setExitCode: (c) => exits.push(c),
+      });
+    } finally { console.log = orig; }
+    return { saves, printed: printed.join("\n"), exits };
+  };
+  const dry = await drive(["--dry-run", "--yes"]);
+  check("§8.1 --dry-run --yes -> 'Dry run - nothing written.', save never called", dry.saves === 0 && /Dry run - nothing written\./.test(dry.printed), dry.printed.slice(-300));
+  const wet = await drive(["--yes"]);
+  check("§8.2 ...the same run without --dry-run saves (the control: the stub can see a save)", wet.saves === 1 && wet.exits.length === 0, JSON.stringify([wet.saves, wet.exits]));
+  const skipped = await drive(["--yes"], { saved: 0, skipped: "table_missing" });
+  check("§8.3 a save the database skipped -> exit code 1", skipped.exits.join() === "1", JSON.stringify(skipped.exits));
 }
 
 console.log("");

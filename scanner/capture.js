@@ -12,8 +12,10 @@
                  --browser, at a store that refused the static stage (that is BLOCKED).
                  A browser stage that throws is browser_unavailable; static's charts stay.
    3. IMAGES     image-charts.js (Gemini, up to 4): images that APPEARED when a guide was
-                 clicked, always; the static stage's image hits only when nothing else was
-                 captured (or with --images) - they are word matches (delta: a banner, a logo).
+                 clicked, always and first; the static stage's image hits only when nothing
+                 store-wide was captured (or with --images) - they are word matches (delta: a
+                 banner, a logo). After a refusal (static or browser) nothing on the store's
+                 own site is fetched. No GEMINI_API_KEY -> nothing is read, and the run says so.
    Then: one summary of every chart, y/n, save (the Phase 1 save path), and a read-back
    of GET /api/store-size-chart. Nothing found -> one line saying why, plus the manual
    import command.
@@ -106,11 +108,13 @@ export async function runCapture(storeUrl, {
      The static stage's image hits are word/container matches (delta.co.il: a banner and a
      logo) - read only when nothing else was captured, so a store with real tables does
      not spend Gemini calls on its banners.
-     "Captured" means a RECORD buildRecords would keep, not a raw finding: a lone "Suits"
-     table (no garment type - never stored) used to count, so the store's real image chart
-     was skipped and the run said "NO SIZE GUIDE FOUND". A throwaway report, so the real
-     one below does not count its conflicts twice. */
-  const nothingYet = !buildRecords(found, host, { charts: [], conflicts: [] }).length;
+     "Captured" means a STORE-WIDE RECORD buildRecords would keep, not a raw finding: a lone
+     "Suits" table (no garment type - never stored) used to count, so the store's real image
+     chart was skipped and the run said "NO SIZE GUIDE FOUND". A product-scoped record (a
+     chart seen on one PDP) counted too, so the store-wide image guide the static stage had
+     found was never read and the run offered only a row the room never serves. A throwaway
+     report, so the real one below does not count its conflicts twice. */
+  const nothingYet = !buildRecords(found, host, { charts: [], conflicts: [] }).some((r) => !r.product_key);
   const imageResults = [];
   /* WHERE each image was seen decides its scope, as for a table (size-charts.js, STORE-WIDE
      vs PRODUCT-SCOPED). Every hit carries `pages`: the browser's are every product page the
@@ -126,32 +130,63 @@ export async function runCapture(storeUrl, {
     return { url, productUrl, pages: [productUrl], static: true };
   };
   const imageUrls = [];
-  /* A store that refused us is not asked for its images either: a static hit on the store's
-     own host (or a subdomain of it) is skipped after a refusal; an image on another host (a
-     CDN, a size-app's servers) is not the store and is still read. */
-  const onStoreHost = (u) => {
-    try { const h = canonicalStoreHost(new URL(u).hostname); return h === host || h.endsWith("." + host); } catch { return false; }
+  /* A store that refused us is not asked for its images either: an image on the store's own
+     site is skipped after a refusal; an image on another site (a CDN, a size-app's servers)
+     is not the store and is still read.
+     - A refusal of the BROWSER counts too (two refusals in a row, or refused guide
+       requests): only the static stage's was checked, so a store that had just answered the
+       browser 403 was asked for its static image hits - and the browser's - anyway.
+     - The store's site is its REGISTRABLE domain, not the hostname typed: a store given as
+       shop.example.co.il kept fetching from www./cdn./bare example.co.il after refusing us.
+       Two labels, three under a two-level country suffix (co.il, co.uk, com.au...) - an
+       approximation that, when wrong, skips an image rather than asks a refusing store. */
+  const siteOf = (h) => {
+    const l = h.split(".");
+    return l.slice(l.length > 2 && /^(?:co|com|org|net|ac|gov|edu|muni|ltd|plc|or|ne|go)$/.test(l[l.length - 2]) && /^[a-z]{2}$/.test(l[l.length - 1]) ? -3 : -2).join(".");
   };
-  const staticImages = staticRefused ? st.images.filter((u) => !onStoreHost(u)) : st.images;
-  if (staticImages.length < st.images.length) log(`  (${st.images.length - staticImages.length} image(s) on the store's own host not fetched - the store refused us)`);
+  const onStoreHost = (u) => {
+    try { return siteOf(canonicalStoreHost(new URL(u).hostname)) === siteOf(host); } catch { return false; }
+  };
+  const browserRefused = !!browser && browser.report.status === "blocked";
+  const refused = staticRefused || browserRefused;
+  const staticImages = refused ? st.images.filter((u) => !onStoreHost(u)) : st.images;
+  const browserImages = !browser ? [] : refused ? browser.images.filter((i) => !onStoreHost(i.url)) : browser.images;
+  const notAsked = st.images.length - staticImages.length + (browser ? browser.images.length - browserImages.length : 0);
+  if (notAsked) log(`  (${notAsked} image(s) on the store's own site not fetched - the store refused us)`);
+  /* The guide's images FIRST: the static hits came first and used up the MAX_IMAGES reads -
+     4 banner/logo word matches, and the chart image a clicked guide had shown was never
+     read (IMAGE UNREADABLE, "screenshot the table"). A static hit gets only a slot the
+     guide's images leave free. */
   for (const img of [
+    ...browserImages,
     ...(nothingYet || forceImages ? staticImages.map(staticImg) : []),
-    ...(browser ? browser.images : []),
   ]) {
     const pages = img.pages && img.pages.length ? img.pages : [img.productUrl || ""];
     const prev = imageUrls.find((x) => x.url === img.url);
     if (!prev) imageUrls.push({ ...img, pages: pages.slice() });
     else for (const p of pages) if (!prev.pages.includes(p)) prev.pages.push(p);
   }
+  /* WHY AN IMAGE WAS NOT READ is a reason of its own (below). With no GEMINI_API_KEY every
+     read failed before reaching Gemini - 5s apart - and the run said IMAGE UNREADABLE, "a
+     sharper screenshot", through --image, which needs the same key. Now the key is checked
+     here (by name; its value is never printed) and nothing is sent to the reader. A 429 is
+     Gemini's rate limit, not the image: the reads stop at the first one (the next would be
+     refused too) and the reason says retry later. */
+  let imagesNotRead = null;   // "no_key" | "rate_limited" | "no_images"
+  const isPdf = (u) => /\.pdf(?:$|[?#])/i.test(u);
+  if (imageUrls.length && noImages) imagesNotRead = "no_images";
   if (imageUrls.length && !noImages) {
-    log(`\n── 3/3 image charts: ${imageUrls.length} found, reading up to ${MAX_IMAGES} with Gemini`);
-    const read = imageReader || (await import("./image-charts.js")).chartsFromImage;
+    const keyless = !apiKey && imageUrls.some((i) => !isPdf(i.url));
+    log(`\n── 3/3 image charts: ${imageUrls.length} found, ` + (keyless ? "not read - GEMINI_API_KEY is not set (scanner/.env)" : `reading up to ${MAX_IMAGES} with Gemini`));
+    if (keyless) imagesNotRead = "no_key";
+    const read = keyless ? null : imageReader || (await import("./image-charts.js")).chartsFromImage;
     let n = 0;
     for (const img of imageUrls) {
-      if (/\.pdf(?:$|[?#])/i.test(img.url)) {
+      if (isPdf(img.url)) {
         imageResults.push({ url: img.url, outcome: "error", detail: "PDF chart - not read automatically; screenshot it and use --image" });
         continue;
       }
+      if (keyless) continue;
       if (n++ >= MAX_IMAGES) break;
       if (n > 1 && imageDelayMs) await new Promise((r) => setTimeout(r, imageDelayMs));
       const res = await read({ url: img.url }, { apiKey, JSDOM: JSDOMCtor, source: "image_ocr", productUrl: img.productUrl,
@@ -163,10 +198,15 @@ export async function runCapture(storeUrl, {
          store's chart. A "" page is store-wide evidence on its own (a guide page). */
       const pages = img.pages.includes("") ? [""] : img.pages;
       for (const f of res.found) for (const p of pages) found.push({ ...f, productUrl: p });
+      if (res.outcome === "error" && /Gemini HTTP 429/.test(res.detail || "")) {
+        imagesNotRead = "rate_limited";
+        log("  Gemini is rate-limiting us (HTTP 429) - no further image is read this run");
+        break;
+      }
     }
   } else {
     const skippedStatic = st.images.length && !nothingYet && !forceImages
-      ? ` (${st.images.length} static image hit(s) not read - charts already captured; --images to read them)` : "";
+      ? ` (${st.images.length} static image hit(s) not read - store-wide charts already captured; --images to read them)` : "";
     log(`\n── 3/3 image charts: ${imageUrls.length ? "skipped (--no-images)" : "none found"}${skippedStatic}`);
   }
 
@@ -179,17 +219,31 @@ export async function runCapture(storeUrl, {
     const browserBlocked = browser && browser.report.status === "blocked";
     const jsSignals = st.report.paths.js_app_detected.triggers_without_link || st.report.paths.js_app_detected.apps.length;
     const browserUnavailable = browser && browser.report.status === "browser_unavailable";
+    const imageCount = `${imageUrls.length} image(s)`;
     /* BLOCKED BEFORE BROWSER_UNAVAILABLE: a browser that never launched has not contradicted
        the static refusal. The other order told the owner of a store that had just answered
        403 to "install Chromium" - and the --url manual path that line offers goes through the
-       same plain fetch the store refused. */
+       same plain fetch the store refused.
+       A refused BROWSER is BLOCKED whenever the static stage KEPT no record. It tested the
+       static stage's raw findings: a lone untyped "Suits" table (never stored) made a store
+       that had just refused the browser read "JS GUIDE NOT OPENED".
+       The browser's other dead ends say what happened, not "JS GUIDE NOT OPENED": its
+       navigations got no HTTP answer (UNREACHABLE, quoting the error), or it found no product
+       page to open (nothing was looked at - point it at a page with --url). An image found
+       but not read says why (no key, Gemini's rate limit, --no-images), not "no guide". */
     if (st.report.outcome === "unreachable") reason = { kind: "unreachable", extra: st.report.errors[0] || "" };
-    else if ((staticBlocked && (!browser || browserBlocked || browserUnavailable)) || (browserBlocked && !st.found.length)) {
+    else if ((staticBlocked && (!browser || browserBlocked || browserUnavailable)) || (browserBlocked && !st.records.length)) {
       reason = { kind: "blocked", extra: [st.report.blocked.examples[0], browser && browser.report.blocked.examples[0]].filter(Boolean).join("; ") || st.report.errors[0] || "" };
     } else if (browserUnavailable) reason = { kind: "browser_unavailable", extra: browser.report.errors[0] };
+    else if (browser && browser.report.status === "unreachable") reason = { kind: "unreachable", extra: (browser.report.errors || [])[0] || "" };
+    else if (imagesNotRead === "no_key") reason = { kind: "no_ocr_key", extra: imageCount };
+    else if (imagesNotRead === "rate_limited") reason = { kind: "image_rate_limited", extra: imageCount };
     else if (imageResults.length) reason = { kind: "image_unreadable", extra: imageResults.map((i) => i.detail).join("; ").slice(0, 200) };
+    else if (imagesNotRead === "no_images") reason = { kind: "images_not_read", extra: imageCount };
     else if (browser && browser.report.unmeasured_guides) {
       reason = { kind: "no_measurements", extra: `${browser.report.unmeasured_guides} guide(s) opened, e.g. ${browser.report.unmeasured_examples[0]}` };
+    } else if (browser && browser.report.status === "no_products") {
+      reason = { kind: "none", extra: `static: ${st.report.sampled_products} product page(s); the browser found no product page to open - give a product or size-guide page to --url below` };
     } else if (browser && browser.report.pages_opened && !browser.report.triggers_clicked && !browser.report.network_payloads && !jsSignals) {
       /* yanga.co.il: rendered pages, no size-guide control anywhere - that is "no guide",
          not "a JS guide we failed to open". */
@@ -202,15 +256,24 @@ export async function runCapture(storeUrl, {
 }
 
 /* ── CLI ─────────────────────────────────────────────────────────────────────── */
-async function main(argv) {
-  loadScannerEnv();
-  const { args, flag, val } = parseCliArgs(argv);
+const USAGE = "Usage: npm run capture -- <store-url> [--browser|--no-browser] [--images|--no-images] [--max-products N] [--dry-run] [--yes]";
+
+/* Exported, with its stages injectable, so a test can drive the command itself: requirement
+   4 (--dry-run never saves, not even with --yes) had no test - nothing ran main(), and
+   deleting the dry-run guard left every suite green. `env` is where the Supabase variables
+   are read (process.env); `setExitCode` reaches saveAndVerify (a skipped save exits 1). */
+export async function main(argv, { loadEnv = loadScannerEnv, env = process.env, capture = runCapture, save = saveAndVerify,
+  setExitCode = (c) => { process.exitCode = c; } } = {}) {
+  loadEnv();
+  let cli;
+  try { cli = parseCliArgs(argv); } catch (e) { console.error(`✗ ${e.message}\n${USAGE}`); process.exit(2); }
+  const { args, flag, val } = cli;
   const storeUrl = args.find((a) => /^https?:\/\//i.test(a));
   if (!storeUrl) {
-    console.error("Usage: npm run capture -- <store-url> [--browser|--no-browser] [--images|--no-images] [--max-products N] [--dry-run] [--yes]");
+    console.error(USAGE);
     process.exit(2);
   }
-  const out = await runCapture(storeUrl, {
+  const out = await capture(storeUrl, {
     forceBrowser: flag("--browser"), noBrowser: flag("--no-browser"), noImages: flag("--no-images"), forceImages: flag("--images"),
     maxProducts: Math.max(1, Math.min(50, parseInt(val("--max-products"), 10) || 12)),
   });
@@ -235,13 +298,13 @@ async function main(argv) {
     console.log("Not saved.");
     return;
   }
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
     console.error("✗ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set (scanner/.env) - nothing saved.");
     process.exit(1);
   }
   const { createClient } = await import("@supabase/supabase-js");
-  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
-  await saveAndVerify({ supabase, records: out.records, host: out.host, saveSizeChartRecords });
+  const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  await save({ supabase, records: out.records, host: out.host, saveSizeChartRecords, setExitCode });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
