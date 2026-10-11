@@ -139,7 +139,7 @@ function showDemoGateLockedMessage() {
       "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
       "text-align:center;gap:12px;padding:48px 24px;";
     el.innerHTML =
-      '<div style="font-size:40px;">👗</div>' +
+      '<div style="width:44px;height:44px;color:#4d6600;"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8.2 4 4 6.6l1.9 3.5 2.3-1V20h7.6V9.1l2.3 1L20 6.6 15.8 4c-.7 1.4-2.1 2.3-3.8 2.3S8.9 5.4 8.2 4z"/></svg></div>' +
       `<p style="font-size:16px;font-weight:600;margin:0;">${t("demoAlreadyUsed")}</p>`;
     const host = $("sizeForm")?.parentElement;
     if (host) host.appendChild(el);
@@ -3500,7 +3500,10 @@ function enterRoom() {
     // normal flow, but this only sets once per enterRoom() call, so a lingering
     // "if" guard would leave a PREVIOUS garment's size badge showing if this
     // path were ever reached with no size for the current one.
-    $("focusSizeBadge").innerText = currentUserSize ? "מידה " + formatSizeLabel(currentUserSize) : "";
+    /* "Size M" in English (2026-10-11): the word is a data-i18n span, so a language switch repaints it. */
+    $("focusSizeBadge").innerHTML = currentUserSize
+      ? `<span data-i18n="focusSizeWord">${t("focusSizeWord")}</span> ` + String(formatSizeLabel(currentUserSize)).replace(/[<>&"]/g, "")
+      : "";
   } else {
     focusMode = false;
     $("focusBar").hidden = true;
@@ -4231,7 +4234,7 @@ function renderActiveGarment() {
        says so. */
     $("activeGarmentMedia").innerHTML = `<span class="ag-duo ag-duo--views">${lookViewThumbs(top)}${lookViewThumbs(bottom)}</span>`;
     $("activeGarmentName").innerText = `${top.name} + ${bottom.name}`;
-    $("activeGarmentType").innerText = "לוק מלא · חולצה + מכנסיים";
+    $("activeGarmentType").innerHTML = `<span data-i18n="lookTypeLabel">${t("lookTypeLabel")}</span>`;
     if (eyebrow) eyebrow.innerText = "לוק מלא · Full look";
     chip.classList.add("is-duo");
     chip.classList.remove("is-composite");   // duo owns the wide layout in this branch
@@ -6350,7 +6353,7 @@ function buildRealtimeConnectOpts(gen) {
          the existing pattern for other state changes (e.g. the orientation flip toast). */
       if (state === "reconnecting") toast("מתחבר מחדש…");
       else if ((state === "connected" || state === "generating") && prevState === "reconnecting") {
-        toast("✓ החיבור חזר");
+        toast("החיבור חזר");
       }
 
       /* ── THE STATE-REVERSION BUG ───────────────────────────────────────────
@@ -13782,7 +13785,7 @@ function injectSizeSelector() {
   row.innerHTML =
     `<div class="pear-sz-head">` +
       `<span class="pear-sz-label">מידה · Size</span>` +
-      (currentUserSize ? `<span class="pear-sz-hint">★ מומלצת</span>` : "") +
+      (currentUserSize ? `<span class="pear-sz-hint">${t("szRecommendedHint")}</span>` : "") +
     `</div>` +
     `<div class="pear-sz-btns">${btnHtml}</div>` +
     // Legend, printed only when there is something for it to explain - it is the only
@@ -14741,7 +14744,7 @@ function renderCartDropdown() {
     removeBtn.className = "cart-line__remove";
     removeBtn.setAttribute("aria-label", t("cartRemoveItemAria"));
     removeBtn.title = t("cartRemoveItemAria");
-    removeBtn.textContent = "✕";
+    removeBtn.innerHTML = '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 7l10 10M17 7 7 17"/></svg>';
 
     row.append(media, meta, removeBtn);
     list.appendChild(row);
@@ -16975,7 +16978,7 @@ async function goLive() {
     if (await cameraLooksBlack()) {
       showCamError("זוהה מסך שחור. הפעל את המצלמה או הסר חסימה מהעדשה כדי להמשיך. " +
         "(Black screen detected. Please turn on your camera or remove any obstacles to proceed.)");
-      toast("📷 מסך שחור - המדידה לא הופעלה כדי לחסוך קרדיטים");
+      toast("מסך שחור - המדידה לא הופעלה כדי לחסוך קרדיטים");
       return;   // finally{} resets busy + the capture button; no billed session opened
     }
 
@@ -17066,7 +17069,7 @@ async function goLive() {
     if (!preload.ok) {
       $("scanOverlay").hidden = true;
       showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
-      toast("⚠ טעינת תמונת הבגד נכשלה");
+      toast("טעינת תמונת הבגד נכשלה");
       return;   // finally{} resets busy + the capture button; no billed session opened
     }
     if (!preload.hasBack) {
@@ -17213,7 +17216,7 @@ async function goLive() {
       }, FIRST_FRAME_TIMEOUT_MS);
     }
 
-    toast("✨ מדידה חיה · סרטון " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות");
+    toast("מדידה חיה · סרטון " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות");
   } catch (err) {
     if (typeof traceOrient === "function") traceOrient("live-fail", { m: String(err?.message || err).slice(0, 160) });
     stopLive();                        // close any partial session - no idle billing
@@ -17415,7 +17418,7 @@ function finalizeVideoClip() {
   if (typeof traceSessionEnd === "function") traceSessionEnd("clip");
   setLiveControls(false);
   $("captureBtn").disabled = !localStream;
-  toast("⏱ הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן ✓");
+  toast("הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן");
 }
 
 /* ── Lower-body compositing guard (config.js LOWER_BODY_GUARD_ENABLED) ────────
@@ -19053,7 +19056,7 @@ function setLiveControls(live) {
   const en    = btn.querySelector(".btn-capture__en");
   btn.classList.toggle("is-live", live);
   btn.disabled = false;
-  if (icon)  icon.textContent  = live ? "⏹" : "📸";
+  if (icon)  icon.innerHTML    = live ? '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="7" y="7" width="10" height="10" rx="2.4" fill="currentColor" stroke="none"/></svg>' : '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="6.5" width="12.5" height="11" rx="2.6"/><path d="M15.5 10.4 20.4 7.8v8.4l-4.9-2.6z"/></svg>';
   if (label) label.textContent = live ? "עצור מדידה חיה" : "התחל מדידה חיה";
   if (en)    en.textContent    = live ? "Stop" : "Go Live";
 }
@@ -19408,7 +19411,7 @@ function injectReplayStyles() {
       gap: 8px;
       padding: 13px 16px;
       border-radius: 9999px;
-      font-family: "Urbanist", sans-serif;
+      font-family: var(--font-ui);
       font-size: .92rem;
       font-weight: 800;
       cursor: pointer;
@@ -19468,12 +19471,12 @@ function ensureReplayZone() {
              ` controls loop playsinline muted preload="metadata"></video>` +
       `<div class="pear-rz-actions">` +
         `<button id="pearRzReplayBtn" class="pear-rz-btn pear-rz-btn--replay" type="button">` +
-          `<span aria-hidden="true">↺</span>` +
+          `<span aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.2 12a6.8 6.8 0 1 0 2-4.8"/><path d="M4.6 4.6v3.9h3.9"/></svg></span>` +
           `<span>צפה שוב</span>` +
           `<span class="pear-rz-btn__en">Replay</span>` +
         `</button>` +
         `<button id="pearRzDlBtn" class="pear-rz-btn pear-rz-btn--dl" type="button">` +
-          `<span aria-hidden="true">⬇</span>` +
+          `<span aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 4.5v10.5M7.6 10.8 12 15.2l4.4-4.4M5.5 19.5h13"/></svg></span>` +
           `<span>הורד</span>` +
           `<span class="pear-rz-btn__en">Download</span>` +
         `</button>` +
@@ -19837,7 +19840,7 @@ function viewBadge(p) {
               : (front && back) ? "חזית + גב · front + back ready"
               : "חזית בלבד · front only";
   const dot = (on) => `<i class="viewbadge__dot${on ? " is-on" : ""}"></i>`;
-  const mark = blocked ? "🔒" : (front && back) ? "✓" : "";
+  const mark = blocked ? '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5.5" y="10.5" width="13" height="9.5" rx="2.4"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>' : (front && back) ? '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 12.6l4.3 4.3 8.7-9.4"/></svg>' : "";
   return `<span class="viewbadge ${cls}" title="${title}" aria-label="${title}">`
        + `${dot(front)}${dot(back)}${mark ? `<b class="viewbadge__mark">${mark}</b>` : ""}</span>`;
 }
@@ -20675,9 +20678,13 @@ function lookViewThumbs(item) {
   const front = lookHalfFor(item, "front");
   const back = typeof distinctBackOf === "function" ? distinctBackOf(item, galleryOf(item)) : null;
   const esc = (u) => String(u || "").replace(/"/g, "&quot;");
-  const view = (src, label, missing) => `<span class="ag-view${missing ? " ag-view--missing" : ""}">` +
-    (src ? `<img src="${esc(src)}" alt="${esc(item.name)} - ${label}" loading="lazy" decoding="async">` : "") + `<b>${label}</b></span>`;
-  return view(front, "חזית", false) + (back ? view(back, "גב", false) : view(front, "אין גב", true));
+  /* The labels in the shopper's language, repainted by a language switch (data-i18n); typeof - full-look runs this alone. */
+  const say = (key, he) => (typeof t === "function" ? t(key) : "") || he;
+  const view = (src, key, he, missing) => `<span class="ag-view${missing ? " ag-view--missing" : ""}">` +
+    (src ? `<img src="${esc(src)}" alt="${esc(item.name)} - ${say(key, he)}" loading="lazy" decoding="async">` : "") +
+    `<b data-i18n="${key}">${say(key, he)}</b></span>`;
+  return view(front, "lookViewFront", "חזית", false) +
+    (back ? view(back, "lookViewBack", "גב", false) : view(front, "lookViewNoBack", "אין גב", true));
 }
 function garmentThumb(item) {
   const base = "display:block;width:100%;height:100%;overflow:hidden;";
@@ -20889,7 +20896,7 @@ function saveFitToGallery(imageSrc, garmentName, size, itemId) {
   while (arr.length > GALLERY_MAX) { const old = arr.shift(); dropClip(old.ts); }
   writeGallery(arr);
   renderGallery(arr);
-  toast("👗 הלוק נשמר בגלריית המדידות");
+  toast("הלוק נשמר בגלריית המדידות");
   return ts;
 }
 
@@ -20936,7 +20943,7 @@ function renderGallery(arr) {
       (it.ts === activeClipTs ? " is-playing" : "") + (compareSel.has(it.ts) ? " is-selected" : "");
     return `<button class="${cls}" type="button" data-idx="${idx}" data-ts="${it.ts}"${clip ? ` data-video-src="${clip}"` : ""} style="--gi:${i}">
        <span class="live-gallery-item__media">${media}</span>
-       <span class="lgi-select" role="checkbox" aria-checked="${compareSel.has(it.ts)}" title="בחר להשוואה">✓</span>
+       <span class="lgi-select" role="checkbox" aria-checked="${compareSel.has(it.ts)}" title="בחר להשוואה"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 12.6l4.3 4.3 8.7-9.4"/></svg></span>
        <span class="live-gallery-item__badge">
          <span class="live-gallery-item__name">${escHtml(it.name)}</span>
          <span class="live-gallery-item__size">${escHtml(it.size)}</span>
@@ -21197,7 +21204,7 @@ function openFitLightbox(idx) {
         `</figcaption>` +
         `<div class="pear-lightbox__actions">` +
           `<button class="plb-btn plb-btn--replay" type="button" data-lb-replay hidden>` +
-            `<span class="plb-btn__icon" aria-hidden="true">↺</span><span>צפה שוב</span><span class="plb-btn__en">Replay</span></button>` +
+            `<span class="plb-btn__icon" aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.2 12a6.8 6.8 0 1 0 2-4.8"/><path d="M4.6 4.6v3.9h3.9"/></svg></span><span>צפה שוב</span><span class="plb-btn__en">Replay</span></button>` +
           `<button class="plb-btn plb-btn--live" type="button" data-lb-live>` +
             `<span class="plb-btn__icon" aria-hidden="true">▶</span><span>מדוד שוב</span><span class="plb-btn__en">Try again live</span></button>` +
           `<a class="plb-btn plb-btn--dl" data-lb-dl hidden download>` +

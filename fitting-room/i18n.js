@@ -233,6 +233,12 @@ const I18N = {
   catalogTitle:              { he: "בחר בגד מהקטלוג", en: "Choose a garment from the catalog" },
   clTitle:                   { he: "השלמת הלוק", en: "Complete the Look" },
   clTried:                   { he: "מדדת", en: "Tried" },   // a garment you tried, on its Complete the Look card
+  focusSizeWord:             { he: "מידה", en: "Size" },
+  lookTypeLabel:             { he: "לוק מלא · חולצה + מכנסיים", en: "Full look · top + bottoms" },
+  szRecommendedHint:         { he: "★ מומלצת", en: "★ Recommended" },
+  lookViewFront:             { he: "חזית", en: "Front" },
+  lookViewBack:              { he: "גב", en: "Back" },
+  lookViewNoBack:            { he: "אין גב", en: "No back" },
   clArrowPrevAria:           { he: "גלול שמאלה · Scroll left", en: "Scroll left" },
   clArrowNextAria:           { he: "גלול ימינה · Scroll right", en: "Scroll right" },
 

@@ -1439,6 +1439,36 @@ The 280px header (the pear glyph touches the pencil) and the 280px Add to Cart (
 screenshots show `.reveal-up` sections blank until scrolled - an artifact, not a bug. In demo mode the session ends on the
 locked screen on wide viewports - the demo gate, not layout.
 
+### 2.44 Liquid Glass - one material, one press, one thumb (2026-10-11)
+"Every button in one premium Apple style; whatever you press and drag works the same; no emojis; pressing should sink in
+like a bubble, not this light; Apple's fonts" - with four Liquid Glass references. The look lives in ONE layer at the end of
+`style.css` ("LIQUID GLASS - ONE MATERIAL, ONE PRESS, ONE THUMB") and the motion in `lux-interactions.js`; no control's
+behaviour changed.
+- **The face:** `--font-ui` is the system stack (SF Pro / SF Hebrew on Apple; Inter + Heebo elsewhere - SF may not be
+  served to other platforms). Every button too; Urbanist is no longer loaded.
+- **The material:** clear glass for every button (frost, a bright top lip, a hairline rim, inner depth, a soft drop
+  shadow, a specular gradient rim on `::before`), tinted pear glass for the primary actions, dark glass over the camera
+  and the replay/lightbox, a near-opaque pear for a primary on a dark card, a muted disabled state.
+- **No light:** the hover sheen sweeps, the tap ripple (`mobile-ux.js`, now haptic only), the breathing glows (live card,
+  guide step, chosen size) and the hover lifts/spins are gone; the presence lock ring and the garment-detect scan stay
+  (they are status).
+- **The bubble press (`initLiquidPress`):** held, the glass squashes in (0.955 x 0.925) and darkens inward (`.lg-press`);
+  released, one soft overshoot back. On the `scale` property via the Web Animations API, so no button's own transform,
+  transition or entrance animation is touched or replayed, and it never intercepts the click. Touch waits 70 ms (a scroll
+  is not a press); a quicker tap still plays the whole bubble; a cancelled press settles back with no pop.
+- **One thumb (`initLiquidThumbs`):** language, fullscreen, gender and timer share one glass track and one lens thumb: touched
+  or dragged it swells past the track and clears (`.lg-touch` / `.is-dragging`); moving, it stretches along its motion and
+  narrows across it (measured speed -> `--lg-sx/--lg-sy`). Drawn on the thumb's `::before` - each control's own drag/snap
+  code still positions the thumb (a `scale` on the thumb itself would scale its translation). The watcher writes only while
+  the thumb moves, so its MutationObserver cannot keep itself alive.
+- **Icons:** every emoji in the room became an SF-Symbols-weight line icon (`.lg-icon`): camera, video, stop, plus, check,
+  circular arrow, download, close, magnifier, lock, shirt; the emojis in the toasts are gone.
+- **Found on the way:** four Hebrew-only labels in the English UI (the look's view labels, its type line, the focus bar's
+  size word, "recommended") are `data-i18n` now; Add to Cart stacks its English under the Hebrew like Go Live.
+- Measured: the device audit (168 states, 6 sizes, both languages) - no horizontal scroll, no overflow, no covered control;
+  the press sampled frame by frame (mouse hold and finger tap; the click still lands); unit suite, `qa:visual` 40/40,
+  build, `trace:prompt` identical.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

@@ -13,12 +13,12 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- Text uses var(--font-ui) (SF Pro on Apple, Heebo elsewhere). BUTTONS keep their
-         baseline faces (1912c0b) - Urbanist, and Inter on two header/profile controls -
-         because the face is part of a button's geometry: on Heebo's taller line box 36
-         buttons grew 3-10px. So both baseline families are requested again, with the
-         exact baseline weights, beside Heebo (variable, one file per script subset). -->
-    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&family=Heebo:wght@400..900&display=swap" rel="stylesheet">
+    <!-- ONE FACE, APPLE'S (2026-10-11): every text and every button is var(--font-ui) - the system
+         font, SF Pro / SF Hebrew on Apple devices. Off Apple there is no SF to load (its licence
+         keeps it to Apple platforms), so Inter (the closest open face to SF) sets Latin and Heebo
+         sets Hebrew; Urbanist, the old button face, is no longer requested. Button heights are
+         set by the Liquid Glass layer (style.css), not by a face's line box. -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Heebo:wght@400..900&display=swap" rel="stylesheet">
 
     <!-- Cache-buster added with the header-alignment work: style.css had none at
          all, so a shipped CSS change was served from cache indefinitely while
@@ -696,7 +696,7 @@
             </div>
 
             <div class="camera-card__placeholder" id="camPlaceholder">
-                <div class="camera-card__icon">📷</div>
+                <div class="camera-card__icon"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 8.6A2.6 2.6 0 0 1 6.6 6h1.5l1.2-1.7a1.6 1.6 0 0 1 1.3-.7h2.8a1.6 1.6 0 0 1 1.3.7L15.9 6h1.5A2.6 2.6 0 0 1 20 8.6v7.8a2.6 2.6 0 0 1-2.6 2.6H6.6A2.6 2.6 0 0 1 4 16.4z"/><circle cx="12" cy="12.4" r="3.4"/></svg></div>
                 <p data-i18n="camPlaceholderText">כדי להתחיל במדידה, נשמח לקבל גישה למצלמה. אל דאגה, הצילום משמש למדידת מידות הגוף בלבד ואינו נשמר בשרתים שלנו.</p>
                 <button class="btn-primary" id="startCamBtn" data-i18n="startCamBtn">הפעלת מצלמה לתחילת מדידה</button>
             </div>
@@ -757,7 +757,7 @@
         <!-- ░░ Live try-on controls ░░ -->
         <div class="cam-controls">
             <button class="btn-capture" id="captureBtn" disabled>
-                <span class="btn-capture__icon">📸</span>
+                <span class="btn-capture__icon"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="6.5" width="12.5" height="11" rx="2.6"/><path d="M15.5 10.4 20.4 7.8v8.4l-4.9-2.6z"/></svg></span>
                 <span class="btn-capture__label" data-i18n="captureBtnLabel">מתחילים במדידה</span>
                 <span class="btn-capture__en" data-i18n-hide-on-en>Go Live</span>
             </button>
@@ -768,11 +768,11 @@
         <div class="add-cart-row">
             <button class="btn-add-cart" id="addToCartBtn" type="button" aria-label="הוסף לסל" data-i18n-aria="addToCartAria">
                 <span class="bac__label">
-                    <span class="bac__icon" aria-hidden="true">＋</span>
-                    <span data-i18n="addToCartLabel">הוסף לסל</span> <span class="bac__en" data-i18n-hide-on-en>· Add to Cart</span>
+                    <span class="bac__icon" aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5.5v13M5.5 12h13"/></svg></span>
+                    <span data-i18n="addToCartLabel">הוסף לסל</span> <span class="bac__en" data-i18n-hide-on-en>Add to Cart</span>
                 </span>
                 <span class="bac__spinner" aria-hidden="true"></span>
-                <span class="bac__check" aria-hidden="true">✓</span>
+                <span class="bac__check" aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 12.6l4.3 4.3 8.7-9.4"/></svg></span>
             </button>
         </div>
 
@@ -828,7 +828,7 @@
                 </span>
                 <h3 class="pip-title"><span data-i18n="pipTitle">מדידות קודמות</span> <span data-i18n-hide-on-en>· Previous Fits</span></h3>
                 <button class="pip-retake" id="retakeBtn" type="button">
-                    <span class="pip-retake__icon" aria-hidden="true">↺</span>
+                    <span class="pip-retake__icon" aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.2 12a6.8 6.8 0 1 0 2-4.8"/><path d="M4.6 4.6v3.9h3.9"/></svg></span>
                     <span data-i18n="pipRetakeLabel">מדוד שוב</span>
                     <span class="pip-retake__en" data-i18n-hide-on-en>Retake</span>
                 </button>
@@ -851,7 +851,7 @@
                 <div class="drag-indicator" data-sheet-handle aria-hidden="true"></div>
                 <header class="pcmp__head" data-sheet-grab>
                     <h3 class="pcmp__title"><span data-i18n="pcmpTitle">השוואת מדידות</span> <span data-i18n-hide-on-en>· Compare Fits</span></h3>
-                    <button class="pcmp__close" id="compareClose" type="button" aria-label="סגור" data-compare-close data-i18n-aria="ariaClose">✕</button>
+                    <button class="pcmp__close" id="compareClose" type="button" aria-label="סגור" data-compare-close data-i18n-aria="ariaClose"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
                 </header>
                 <div class="pcmp__split" id="compareSplit"></div>
             </div>
@@ -879,7 +879,7 @@
         <h3 class="gd-title"><span data-i18n="gdTitle">בחר/י את הבגד</span> <span data-i18n-hide-on-en>· Select a garment</span></h3>
         <p class="gd-sub" id="gdSub">מזהה בגדים בתמונה…</p>
       </div>
-      <button class="gd-close" id="gdClose" type="button" aria-label="סגור" data-gd-close data-i18n-aria="ariaClose">✕</button>
+      <button class="gd-close" id="gdClose" type="button" aria-label="סגור" data-gd-close data-i18n-aria="ariaClose"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
     </header>
 
     <!-- TOP / BOTTOM segmented toggle - shown only for a full worn outfit; snaps the
@@ -912,7 +912,7 @@
 
       <!-- empty state - no garments detected -->
       <div class="gd-empty" id="gdEmpty" hidden>
-        <span class="gd-empty__icon" aria-hidden="true">🔍</span>
+        <span class="gd-empty__icon" aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.6" cy="10.6" r="5.6"/><path d="m15 15 4.6 4.6"/></svg></span>
         <p class="gd-empty__text"><span data-i18n="gdEmptyText">לא זוהו בגדים בתמונה.</span><br><span>Please try another clear image.</span></p>
         <button class="btn-primary gd-empty__retry" id="gdRetry" type="button" data-i18n="gdRetryBtn">בחר/י תמונה אחרת</button>
       </div>
@@ -934,7 +934,7 @@
     <div class="drag-indicator" data-sheet-handle aria-hidden="true"></div>
     <header class="terms-modal__head" data-sheet-grab>
       <h3 class="terms-modal__title" id="termsModalTitle" data-i18n="consentTitle">תנאים ומדיניות</h3>
-      <button class="terms-modal__close" id="termsClose" type="button" aria-label="סגירה" data-terms-close data-i18n-aria="ariaClose">✕</button>
+      <button class="terms-modal__close" id="termsClose" type="button" aria-label="סגירה" data-terms-close data-i18n-aria="ariaClose"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
     </header>
     <div class="terms-modal__body">
       <section class="terms-modal__section">

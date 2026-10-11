@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): a UI pass at every device size (layout only); the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor - verified through the engine (s9: both garments, the back print on the back view, reveal 5.6s); s6/s7 lost to the measurement rig's camera, fixed; not on main_
+_Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): Liquid Glass design pass (one material, bubble press, liquid thumbs, SF font, no emojis); a UI pass at every device size; the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor - verified through the engine (s9: both garments, the back print on the back view, reveal 5.6s); s6/s7 lost to the measurement rig's camera, fixed; not on main_
 
 ## At a glance
 
@@ -371,6 +371,14 @@ _Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): a UI pass at
   English UI; the widget's close button invisible on phones and sitting on the step label.
 - **Your call:** the store's chat and accessibility buttons draw over our modal; raising the modal above them would also
   hide the store's accessibility button while the room is open.
+
+## Liquid Glass design pass (2026-10-11)
+- **Stage:** done on preview (CLAUDE.md §2.44). One glass material for every button (primary actions tinted pear), a press
+  that sinks in like a bubble and springs back (no more ripple of light), one liquid lens thumb for the four switches
+  (swells when touched, stretches as it moves), Apple's system font everywhere, every emoji replaced by a line icon, the
+  breathing glows removed, four untranslated labels fixed. Behaviour unchanged.
+- **To check by hand:** the feel on a real iPhone and a mid-range Android (the press timing, the thumb stretch, scrolling
+  smoothness with the glass blur).
 
 ## Security hardening + client-code hiding
 - **Stage:** in progress.

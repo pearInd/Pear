@@ -39,7 +39,10 @@
     initLiquidMesh();
     initFloatingLabels();
     initSkeletons();
-    if (fine && !reduce) initMagnetic();
+    /* initMagnetic() - the content drifting toward the cursor - is retired with the Liquid Glass pass (2026-10-11):
+       glass does not chase the pointer; it is pressed. See initLiquidPress() / initLiquidThumbs() below. */
+    initLiquidPress();
+    initLiquidThumbs();
     enableTouchActive();
   }
   /* NOTE: the Bitten-Pear transition is now orchestrated entirely by app.js
@@ -270,7 +273,7 @@
       cartToastEl.className = "lux-cart-toast";
       cartToastEl.setAttribute("role", "status");
       cartToastEl.innerHTML =
-        '<span class="lux-cart-toast__icon" aria-hidden="true">✓</span><span class="lux-cart-toast__msg"></span>';
+        '<span class="lux-cart-toast__icon" aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 12.6l4.3 4.3 8.7-9.4"/></svg></span><span class="lux-cart-toast__msg"></span>';
       document.body.appendChild(cartToastEl);
     }
     cartToastEl.querySelector(".lux-cart-toast__msg").textContent = msg;
@@ -404,6 +407,137 @@
         kids.forEach((k) => { k.style.transform = ""; });
       });
     });
+  }
+
+  /* 4e · THE BUBBLE PRESS (2026-10-11, the Liquid Glass pass - style.css "LIQUID GLASS"). "When you press it should
+     sink in like a bubble, the way Apple's does - not this light." Held, a glass button squashes in (wider than it is
+     tall, the way a bubble flattens under a finger) and its glass darkens inward (.lg-press, CSS); released, it springs
+     back through one soft overshoot. The scale runs on the individual `scale` property through the Web Animations API,
+     so a button's own transform, transition list and entrance animation are never touched or replayed - and it never
+     intercepts the click: it only listens. Disabled and aria-disabled buttons do not move. */
+  /* (the lists live INSIDE the init functions: init() can run before this file's later top-level consts exist -
+     ready() calls it synchronously once the DOM is parsed.) */
+  function initLiquidPress() {
+    const PRESSABLE = ".btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download, " +
+      ".btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar, .plb-btn, .pear-sz-btn, " +
+      ".pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close, .pear-help-widget__btn, " +
+      ".pear-help-widget__close, .camera-card__flip, .camera-card__timer, .cl-arrow, .pip-retake, .pip-clear, " +
+      ".profile-btn, .profile-dropdown__logout, .cart-line__remove, .cl-card__look";
+    const PRESS_IN = "0.955 0.925";
+    const POP = [{ scale: PRESS_IN }, { scale: "1.035 1.06", offset: 0.36 }, { scale: "0.992 0.985", offset: 0.62 },
+                 { scale: "1.004 1.005", offset: 0.82 }, { scale: "1 1" }];
+    /* A finger may be starting a SCROLL, not a press: like iOS, a touch waits a beat (TOUCH_DELAY_MS) before the glass
+       sinks; a tap shorter than that still plays the whole bubble (in, then out), and a press the browser takes over
+       for a scroll (pointercancel) settles back quietly - no pop for something that was never pressed. */
+    const TOUCH_DELAY_MS = 70;
+    if (typeof Element === "undefined" || !Element.prototype.animate) return;
+    let held = null, pressAnim = null, timer = 0, sunk = false;
+    const play = (el, frames, opts) => { try { return el.animate(frames, opts); } catch (_) { return null; } };
+    const sink = (el) => {
+      sunk = true;
+      el.classList.add("lg-press");
+      if (!reduce) pressAnim = play(el, [{ scale: "1 1" }, { scale: PRESS_IN }], { duration: 170, easing: "cubic-bezier(.3, .7, .4, 1)", fill: "forwards" });
+    };
+    const finish = (cancelled) => {
+      clearTimeout(timer);
+      const el = held;
+      if (!el) return;
+      held = null;
+      el.classList.remove("lg-press");
+      if (pressAnim) { try { pressAnim.cancel(); } catch (_) {} pressAnim = null; }
+      if (reduce) return;
+      if (cancelled) { if (sunk) play(el, [{ scale: PRESS_IN }, { scale: "1 1" }], { duration: 240, easing: "cubic-bezier(.2, .8, .2, 1)" }); return; }
+      if (sunk) play(el, POP, { duration: 640, easing: "cubic-bezier(.25, .8, .35, 1)" });
+      else play(el, [{ scale: "1 1" }, { scale: PRESS_IN, offset: 0.2 }, { scale: "1.035 1.06", offset: 0.49 },
+                     { scale: "0.992 0.985", offset: 0.7 }, { scale: "1.004 1.005", offset: 0.86 }, { scale: "1 1" }],
+        { duration: 760, easing: "cubic-bezier(.25, .8, .35, 1)" });
+    };
+    document.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const el = e.target.closest && e.target.closest(PRESSABLE);
+      if (!el || el.disabled || el.getAttribute("aria-disabled") === "true" || el.classList.contains("is-loading")) return;
+      if (held) finish(true);
+      held = el; sunk = false;
+      if (navigator.vibrate) { try { navigator.vibrate(6); } catch (_) {} }
+      if (e.pointerType === "touch") timer = setTimeout(() => { if (held === el) sink(el); }, TOUCH_DELAY_MS);
+      else sink(el);
+    }, { passive: true });
+    document.addEventListener("pointerup", () => finish(false), { passive: true });
+    document.addEventListener("pointercancel", () => finish(true), { passive: true });
+    window.addEventListener("blur", () => finish(true));
+  }
+
+  /* 4f · ONE LIQUID THUMB for the four segmented controls (language, fullscreen, gender, timer). Their own code keeps
+     moving the thumb - drag, rubber band, snap, keyboard - exactly as before. This only reads where the thumb IS each
+     frame while it moves: touched, the track gets .lg-touch (the lens swells past it, CSS); travelling - under a finger
+     or springing to its slot after a tap - the lens stretches along its motion and narrows across it (volume kept),
+     like the WWDC liquid glass, and settles round when it stops. --lg-sx / --lg-sy on the thumb; style.css draws them
+     on its ::before, so the thumb's own transform is never touched. */
+  function initLiquidThumbs() {
+    const SEGMENTED = [
+      [".lang-switch", ".lang-switch__thumb"],
+      [".fs-switch", ".fs-switch__thumb"],
+      [".liquid-glass-track", ".liquid-glass-pill"],
+      [".cam-timer__track", ".cam-timer__pill"],
+    ];
+    const watching = new Map();   // thumb -> { lastX, lastT, v, until, raf }
+    const follow = (thumb, ms) => {
+      if (reduce || !thumb) return;
+      let w = watching.get(thumb);
+      const now = performance.now();
+      if (w) { w.until = Math.max(w.until, now + ms); return; }
+      w = { lastX: thumb.getBoundingClientRect().left, lastT: now, v: 0, until: now + ms };
+      watching.set(thumb, w);
+      const tick = (t) => {
+        const x = thumb.getBoundingClientRect().left;
+        const dt = Math.max(1, t - w.lastT);
+        const inst = (x - w.lastX) / dt;            // px per ms
+        w.v = w.v * 0.55 + inst * 0.45;             // smoothed
+        w.lastX = x; w.lastT = t;
+        const speed = Math.min(1, Math.abs(w.v) / 1.6);
+        const sx = 1 + speed * 0.42, sy = 1 / Math.sqrt(sx);
+        /* Written only while it actually moves: a thumb at rest is never touched, so its style attribute (which the
+           observer below watches) does not change for nothing. */
+        if (w.set || sx > 1.004) {
+          thumb.style.setProperty("--lg-sx", sx.toFixed(3));
+          thumb.style.setProperty("--lg-sy", sy.toFixed(3));
+          w.set = true;
+        }
+        if (t < w.until || speed > 0.02) { requestAnimationFrame(tick); return; }
+        if (w.set) { thumb.style.removeProperty("--lg-sx"); thumb.style.removeProperty("--lg-sy"); }
+        watching.delete(thumb);
+      };
+      requestAnimationFrame(tick);
+    };
+    document.addEventListener("pointerdown", (e) => {
+      for (const [trackSel, thumbSel] of SEGMENTED) {
+        const track = e.target.closest && e.target.closest(trackSel);
+        if (!track) continue;
+        const thumb = track.querySelector(thumbSel);
+        track.classList.add("lg-touch");
+        follow(thumb, 900);
+        const end = () => {
+          track.classList.remove("lg-touch");
+          follow(thumb, 700);   // the snap to the slot plays after the finger lifts
+          document.removeEventListener("pointerup", end, true);
+          document.removeEventListener("pointercancel", end, true);
+        };
+        document.addEventListener("pointerup", end, true);
+        document.addEventListener("pointercancel", end, true);
+        return;
+      }
+    }, { passive: true });
+    /* a thumb moved by code or keyboard (a language from the page, an arrow key) stretches too */
+    for (const [trackSel, thumbSel] of SEGMENTED) {
+      document.querySelectorAll(trackSel).forEach((track) => {
+        const thumb = track.querySelector(thumbSel);
+        if (!thumb || typeof MutationObserver === "undefined") return;
+        /* Only a change that is not ours starts a watch: while one runs, this watcher's own --lg-sx writes are ignored,
+           and at rest it writes nothing (above) - so it can never keep itself alive. */
+        new MutationObserver(() => { if (!watching.has(thumb)) follow(thumb, 650); })
+          .observe(track, { attributes: true, subtree: true, attributeFilter: ["class", "style", "data-active", "aria-checked"] });
+      });
+    }
   }
 
   /* 4d · TOUCH :active - iOS Safari only applies :active (the button overlay's
