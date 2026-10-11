@@ -1404,6 +1404,10 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   so go-live's first look apply is the no-op - falling back to the top's packshot when the composite is not ready in
   `LOOK_FLOOR_WAIT_MS`. Mock engine: initialState = the front composite, the back primed, the turn's back the same Blob, revealed
   3.2s. `back-prime` §5b-§5d, `full-look` §8 (two mutations caught). Single garments are untouched.
+  **Measured through the real engine (e25e250, record `mv3kfd8t`, the rig's recorded 360 as the camera):** the back composite
+  primed at connect (acked 398ms), revealed 5.58s after connect (s8: 7.04), the turn's back acked in 458ms and rendered 470ms
+  later (s8: not acknowledged in 3.1s), the front back in 483ms, no output stall. Frames: the PEAK tee with its print over the
+  CHICAGO shorts with their lettering; the shirt's back print on the back view; plain sides; the front print back at the front.
 
 ---
 

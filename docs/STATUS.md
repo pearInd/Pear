@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor (s8 rendered both garments, the back plain - fixed); s6/s7 lost to the measurement rig's camera, fixed; not on main_
+_Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor - verified through the engine (s9: both garments, the back print on the back view, reveal 5.6s); s6/s7 lost to the measurement rig's camera, fixed; not on main_
 
 ## At a glance
 
@@ -352,7 +352,11 @@ _Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): the full loo
   the side - but the back view was plain (the back composite was sent cold on the turn and never acknowledged in the window)
   and the reveal came 7s after connect (single garments: 5.5s). Fixed: the look's back composite is primed at connect, and
   the session is seeded with the look's front outfit instead of the shirt alone. Mock: revealed 3.2s, the turn's back a
-  repeat. Unit suite, visual gate (40/40), build, trace:prompt identical. 8 real sessions in all.
+  repeat. Unit suite, visual gate (40/40), build, trace:prompt identical.
+- **Verified through the real engine (s9, record mv3kfd8t, e25e250):** the back primed at connect (398ms), revealed 5.6s
+  after connect (s8: 7.0s), the turn's back acknowledged in 458ms (s8: never), the front back in 483ms, no stall. On screen:
+  shirt and shorts together at the front, the shirt's back print on the back view, the front print back at the front.
+  9 real sessions in all (2 of them, s6/s7, lost to the rig). Not yet measured on a live person or with other products.
 - **Stage:** done (core).
 - **Done:** language toggle + English strings `a7de91c`, `310b174`; geo-IP language
   lock fix + `fitting-room/i18n.js` module `4ecda99`; cart popover i18n `82de850`.
