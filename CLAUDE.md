@@ -286,8 +286,8 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 `pose-focus` slices `app.js` from `let _lastPoseTimestamp = 0;` to
 `/* The loaded PoseLandmarker, as a memoized PROMISE` (the pose call and its focus window, §2.19).
 `torso-twist` slices `app.js` from `const TWIST_SHOULDER_MAX` to `let _poseTwist = makeTwistState();`
-(the torso-only turn rule, the yaw guard and the head-out-of-frame measurement, §2.20/§2.22/§2.39) and runs it
-standalone - keep the block self-contained (`head-frame` takes `const HEAD_ROOM_OUT` to the same end). `back-prime` slices `let _primedBackGen = -1;` to `function armFirstFrameBilling(video, gen) {`
+(the torso-only turn rule and the yaw guard, §2.20/§2.22) and runs it standalone - keep the block
+self-contained. `back-prime` slices `let _primedBackGen = -1;` to `function armFirstFrameBilling(video, gen) {`
 (the back sent before the reveal, §2.22). `return-side` takes the same torso-twist slice (for `torsoOrder()`,
 §2.23) and pins the tick's `ord: typeof _poseOrd === …` line by text.
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
@@ -304,12 +304,7 @@ the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to
 `\n\n  /* What only the browser measured`, `orient-engine` §4 the tick from
 `  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
 (the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
-`function createOrientationWatcher() {`. `pose-follow` slices `app.js` from `/* ── THE TICK WAITS FOR THE READING (2026-10-09)` to
-`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `full-look` slices `app.js` from `function lookHalfFor(item, angle) {`
-to the `Camera + engine bootstrap` banner, from `const LOOK_BAND_TIMEOUT_MS = 3500;` to the `stitchLookBlob` JSDoc, and from
-`/* ── THE GARMENTS YOU TRIED` to `/* ── end THE GARMENTS YOU TRIED ── */` (§2.42); `side-profile` slices `applyLook` from
-`const canStitchLook = !!(topImg && bottomImg);`. `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
-`/** The rows to paint on an image` (the rear band request, run on a fake fetch). `garment-cache-age-group` slices
+`function createOrientationWatcher() {`. `garment-cache-age-group` slices
 `server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
 `/* Per-product view lookup` and `scanner/scan-store.js` from
 `async function saveClassification(` to `/* ── Gemini classification` — keep the
@@ -557,7 +552,6 @@ version, only with the code hidden." Measured against origin/main on the same ma
   4.0s, GPU work 34.6s vs 12.6s. It fixed a real bug (a model-worn store photo's jeans/back bled into
   the render) but main has that bug too; if it comes back, the garment box must come from the server
   (e.g. the classifier that already sees every photo), never from a second MediaPipe in the browser.
-  **It came back on 2026-10-08 that way, as a MASK on the rear photo only (§2.38).**
 - **Server round trips on the critical path**: every /api/size and /api/prompt went to Vercel iad1
   (~350ms from Israel, 620ms cold) where the in-browser original took 0ms - Continue locked for two
   (+~720ms), go-live waited on two (+~750ms). The Worker behind the orientation link answers POST
@@ -1221,266 +1215,6 @@ Replayed on its own clip (`return-side` §3f.6, `k-0731`): the front lands 209 -
 view; the return goes out on the first order reading past the side, which was 144ms old in a session whose engine put the
 swap ~0.07s after the send. The other eight sessions and the landing model (§4c) are unchanged. **Worker deploy.**
 
-### 2.38 The store's model painted out of the rear photo; FRONT_CLEAR for TEST sessions (2026-10-08, reworded 2026-10-09)
-"Front and back work perfectly - don't touch it. Two small things: in the first measurement it just added the guy who
-models the shirt, with his back to the camera, in the middle of the measurement (the second was fine); and it put a
-necklace on me." Layer B and Layer A, each scoped so the turn timing and the front reference are untouched.
-- **The model (Layer B).** Two PEAK sessions 40s apart; the first one's TEST record (`muzadbir`) shows the render-lag probe
-  (§2.16) losing the camera for ~1.4s of the back view (1.76s / 1.43s / 2.0s on matches of 0.05-0.06; clean sessions read
-  ~1.0-1.1s on 0.1-0.4), then a 0.37s stall until the FRONT landed - the output was the store's rear photo, a man with his
-  back to the camera, not the shopper. The mechanism of 479cdfd and 30a7710 (§2.15), both reverted. Now: `GET
-  /api/garment-box` (`lib/garment-box.js`, the classifier's model, one call per photo, cached in memory + CDN) answers the
-  band to keep, collar to hem; the room (`referenceBackBand()` / `maskReferenceBand()`, inside `garmentBlobCached()`)
-  PAINTS the photo above and below it with the photo's own backdrop - a MASK, not a crop: same size, the garment at the
-  same place and scale - on the garment's DISTINCT REAR photo only. The front goes exactly as before. It abstains (the photo
-  goes whole) on no person, an unsure/tiny box, a band that fills the photo, no answer in 3.5s, a heavy re-encode, or any
-  failure; `?ref_mask=0` is off; a TEST record's `ctx.ref` says what was done. On the PEAK rear photo (by-eye box): 34%
-  above the collar and 10% below the hem painted, 84 -> 67 KB. `garment-box` (a padding that keeps the head fails 3; a
-  hint that matches the front fails 4). It ships in two steps - the endpoint first, so the band can be read on the
-  real photo before the room relies on it. Intermittent, so one clean session does not prove it; a record whose lag
-  stays ~1s through the back view does.
-- **The necklace (Layer A) - TRIED AND REVERTED.** A gold chain with a pendant over the printed chest - 07:31 after the
-  return, 11:41 from the first second, also 10-04 23:57 and faintly 10-05 18:10. Neither store photo has one, no prompt
-  word names one, `enhance` is false, and the shopper's own shirt in a shorts session five minutes later has none: the
-  engine adds it. `FRONT_CLEAR` ("Nothing is worn over the garment's collar or front." - no noun, the tuxedo rule) went
-  out at P.LOW on the front of a top, from TEST sessions only (`clearFront`). The FIRST measured session (15:29, record
-  `muzijj7m`, the preview) rendered the PEAK print on the shopper's OWN dark shirt from the first second - "it changed the
-  shirt to the colour of the shirt I am wearing": "the garment" read as what the shopper wears and "nothing over it" as
-  keep it. The front reference was the same 76 KB photo as before, so the sentence was the only change on the front.
-  Reverted whole: `lib/prompts.js` and `lib/api-version.js` are byte-identical to before it again, the room asks for
-  nothing, and `prompt-engine` §7 pins the absence. A sentence naming what the shopper WEARS is the same trap as naming
-  a garment (the tuxedo): the engine draws toward it. The necklace stays open - any next attempt is measured first.
-- **The necklace, second wording (2026-10-09) - TRIED AND REVERTED 2026-10-10.** The 10-10 19:15 session (record `mv2lhqwq`):
-  the shirt from the first second, then after the turn back to the front a BARE CHEST with "PEAK" on the skin (4.4-4.9s of the
-  clip) - "unadorned" read as unclothed. Two wordings about the neckline, two failures (the shopper's own shirt; no shirt):
-  no third one without a way to measure it first. Reverted whole (`lib/prompts.js`, `lib/api-version.js` back to
-  d022d8b34a6d7583, the room asks for nothing; `prompt-engine` §7 pins the absence). What was tried: The next session without the sentence
-  (15:43, record `muzj03pc`) had the chain again, a thin chain with a ring pendant, from the first second until the turn,
-  then gone; the shirt was darker than the product until the turn as well (the shopper's own dark shirt showing through a
-  start that has not converged - the turn regenerates the torso). Across the owner's PEAK clips the chain shows in 6 of 17
-  sessions without the sentence (5 from the first second), in 0 of 2 with it: the sentence is the lever, its subject was
-  the fault. `FRONT_CLEAR` is now **"Clean, unadorned neckline."** - the neckline itself, no garment, nothing worn, no
-  object named; it holds for any top's neckline. Same P.LOW, same gate (`clearFront`, TEST sessions only - every shopper
-  request byte-identical, `trace:prompt --json` identical to HEAD); the PEAK front is 533 chars with it (sheds at -2).
-  `prompt-engine` §7 pins it and the first wording's trap (no garment / worn / nothing). If the colour moves again it
-  comes off. `lib/api-version.js` regenerated - until a Worker deploy the room takes /size and /prompt from the origin.
-
-### 2.39 The head out of frame - the side is counted, not read (2026-10-08)
-"I measured the shorts and the front and back of the shorts got mixed up." The 11:45 session (TEST record `muzajx17`) was
-framed from the neck down - the presence gate showed its step-back guide and timed out at 12s. The pose model tells front
-from back by the face; without one it read the shopper's BACK as a full-width FRONT three readings in a row (order 0.87,
-1.05, 1.19 - camera 1.97-2.49s), the early BACK was withdrawn on the two-reading rule (§2.37) and the FRONT sent at 2.23s
-with the back to the camera; on the way round it read the front as a back (-0.56). Through the room's lite model the clip
-itself reads -0.6 on a body square to the lens at its end; neither the nose (guessed on the frame's edge) nor the feet
-(heel vs toe) tell the two apart there. What a headless reading still says truly is HOW FAR from the side it is.
-- **The measurement (`headRoomStep()`, app.js, inside the torso-twist slice):** headroom = the shoulder line's height in the
-  frame over the torso height. Ten recorded clips through the room's lite model: the nine with the head in view never go
-  under 0.35 (10-04 05:55, the head touching the top edge); the shorts clip sits at 0.10-0.23 and climbs to 0.4-0.55 at the
-  side views and its end with the head still out. So it is sticky: out after 2 readings under 0.30, in again after 3 over
-  0.60. Learned in the presence gate too, so it is set before the reveal. The sample carries `headOut: true` (only when
-  true); a TEST record carries `ho` per tick and a `head-frame` event on each change.
-- **The decision (`headlessReading()`, lib/orient-engine.js, before `step()` and typeof-guarded in it):** for a headOut
-  reading the side the body faces is COUNTED: it starts facing the lens, a pass through the side view (|order| <= 0.25 on a
-  |yaw| of 45+, then out past 0.45) turns it over, and the reading goes on to every rule with that sign - the pose vote too;
-  nothing that reads a head votes. A head-in reading keeps its sign and sets the count (a shopper who steps back). A look
-  that comes back reads, headless, like a turn: a back that lasts HEADLESS_BACK_MAX_MS (2.5s - longer than the back of any
-  recorded 360) with no side view is read as the front again, and that reading goes on as the side view (order 0), so the
-  return rules send the FRONT on it (scripted: 2.75s after leaving the side, not ~5s).
-- **Measured:** the record replayed (`head-frame` §3): as sent, BACK 1.72s then FRONT 2.23s (the report); headOut, the same
-  BACK, no FRONT through the back, FRONT at the return's side view (2.69s, |order| 0.17, |yaw| 83), two swaps in all.
-  Without the flag nothing changes (§5; `orient-engine` §1 on its pin). Mutations: the engine ignoring the flag fails 4;
-  a 0.40 threshold marks a head-in clip and fails 2. **Worker deploy** (the engine).
-- **Not covered:** a session whose head leaves the frame only mid-turn (no record of one), and the look rule on a real body.
-
-### 2.40 The tick waits for the reading - the back on the reading that calls it, not a tick later (2026-10-09)
-"The back wasn't right at the back, it took time to load." The 15:43 clip, frame by frame: a fast turn (the side to the back
-in ~250ms); the side plain at 2.30-2.58s, an unformed patch at 2.61, the print complete only at 2.84 on a body already
-square away. Its TEST record (`muzj03pc`): BACK went out on the reading at the side (order -0.17, ~100 degrees), where 19
-of the owner's 33 recorded turns send it on one at ~52-69 (order 0.36-0.61). The reading between (shoulders at 39% of
-square-on, ~67 degrees) landed just after its tick had sampled: every tick carried a reading ~200ms old (`oa` 190-215) -
-the pose loop's 240ms timer and the tick's 250ms one at their worst phase, as in about a third of the 33 records - so BACK went out a
-tick (~275ms) later. Not the engine's ack (480ms, as every session: the prime no longer makes the back's ack faster - 33
-records, back 395-1259ms after a prime, front 398-743ms) and not the image size (the shorts' 313 KB acked in 588ms).
-- **`awaitFreshPose()` / `notePoseStep()`** (app.js, beside POSE_SYNC): a tick whose latest reading is over
-  `POSE_FOLLOW_STALE_MS` (100) old waits for the live loop's NEXT one (at most `POSE_FOLLOW_WAIT_MS`, 180) and resumes on a
-  task of its own. No inference in the tick - POSE_SYNC (§2.21's laggy 2026-10-05 attempt) ran one there and cost 2-5 camera
-  fps; this adds none. The same readings reach the engine in the same order, sooner; the engine, its rules and the Worker
-  are untouched (no deploy). No live loop (before the reveal, the replay harnesses): no wait. `?pose_follow=0` is the
-  free-running pair; `?pose_sync=1` keeps its own path.
-- **Measured (`pose-follow` §3, the room's cadence on the 11 full recorded 360s x 4 loop phases x 5 tick phases):** the
-  decision's reading age median 125ms / max 235 -> 1ms; BACK decided on the very same reading in every run, on the wire
-  ~1ms after it instead of up to 235ms - on the body a median 10 degrees sooner (p90 23), never later; the return FRONT
-  unmoved (291 vs 292 degrees, the projection already corrects age); no run swaps more. The landing itself (the engine's
-  ~0.25s to form a new print) is the engine's. **Not measured live yet** - the next TEST session's `oa` should read under ~100.
-  **Measured live 2026-10-09** (records `mv0o1l3b` shirt, `mv0o42ul` shorts): `oa` 2-52ms on every tick (was 190-215).
-
-### 2.41 Each image its own pace; the picture's pace (2026-10-09) - REVERTED 2026-10-10
-**Reverted with the necklace sentence** after the owner's 10-10 measurement ("what you did broke it - put it back"): the shirt
-rendered a bare chest after the turn (the sentence, §2.38) and the shorts session opened on the shopper's own shorts for
-2.4s - a session whose orientation link and wire stalled before the reveal (`link-ping` 1397ms, a write waiting 2147ms),
-not shown to come from these changes, but reverted with them on the owner's call. `PLAYOUT_DELAY_HINT` is 0.08 again and the
-pace is the session's median again. What was measured, kept for the next attempt: the shorts session's own `out-stats.pace`
-(150ms buffer) read the engine's RTP spacing even (p90 124) and the ARRIVAL bursty (p90 182) - the network, which a buffer
-is for; the shirt session read our INPUT bursty (p90 154, camera at 22 fps) - our main thread. What it said:
-"The shirt works well but it doesn't feel smooth - make it smoother; and the shorts went crazy at the end and went away at
-the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0o42ul` basketball shorts, clip 10:53).
-- **The shorts' return (`engineAckEstimate(key)`, app.js THE ENGINE'S PACE):** the FRONT went out on the projection at a pace
-  of 592ms - the session's median, pulled down by the BACK's ack (597ms, 222 KB) - and took 721ms (316 KB), as its own sends
-  at connect had (684-709). It landed ~130ms late: the rear photo's shorts on a body coming round (~314 degrees for a 280
-  aim) - the distorted frames at 3.96-4.03s of the clip, CHICAGO only at 4.06. Acks are now kept per reference side
-  (`applyGarment` passes `paceKey`, its frozen angle) and the tick sends the pace of the image the NEXT swap sends (the front
-  on the back leg); an image with none yet falls back to the session's. Replayed on the record: the FRONT goes out at 2.87-2.91s
-  instead of 3.00. On the PEAK tee (76 vs 70 KB, the same acks) nothing moves. Browser only - the engine reads `lat` as before.
-  `return-side` §5.8-§5.9d.
-- **The picture (`PLAYOUT_DELAY_HINT` 0.08 -> 0.15, config.js):** every presented frame of the owner's clips: the ~10 fps
-  render arrives in bursts - two frames 25-45ms apart, then 170-230ms (p90 140-170) - 10 fps on average, 5 in the gaps; and
-  one 0.5s output stall in the shirt session. 80ms held back less than one gap; 150ms holds the p90 one, at ~70ms more between
-  the camera and the screen (where a swap lands on the BODY is the engine's camera time and does not move). The top of the
-  range `image-first` pins.
-- **THE PACE OF THE PICTURE (app.js, TEST sessions only):** which of four places makes the bursts decides whether the buffer
-  can absorb them - our camera frames (the throttle's setInterval shares the main thread with the pose model), the engine's
-  spacing (RTP timestamps), the network (arrival), or the screen. `out-stats.pace` = { in, rtp, recv, show } as [p10, p50,
-  p90, max] ms, plus `jb` (the buffer). Bursty `in` -> fix our input pacing; bursty `rtp` with even `in` -> the engine's;
-  even `rtp`, bursty `recv` -> the network, which the buffer is for. `picture-pace` (14).
-- **Not measured live yet:** both. The next TEST session's `out-stats.pace` and its return landing are the check.
-
-### 2.42 The full look in AI Auto - the shirt and the shorts together (2026-10-10/11)
-"Make sure both work well at the same time" (the owner chose a full look; one real session for this second attempt).
-- **What was broken:** `applyLook()` skipped the stitch for AI Auto, so a look of two garments with back photos sent the TOP's
-  photo alone; and on FOX there was no way to assemble one ("Complete the Look" typed the store catalog by words in the image
-  URL, which FOX's numeric file names never carry).
-- **THE GARMENTS YOU TRIED (localStorage `pear_tried_garments`):** a garment is remembered with a VERIFIED gallery (the
-  classifier's verdict, or a room opened already classified), per store; "Complete the Look" lists the other region's first.
-- **AI AUTO STITCHES TOO (`lookHalfFor`, `prewarmLookComposites`):** one composite per side (both fronts / both distinct backs),
-  frozen before any await, built when the look forms.
-- **FIRST ATTEMPT, MEASURED AND REPLACED (session `mv3frez7`):** 1024x2048 black-barred "TOP"/"BOTTOM" panels - the PEAK front
-  rendered, the shorts never did, and the ~0.6 MB back composite took 1,269ms to acknowledge (single photos 300-500ms): no back
-  print through the back view, the print on the chest at the end. The session before (`mv3f87ox`) painted a striped strip of
-  the reference into the scene.
-- **THE OUTFIT SHAPE (`outfitLayout`, 2026-10-11):** what a product photo of an outfit looks like - the top cut to its band with
-  its hem on the seam, the bottom cut to its band under it (layered under the hem, ~3/4 of the top's width), one backdrop (the
-  top photo's own corner), no bar, no labels, 768x1152 JPEG 0.88: 82/68 KB for PEAK + CHICAGO front/back (rendered locally from
-  the real bands before any session).
-- **THE BOTTOM'S BAND (`lib/garment-box.js` v2):** the v1 bottom bands were the white tee above the waistband on both CHICAGO
-  photos ([0, 0.15]) - the model was handed the 2048x3072 original; at 600 wide the front came back 0.07-0.50. A Shopify photo
-  is now analysed 768 wide (`analysisUrl`), a bottom keeps a quarter of its box below the hem and 3% above, and the version is in
-  the memo key (v1 answers are never served again). This also fixes the rear-photo MASK for bottoms (§2.38), which used the same
-  wrong band. **v3 (the same day):** v2 still boxed the tee ([0, 0.14] / [0, 0.17] at 768 wide, temperature 0) - the model's
-  LABEL fails, not its boxes - so it is asked for both garments' boxes at once and the region is taken by POSITION
-  (`pickRegionBox`: the lower-body garment is the lower box).
-  **It still failed on CHICAGO** (v3: one photo no lower box at all, the other [0, 0.17] again) - so a lower-body band ending in the
-  top 30% of the photo is IMPLAUSIBLE and no band (`BOTTOM_MIN_HEM`): the rear mask sends the photo whole (v1-v3 would have painted
-  the shorts out), and the look shows the bottom's photo top 65%, 18% of it tucked under the shirt's hem (the tee under it, the
-  lettering not). The API now returns the model's raw box(es) (`raw`, `both`).
-  **v4 - the actual cause, read off those raw boxes:** the model DID box the shorts in `lower_box_2d` on both photos ([112, 238, 494,
-  792] and [163, 184, 375, 825]) but also answered a `box_2d` of its own ([] / the tee), and `pickRegionBox` read the stray field
-  first. The two garments' boxes win now; v4 keeps the wrong v3 answers out of the cache. The plausibility guard and the tuck stay
-  as the fallback.
-- **The card (`lookViewThumbs`):** a full look shows four views - each half's front and back, as the swaps send them (a half
-  with no back says "אין גב"); and "Custom upload" only for an uploaded crop - a store product reads "Store item".
-- **THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2726ee2)** and **THE EARLY VERDICT (24d9abf)** - two listener bugs found on the
-  way (the shorts' verdict written onto the shirt just added: "it measured the shorts twice"; a verdict on the size screen
-  dropped, the gallery's second photo going live as the back).
-- **THE LOOK'S NO-OP (the one real session of the outfit shape, record `mv3hkkb2`: connected, never revealed):** `applyLook()` had no
-  "unchanged" skip, so the re-anchor (every REANCHOR_MS) re-uploaded the whole composite - 8 and 5 uploads before the 19.4s / 12.7s
-  reveals of the first attempt, the back swap queued behind them; with the outfit's ~350ms acks the wire was never quiet long
-  enough for the reveal gate (17 uploads, torn down). Same side + same prompt now sends nothing. Verified through the source
-  room's mock engine with the visual fixture's person as the camera: revealed 3.2s after connect, no upload while square to the
-  lens, the back composite at 50 degrees, the front at 297.
-- `full-look` (47), `garment-box` §7. The look prompt is unchanged (`trace:prompt` identical).
-- **s6/s7 never revealed - THE MEASUREMENT RIG, not the room (2026-10-11).** Both look sessions had no camera vote for 60 ticks
-  and no output frame. Replayed for free before go-live: a `<video>` attached to the camera track the way the orientation
-  watcher attaches got 0 frames in 3s - on a single garment too. The rig's camera (a recorded clip drawn on a canvas,
-  `captureStream(30)`) emits only on the page's rendering updates, so a consumer attached later could starve; a device camera
-  does not. The rig now writes one VideoFrame per tick to a track generator (92 frames in 3s). The room's own engine input
-  (`captureStream(0)` + `requestFrame()`) was never affected. Two billed sessions were lost to this.
-- **THE LOOK'S BACK IS PRIMED; ITS FLOOR IS ITS FRONT OUTFIT (2026-10-11, session `mv3j8ba0` - the look rendered: the PEAK tee with
-  its print over the CHICAGO shorts with their lettering, the stripes at the side; the back view plain).** Two look-only gaps:
-  `primeBackReference()` was "not for a look", so the back composite went out cold on the turn (acked 2,399ms / 1,269ms / not
-  at all in the 3.1s left) where the primed single garments took 305-355ms; and the floor was the TOP's packshot, so go-live's
-  first `applyLook()` was a new image and the looks revealed 7.0-14.2s after connect against 5.5-5.7s. Now a look primes its back
-  composite (the cached Blob the turn sends, the look prompt; nothing when no half has a back of its own), and
-  `resolveLookFloor()` seeds the session with the front outfit composite (60-85 KB) and the look prompt - recorded on the wire,
-  so go-live's first look apply is the no-op - falling back to the top's packshot when the composite is not ready in
-  `LOOK_FLOOR_WAIT_MS`. Mock engine: initialState = the front composite, the back primed, the turn's back the same Blob, revealed
-  3.2s. `back-prime` §5b-§5d, `full-look` §8 (two mutations caught). Single garments are untouched.
-  **Measured through the real engine (e25e250, record `mv3kfd8t`, the rig's recorded 360 as the camera):** the back composite
-  primed at connect (acked 398ms), revealed 5.58s after connect (s8: 7.04), the turn's back acked in 458ms and rendered 470ms
-  later (s8: not acknowledged in 3.1s), the front back in 483ms, no output stall. Frames: the PEAK tee with its print over the
-  CHICAGO shorts with their lettering; the shirt's back print on the back view; plain sides; the front print back at the front.
-
----
-
-### 2.43 The UI at every device size - an audit, layout only (2026-10-11)
-"Change nothing in how it works - go over the whole UI and make sure it works well, the same UI, on every device." A
-read-only pass over every room state (identity, size form + cookie banner + terms, fitting, the look, the camera guide,
-preview + timer, loading, live, after the session, OTP, locked) at 14 viewports (280-1920px, phones, the store's
-480x820/480x680 frame, tablets, laptops) in Hebrew and English through the mock engine, measuring horizontal scroll,
-unclipped overflow, covered controls, cut text and tap targets, plus the widget on the real FOX page. Fixed, CSS/markup only:
-- **The language switch covered Screen 1's step row** up to ~550px (every phone and the store's 480px frame: "...1 of 2 ·
-  Size" in English, the percent hidden in Hebrew) and in the Hebrew two-column layout up to ~1090px. The row reserves
-  `--hdr-gutter-l` less its own left offset (style.css, THE LANGUAGE SWITCH'S CORNER - two formulas that follow the
-  column geometry; measured at 48 width/language points, 0 overlaps, 0 padding where none was needed).
-- **The replay panel scrolled the page sideways** on 280/320px phones (its two buttons cannot shrink below their words):
-  they stack there (app.js injected CSS, `flex-wrap`).
-- **"Retake" was cut** ("tetake" at 390px) and "מדוד שוב" broke in two: the pill keeps its width, the head wraps.
-- **The camera guide's pinned button was see-through** over the scrolling steps on 280/320px (in both states - a phone
-  keeps `:hover` after the tap that opens the camera, on that same spot).
-- **Names were cut at the wrong end** in Hebrew ("... tee", "...O shorts"): the focus bar's label and name are two runs (the
-  label gives way first), and every name/email ellipsis uses `unicode-bidi: plaintext`.
-- **Add to Cart broke mid-phrase** up to 375px: it wraps between the Hebrew and the English only.
-- **"· מדדת" showed in Hebrew in the English UI** (the tried-garment marker): `data-i18n="clTried"` (מדדת / Tried).
-- **The widget's close button** was a white x on 15% white - invisible on the room's light header, the phone's only way out
-  - and sat on the Hebrew step label: a dark glass disc with a light rim, 36px 8px into the corner on phones, and the room
-  keeps that corner on Screen 1 when embedded (`html.pear-embedded`, < 480px).
-**Not changed (stated):** the store's own chat (Glassix, z-index 2147482998+) and accessibility buttons draw OVER our
-modal (999999) - raising ours would also hide the store's accessibility button while the room is open: the owner's call.
-The 280px header (the pear glyph touches the pencil) and the 280px Add to Cart (three lines) are left as they are. Full-page
-screenshots show `.reveal-up` sections blank until scrolled - an artifact, not a bug. In demo mode the session ends on the
-locked screen on wide viewports - the demo gate, not layout.
-
-### 2.44 Liquid Glass - one material, one press, one thumb (2026-10-11)
-"Every button in one premium Apple style; whatever you press and drag works the same; no emojis; pressing should sink in
-like a bubble, not this light; Apple's fonts" - with four Liquid Glass references. The look lives in ONE layer at the end of
-`style.css` ("LIQUID GLASS - ONE MATERIAL, ONE PRESS, ONE THUMB") and the motion in `lux-interactions.js`; no control's
-behaviour changed.
-- **The face:** `--font-ui` is the system stack (SF Pro / SF Hebrew on Apple; Inter + Heebo elsewhere - SF may not be
-  served to other platforms). Every button too; Urbanist is no longer loaded.
-- **The material:** clear glass for every button (frost, a bright top lip, a hairline rim, inner depth, a soft drop
-  shadow, a specular gradient rim on `::before`), tinted pear glass for the primary actions, dark glass over the camera
-  and the replay/lightbox, a near-opaque pear for a primary on a dark card, a muted disabled state.
-- **No light:** the hover sheen sweeps, the tap ripple (`mobile-ux.js`, now haptic only), the breathing glows (live card,
-  guide step, chosen size) and the hover lifts/spins are gone; the presence lock ring and the garment-detect scan stay
-  (they are status).
-- **The bubble press (`initLiquidPress`):** held, the glass squashes in (0.955 x 0.925) and darkens inward (`.lg-press`);
-  released, one soft overshoot back. On the `scale` property via the Web Animations API, so no button's own transform,
-  transition or entrance animation is touched or replayed, and it never intercepts the click. Touch waits 70 ms (a scroll
-  is not a press); a quicker tap still plays the whole bubble; a cancelled press settles back with no pop.
-- **One thumb (`initLiquidThumbs`):** language, fullscreen, gender and timer share one glass track and one lens thumb: touched
-  or dragged it swells past the track and clears (`.lg-touch` / `.is-dragging`); moving, it stretches along its motion and
-  narrows across it (measured speed -> `--lg-sx/--lg-sy`). Drawn on the thumb's `::before` - each control's own drag/snap
-  code still positions the thumb (a `scale` on the thumb itself would scale its translation). The watcher writes only while
-  the thumb moves, so its MutationObserver cannot keep itself alive.
-- **Icons:** every emoji in the room became an SF-Symbols-weight line icon (`.lg-icon`): camera, video, stop, plus, check,
-  circular arrow, download, close, magnifier, lock, shirt; the emojis in the toasts are gone.
-- **Found on the way:** four Hebrew-only labels in the English UI (the look's view labels, its type line, the focus bar's
-  size word, "recommended") are `data-i18n` now; Add to Cart stacks its English under the Hebrew like Go Live.
-- Measured: the device audit (168 states, 6 sizes, both languages) - no horizontal scroll, no overflow, no covered control;
-  the press sampled frame by frame (mouse hold and finger tap; the click still lands); unit suite, `qa:visual` 40/40,
-  build, `trace:prompt` identical.
-- **Then, reported with a screenshot: "the download button is hard to see; resting on a button with the mouse or on a phone
-  doesn't feel good".** (1) The Download rule never applied: the shared tint rule's `:is()` carries the weight of
-  `.pear-sz-btn.is-active` (0,2,1) and outranked it - it is scoped to `#pearReplayZone` now (solid pear glass, dark label);
-  Add to Cart's success state got the same treatment. (2) Many buttons had their own `:hover` outside any hover query (a
-  lift, another tint, a ring) and a phone keeps `:hover` after a tap: style.css 3b answers once for a mouse (brighter glass,
-  deeper shadow) and once for touch (no hover at all), at an id's weight (`:not(#_)`). (3) Hover, press and release are one
-  state machine on the `scale` property, always started from where the glass is: a mouse lifts it (1.025), a press sinks it
-  from there, a release springs back to the lift or to rest; a finger sinks it at once, a scroll settles it quietly, and a
-  tap quicker than the sink plays the whole bubble. Keyframe easing per segment - one easing over the whole run had raced
-  through the sink in ~40ms. Sampled: hover 1 -> 1.025 in ~320ms; quick tap 0.955 x 0.925 at ~200ms, out to 1.02 x 1.04, rest
-  by ~740ms; a tapped button reads identical before and after (no sticky hover).
-
-## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
 same commit. Whichever is wrong is the one that wins.

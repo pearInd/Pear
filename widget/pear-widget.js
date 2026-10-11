@@ -2687,19 +2687,13 @@
         "width:min(480px,100vw);height:min(820px,100vh);border:none;" +
         "border-radius:16px;background:#000;" +
       "}" +
-      /* The close button is the only way out on a phone, where the room fills the screen and this button sits ON the
-         room's light header - a white x on 15% white was all but invisible there (the UI audit, 2026-10-11). A dark glass
-         disc with a light rim reads on the room and on the dark backdrop alike; on a phone it sits 8px into the corner,
-         36px, clear of the room's header controls (the room keeps that corner free on its first screen - style.css,
-         html.pear-embedded). */
       ".pear-widget-close{" +
         "position:absolute;top:16px;right:16px;width:40px;height:40px;" +
-        "border-radius:50%;background:rgba(17,17,17,0.55);color:#fff;" +
-        "font-size:20px;border:1px solid rgba(255,255,255,0.35);cursor:pointer;line-height:38px;" +
-        "padding:0;text-align:center;z-index:1;" +
+        "border-radius:50%;background:rgba(255,255,255,0.15);color:#fff;" +
+        "font-size:20px;border:none;cursor:pointer;line-height:40px;" +
+        "padding:0;text-align:center;" +
       "}" +
-      ".pear-widget-close:hover{background:rgba(17,17,17,0.72);}" +
-      "@media (max-width:520px){.pear-widget-close{top:8px;right:8px;width:36px;height:36px;line-height:34px;font-size:18px;}}" +
+      ".pear-widget-close:hover{background:rgba(255,255,255,0.25);}" +
       ".pear-widget-toast{" +
         "position:fixed;top:24px;left:50%;transform:translate(-50%,-12px);z-index:1000000;" +
         "background:#111;color:#fff;padding:12px 22px;border-radius:999px;" +

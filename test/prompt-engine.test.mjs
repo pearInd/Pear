@@ -171,16 +171,5 @@ console.log("\n── §5 the browser carries no prompt wording ──");
   }
 }
 
-console.log("\n── §7 FRONT_CLEAR is gone - it kept the shopper's own shirt (2026-10-08) ──");
-{
-  /* "Nothing is worn over the garment's collar or front." went out in TEST sessions to stop an invented necklace, and the
-     first measured session (15:29, record muzijj7m) rendered the PEAK print on the shopper's OWN dark shirt from the first
-     second: "the garment" read as what the shopper wears, and "nothing over it" as keep it. Reverted whole; this pins the
-     absence so it is not re-added blind (CLAUDE.md §2.38). */
-  check("no prompt sentence about what is worn over the garment", !/worn over the garment/i.test(LIB_SRC) && !/FRONT_CLEAR/.test(LIB_SRC));
-  check("the room sends no clearFront and the engine reads none",
-    !/clearFront/.test(APP) && !/clearFront/.test(LIB_SRC));
-}
-
 console.log(fails === 0 ? "\nPrompt engine: OK" : `\nPrompt engine: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

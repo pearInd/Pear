@@ -247,8 +247,7 @@ console.log("\n── §5 THE VALUE IS PER-PRODUCT, NEVER BAKED INTO AN ANCHOR �
     !/(PLAIN_TEE_ANCHOR|CATEGORY_ANCHOR)[\s\S]{0,700}?fabric is (white|black|navy|blue)/.test(SRC),
     "a colour in an anchor applies it to the entire catalog");
   check("the room reads the colour off the item, from the widget payload",
-    /* the room's OWN garment since 2026-10-11 (THE VERDICT IS FOR THE ROOM'S OWN GARMENT - `target`) */
-    /target\.colorHex = e\.data\.garment_color_hex;/.test(SRC) &&
+    /activeItem\.colorHex = e\.data\.garment_color_hex;/.test(SRC) &&
     /typeof e\.data\.garment_color_hex === "string"/.test(SRC),
     "a `||` here would collapse 'absent' and 'empty' into one case and lose the abstention");
 }

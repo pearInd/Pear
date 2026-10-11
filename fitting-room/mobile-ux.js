@@ -125,8 +125,18 @@
     // COMPLIANCE block in app.js), and a ripple on a locked button reads as "it worked".
     if (!el || el.disabled || el.getAttribute("aria-disabled") === "true") return;
 
-    /* The ripple of light that bloomed from the touch point is retired (2026-10-11, the Liquid Glass pass): "it should
-       sink in like a bubble, not this light". The press is lux-interactions.js's bubble now, and its haptic tick too. */
-    return;
+    if (navigator.vibrate) { try { navigator.vibrate(7); } catch (_) {} }
+    if (reduce) return;
+
+    const r = el.getBoundingClientRect();
+    const size = Math.max(r.width, r.height);
+    const s = document.createElement("span");
+    s.className = "pear-ripple";
+    s.style.cssText =
+      `width:${size}px;height:${size}px;` +
+      `left:${ev.clientX - r.left - size / 2}px;` +
+      `top:${ev.clientY - r.top - size / 2}px`;
+    el.appendChild(s);
+    s.addEventListener("animationend", () => s.remove(), { once: true });
   }, { passive: true });
 })();
