@@ -305,10 +305,7 @@ the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to
 `  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
 (the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
 `function createOrientationWatcher() {`. `pose-follow` slices `app.js` from `/* ── THE TICK WAITS FOR THE READING (2026-10-09)` to
-`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `full-look` slices `app.js` from `function lookHalfFor(item, angle) {`
-to the `Camera + engine bootstrap` banner, from `const LOOK_BAND_TIMEOUT_MS = 3500;` to the `stitchLookBlob` JSDoc, and from
-`/* ── THE GARMENTS YOU TRIED` to `/* ── end THE GARMENTS YOU TRIED ── */` (§2.42); `side-profile` slices `applyLook` from
-`const canStitchLook = !!(topImg && bottomImg);`. `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
+`/* ── end THE TICK WAITS FOR THE READING ── */` (§2.40, run on a fake clock - keep the block self-contained). `garment-box` slices `app.js` from `const REF_BAND_TIMEOUT_MS` to
 `/** The rows to paint on an image` (the rear band request, run on a fake fetch). `garment-cache-age-group` slices
 `server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
 `/* Per-product view lookup` and `scanner/scan-store.js` from
@@ -1344,39 +1341,30 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   even `rtp`, bursty `recv` -> the network, which the buffer is for. `picture-pace` (14).
 - **Not measured live yet:** both. The next TEST session's `out-stats.pace` and its return landing are the check.
 
-### 2.42 The full look in AI Auto - the shirt and the shorts together (2026-10-10)
+### 2.42 The full look in AI Auto - TRIED AND REVERTED; two verdict bugs fixed on the way (2026-10-10/11)
 "Make sure both work well at the same time" (the owner chose: a full look, the shirt and the shorts in one session).
-- **What was broken:** `applyLook()` skipped the stitch for AI Auto ("the slot is needed for the per-orientation Blob"), so
-  a look of two garments with back photos sent the TOP's photo alone - the shorts had no reference and the engine drew the
-  shopper's own. And a FOX shopper could not assemble one: "Complete the Look" typed the store's cached catalog by words in
-  the image URL, which FOX's numeric file names never carry (on PEAK no pants at all, on the shorts four unrelated photos).
-- **AI AUTO STITCHES TOO (`lookHalfFor`, `prewarmLookComposites`):** one composite per side - both FRONT photos on the front,
-  both BACK photos (`distinctBackOf`, else that half's front) on the back - swapped by the watcher like a single garment's;
-  the halves are frozen before any await (§2.8); both composites are built when the look forms, so a swap never waits.
-- **EACH HALF CROPPED TO ITS GARMENT (`lookGarmentBand`, `drawBandContain`):** the upper half is the top's band from
-  `/api/garment-box` (collar to hem), contained; the LOWER half is the whole photo, contained - drawn over the four
-  PEAK/CHICAGO photos the server's top bands were exact and its bottom bands were the white tee above the waistband
-  ([0, 0.15]; the shorts run 0.08-0.48). The cover fit (the models' middles) only when no band arrives. **Open:** the
-  rear-photo MASK (§2.38) uses the same bottom band - on the shorts' back photo it paints most of the shorts out; the
-  shorts still rendered right in a real session (record `mv2mgezp`), so it was left alone.
-- **THE GARMENTS YOU TRIED (localStorage `pear_tried_garments`, room origin):** a garment is remembered with its classifier
-  verdict (front + distinct back - never the unclassified guess the room opens on) or when the room opens on an already
-  classified gallery (no correction is sent then - the common case), per store, 6 at most; "Complete the
-  Look" lists those of the other region first ("· מדדת"), then the store's. Measure the shirt, open the shorts, add it.
-- **THE EARLY VERDICT (found driving it):** `enterRoom()` builds the garment only when the shopper leaves the size screen, and
-  the classifier's correction that landed before that was DROPPED (`if (!activeItem || !front) return`) - a shopper slower on
-  height and weight than the classifier (~20-35s on PEAK) went live on the room's opening guess: the gallery's second photo as
-  the back, on PEAK the model three-quarters to the FRONT (§2.1). Held now (`_earlyGarmentUpdate`) and replayed through the same
-  listener right after `setActiveItem` (`replayEarlyGarmentUpdate`). Any verdict, the bare ready signal too, marks the gallery
-  validated.
-- **THE VERDICT IS FOR THE ROOM'S OWN GARMENT (the first real full-look session, record `mv3f87ox` - "it measured the shorts
-  twice, as the shorts and as the shirt"):** the shorts' room, the PEAK shirt added from "Complete the Look" at 51s, the shorts'
-  classifier verdict at 61s - the listener wrote it onto `activeItem`, which was the shirt just added: the shirt's slot took the
-  shorts' photos. The listener now writes to `target` - the room's own garment, `_handoffItem` set by `enterRoom()` (the active
-  one only without it) - and a corrected half of a look rebuilds the look's composites. color-lock / plain-back-anchor /
-  size-chart-overlay pin the writes on `target`.
-- `full-look` (40). The look prompt (`lookAnchorPrompt`, "the top above the bottom") is unchanged - `trace:prompt` identical.
-
+- **What was broken, and still is:** `applyLook()` skips the stitch for AI Auto, so a full look of two garments with back
+  photos sends the TOP's photo alone (the bottom gets no reference); and FOX has no way to assemble a look ("Complete the Look"
+  types the store's cached catalog by words in the image URL, which FOX's numeric file names never carry).
+- **Tried (07e6b66, f21a149) and REVERTED:** one stitched composite per side (both fronts / both backs, the top cut to its
+  `/api/garment-box` band, the bottom whole), built ahead of the turn, plus a per-store memory of the garments a shopper tried,
+  offered first in "Complete the Look". Measured through the engine, PEAK + CHICAGO, the owner's recorded 360 as the camera:
+  session `mv3frez7` - the PEAK front rendered from the first second, the shorts were NOT (plain black, no lettering), the
+  back composite was acknowledged in 1,269ms (a single photo: 300-500ms) so no back print through the back view, and the back
+  print landed on the chest at the end. The engine reads one stitched image of two garments as mostly the top, and the larger
+  image slows every swap. Do not retry the TOP/BOTTOM stitch for AI Auto without a different reference shape, measured first.
+  Two side findings are recorded here for the next attempt: the server's BOTTOM bands were wrong on both CHICAGO photos
+  ([0, 0.15], the white tee above the waistband; the TOP bands were exact) - and the rear-photo mask (§2.38) uses that same
+  bottom band (the shorts' back photo is mostly painted out; the shorts still rendered right in `mv2mgezp`).
+- **KEPT - THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2726ee2):** the PEAR_UPDATE_GARMENT listener wrote the widget's correction
+  onto `activeItem` - in the first full-look session (`mv3f87ox`) that was the shirt just added, and the look went live as the
+  shorts twice ("it measured the shorts as the shorts and as the shirt"). It writes to `target`: the room's own garment,
+  `_handoffItem`, set by `enterRoom()` (the active one only without it). A catalog swap is the same case.
+- **KEPT - THE EARLY VERDICT (24d9abf):** `enterRoom()` builds the garment only when the shopper leaves the size screen, and a
+  correction that landed before that was DROPPED - a shopper slower on height and weight than the classifier (~20-35s on PEAK)
+  went live on the room's opening guess: the gallery's second photo as the back, on PEAK the model three-quarters to the FRONT
+  (§2.1). Held now (`_earlyGarmentUpdate`) and replayed through the same listener right after `setActiveItem`.
+- `garment-verdict` (6) pins both; color-lock / plain-back-anchor / size-chart-overlay pin the writes on `target`.
 ---
 
 ## 3. Cross-file lockstep

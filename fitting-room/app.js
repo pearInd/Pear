@@ -3981,9 +3981,6 @@ window.addEventListener("message", (e) => {
      that fails the suite for a reason unrelated to what it tests - the same treatment
      verifyGarmentAsset() gets at its call sites. */
   if (typeof resolveClassifyGate === "function") resolveClassifyGate("classifier verdict received");
-  /* The verdict is in - a ready signal included (the classifier agreed with the gallery the room opened on): the gallery is
-     validated (THE GARMENTS YOU TRIED). typeof: suites run this handler standalone. */
-  if (typeof _galleryValidated !== "undefined") _galleryValidated = true;
   const front = e.data.garment_url;
   const back = e.data.garment_back;
   if (!front) return;
@@ -3991,11 +3988,10 @@ window.addEventListener("message", (e) => {
      enterRoom() builds target only when the shopper leaves the size screen; until then this returned here and the
      correction was DROPPED - so a shopper who spent longer on height and weight than the classifier took (~20-35s on the
      PEAK tee) went live on the room's unclassified opening guess: the gallery's second photo as the back, which on PEAK is
-     the model three-quarters to the FRONT (§2.1) - the print-less back. Found while driving the full look: the shirt's room,
-     left on the size screen, never took its verdict. Held now, and replayed through this same listener the moment
+     the model three-quarters to the FRONT (§2.1) - the print-less back. Found while driving a full look (2026-10-10): the shirt's
+     room, left on the size screen, never took its verdict. Held now, and replayed through this same listener the moment
      enterRoom() has the garment (replayEarlyGarmentUpdate). */
   if (!target) { if (typeof _earlyGarmentUpdate !== "undefined") _earlyGarmentUpdate = e.data; return; }
-  if (typeof rememberTriedGarment === "function") rememberTriedGarment(target, front, back);
   const composite = typeof e.data.garment_composite === "string" && e.data.garment_composite
     ? e.data.garment_composite : undefined;
   /* The widget's classify+synthesize round trip has now FINISHED, whatever it found -
@@ -4114,8 +4110,6 @@ window.addEventListener("message", (e) => {
      otherwise not be fetched until the first turn, adding a visible stall exactly when
      the user turns around. Re-warming here makes the corrected rear photo resident
      before it is needed. hotSwapIfLive() below then re-issues the reference in place. */
-  /* The room's garment is half of a full look now: its composites are rebuilt with the corrected photos. */
-  if (typeof activeItem !== "undefined" && target !== activeItem && typeof prewarmLookComposites === "function") prewarmLookComposites();
   prewarmOrientationAssets();
   hotSwapIfLive("מעדכן תמונת בגד · updating garment view");
 });
@@ -4296,7 +4290,6 @@ function addToLook(piece) {
   resetToLive();
 
   if (outfitComplete()) {
-    prewarmLookComposites();   // both sides' composites, before the go-live and the turn need them
     $("completeLook").classList.add("is-complete");
     toast(`לוק מלא: <b>${activeOutfit.top.name}</b> + <b>${activeOutfit.bottom.name}</b>`);
   } else {
@@ -4321,25 +4314,6 @@ function resolveLook() {
   if (!top || !bottom) return null;
   if (top.garmentType !== "upper_body" || bottom.garmentType !== "lower_body") return null;
   return { top, bottom };
-}
-
-/** One half of a full look for a side: "back" - its validated distinct back, else its front; "front" - its front; no side
- *  (not AI Auto) - the active angle's image, as before. See applyLook()'s AI AUTO STITCHES TOO. */
-function lookHalfFor(item, angle) {
-  if (!item) return undefined;
-  const g = galleryOf(item);
-  if (angle === "back") return (typeof distinctBackOf === "function" && distinctBackOf(item, g)) || g.front || item.img;
-  if (angle === "front") return g.front || item.img;
-  return activeImageOf(item);
-}
-/** Build both sides' composites of the current full look now, so the first apply and every swap read a finished one. */
-function prewarmLookComposites() {
-  const look = resolveLook();
-  if (!look || typeof stitchLookBlob !== "function") return;
-  for (const side of ["front", "back"]) {
-    const a = lookHalfFor(look.top, side), b = lookHalfFor(look.bottom, side);
-    if (a && b) stitchLookBlob(a, b).catch(() => {});
-  }
 }
 
 /* =============================================================================
@@ -11605,54 +11579,6 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
   return job;
 }
 
-/* ── EACH HALF CROPPED TO ITS GARMENT (2026-10-10, "the shirt and the shorts together") ─────────────────────────────
-   The halves used to be COVER-fitted into their boxes: a store photo is a model, head to shoes, portrait, and a cover fit
-   of it into a box wider than tall keeps its middle - the PEAK tee lost its collar and hem, and the FOX CHICAGO shorts
-   (waist at ~10% of the photo, hem at ~45%) kept mostly legs. The server already answers where the garment is in a store
-   photo (GET /api/garment-box, the rear-photo mask's band - §2.38): each half is now drawn from its band - collar to hem
-   for the top, waist to hem for the bottom - CONTAINED in its box, so the reference shows the shirt above the shorts and
-   nothing of the models. No band in time (or none at all): the cover fit as before. Memoised per photo and region; a
-   timeout or a network failure is asked again next time.
-   THE BOTTOM IS SHOWN WHOLE, NOT BY ITS BAND: drawn over the four PEAK/CHICAGO photos (2026-10-10), the server's TOP bands
-   were exact (collar to hem, both photos) and its BOTTOM bands were not - [0, 0.15] on both CHICAGO photos, the white tee
-   above the waistband (the shorts run 0.08-0.48). So the lower half is the whole photo CONTAINED in its box (every inch of
-   the shorts, the model's legs with it), and only the upper half is cut to its band - until a bottom's band is measured
-   right. */
-const LOOK_BAND_TIMEOUT_MS = 3500;
-const _lookBandJobs = new Map();
-function lookGarmentBand(url, region) {
-  if (!url || /^(data:|blob:)/i.test(url) || typeof fetch !== "function" || typeof location === "undefined") return Promise.resolve(null);
-  const reg = region === "bottom" ? "bottom" : "top";
-  const key = `${(typeof canonicalImageUrl === "function" && canonicalImageUrl(url)) || url}|${reg}`;
-  if (_lookBandJobs.has(key)) return _lookBandJobs.get(key);
-  const job = (async () => {
-    try {
-      const r = await fetch(`${location.origin}/api/garment-box?image_url=${encodeURIComponent(url)}&region=${reg}&v=1`,
-        typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(LOOK_BAND_TIMEOUT_MS) } : {});
-      if (!r.ok) { _lookBandJobs.delete(key); return null; }
-      const j = await r.json();
-      const b = j && j.band;
-      if (!(b && [b.y0, b.y1].every((v) => typeof v === "number" && v >= 0 && v <= 1) && b.y1 - b.y0 > 0.1)) return null;
-      const xs = [b.x0, b.x1].every((v) => typeof v === "number" && v >= 0 && v <= 1) && b.x1 - b.x0 > 0.1;
-      return xs ? { y0: b.y0, y1: b.y1, x0: b.x0, x1: b.x1 } : { y0: b.y0, y1: b.y1, x0: 0, x1: 1 };
-    } catch (_) {
-      _lookBandJobs.delete(key);
-      return null;
-    }
-  })();
-  _lookBandJobs.set(key, job);
-  return job;
-}
-/** Draw the band of `img` (fractions of its size) CONTAINED and centred in the box. Pure geometry; returns the drawn rect. */
-function drawBandContain(ctx, img, band, x, y, w, h) {
-  const iw = img.width, ih = img.height;
-  const sx = band.x0 * iw, sy = band.y0 * ih, sw = (band.x1 - band.x0) * iw, sh = (band.y1 - band.y0) * ih;
-  const k = Math.min(w / sw, h / sh);
-  const dw = sw * k, dh = sh * k, dx = x + (w - dw) / 2, dy = y + (h - dh) / 2;
-  ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
-  return { dx, dy, dw, dh };
-}
-
 /**
  * Stitch a TOP + BOTTOM garment asset into ONE fixed 1024×2048 reference Blob: TOP boxed
  * into the upper half (inset by a 44px black gutter) + "TOP" white marker, a WIDE 200px
@@ -11671,9 +11597,7 @@ function stitchLookBlob(topUrl, bottomUrl) {
 
   const job = (async () => {
     try {
-      const [top, bottom, topBand] = await Promise.all([loadGarmentBitmap(topUrl), loadGarmentBitmap(bottomUrl),
-        lookGarmentBand(topUrl, "top")]);   // EACH HALF CROPPED TO ITS GARMENT - the top only (THE BOTTOM IS SHOWN WHOLE)
-      const bottomBand = { y0: 0, y1: 1, x0: 0, x1: 1 };
+      const [top, bottom] = await Promise.all([loadGarmentBitmap(topUrl), loadGarmentBitmap(bottomUrl)]);
 
       const boxH = LOOK_BOX, W = LOOK_W;
       const bottomY = boxH + LOOK_SEP;   // start of the BOTTOM box (after the bar)
@@ -11691,15 +11615,13 @@ function stitchLookBlob(topUrl, bottomUrl) {
       // Upper half = TOP, clipped to its box so a wide packshot can't bleed toward the bar.
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, W, boxH); ctx.clip();
-      if (topBand) drawBandContain(ctx, top, topBand, pad, pad, innerW, innerH);
-      else drawImageCover(ctx, top, pad, pad, innerW, innerH);
+      drawImageCover(ctx, top, pad, pad, innerW, innerH);
       ctx.restore();
 
       // Lower half = BOTTOM, clipped to its box (starts after the bar).
       ctx.save();
       ctx.beginPath(); ctx.rect(0, bottomY, W, boxH); ctx.clip();
-      if (bottomBand) drawBandContain(ctx, bottom, bottomBand, pad, bottomY + pad, innerW, innerH);
-      else drawImageCover(ctx, bottom, pad, bottomY + pad, innerW, innerH);
+      drawImageCover(ctx, bottom, pad, bottomY + pad, innerW, innerH);
       ctx.restore();
 
       // High-contrast 200px SOLID BLACK separator bar - the diffusion "no-man's-land".
@@ -13330,26 +13252,16 @@ async function applyLook(top, bottom) {
   if (!rtClient) throw new Error("not connected");
 
   // Gallery sync: resolve each half against the active angle first.
-  /* In AI Auto, each half's photo for the side the shopper shows (lookHalfFor - the validated distinct back on the back),
-     frozen here before any await (§2.8): the per-side composite is built from this snapshot. */
-  const lookAngle = currentAngle === AUTO_ANGLE && typeof effectiveAngle === "function" ? effectiveAngle() : null;
-  const topImg = lookHalfFor(top, lookAngle), bottomImg = lookHalfFor(bottom, lookAngle);
+  const topImg = activeImageOf(top), bottomImg = activeImageOf(bottom);
 
   // The SDK forwards exactly ONE image ({prompt, enhance, image} - extra keys are
   // stripped), so a text-only description of the second garment gets a real pixel
   // reference for the top but none for the bottom, and the model renders only the
   // top - visually indistinguishable from "replace". stitchLookBlob() gives BOTH
   // garments an actual reference by compositing them (TOP over BOTTOM) into the
-  // single image the SDK does forward.
-  /* AI AUTO STITCHES TOO - ONE COMPOSITE PER SIDE (2026-10-10, "make both work well at the same time"). This was skipped
-     for AI Auto, "which already needs that one image slot for its own per-orientation front/back Blob" - and so a full
-     look of two garments with back photos (the PEAK tee + the CHICAGO shorts) sent the TOP's photo alone: the shorts had
-     no reference at all and the engine drew the shopper's own. The slot is per orientation, not per garment: on the front
-     it carries the two FRONT photos stitched, on the back the two BACK photos (lookHalfFor), swapped by the orientation
-     watcher exactly as a single garment's front and back are (the look prompt already says "the top above the bottom").
-     A half with no back photo of its own lends its front to the back composite - the same as a single garment without
-     one. Both composites are built ahead of the turn (prewarmLookComposites), so a swap never waits on a stitch. */
-  const canStitchLook = !!(topImg && bottomImg);
+  // single image the SDK does forward. Skip it for AI Auto, which already needs
+  // that one image slot for its own per-orientation front/back Blob.
+  const canStitchLook = currentAngle !== AUTO_ANGLE;
   /* Snapshotted BEFORE the stitch await for the reason applyGarment() documents at
      angleAtStart/profileAtStart: stitchLookBlob() is a real async gap, and the watcher's
      independent sampler can toggle the pose during it. The existing comment that
@@ -15716,12 +15628,6 @@ function startBillingWindow(gen) {
   billingStarted = true;
   billingStartedAt = Date.now();         // diagnostics clock - see sessionElapsedMs()
   if (typeof traceOrient === "function") traceOrient("reveal");
-  /* A measured garment whose gallery arrived classified is remembered too (THE GARMENTS YOU TRIED). typeof: sliced suites. */
-  if (typeof rememberTriedGarment === "function" && typeof _galleryValidated !== "undefined" && _galleryValidated &&
-      typeof resolveLook === "function" && !resolveLook() && typeof activeItem !== "undefined" && activeItem) {
-    const g = galleryOf(activeItem);
-    rememberTriedGarment(activeItem, g.front || activeItem.img, distinctBackOf(activeItem, g));
-  }
 
   // Start recording from the SAME event that starts billing (the first DRESSED frame)
   // so the encoded clip and the billed window cover exactly the same span - no gap
@@ -19605,57 +19511,11 @@ function guessTypeFromUrl(url) {
    unchanged. A store session that has no cached items yet (or the fetch fails)
    returns [] rather than ever falling back to the demo catalog - renderCompleteTheLook
    hides the section entirely in that case (see Step 5 requirement). */
-/* ── THE GARMENTS YOU TRIED - "the shirt and the shorts together" (2026-10-10) ─────────────────────────────────────────
-   A store opens the room for ONE product, and "Complete the Look" offered the store's cached catalog - typed by words in
-   the image URL, which FOX's numeric file names never carry: on the PEAK tee no pants at all, on the CHICAGO shorts four
-   unrelated photos. So there was no way to wear the two together. The room now remembers each garment it opened with a
-   VERIFIED gallery (the widget's classifier verdict - its front and its distinct back, never the unclassified guess the
-   room opens on), per store, newest first, on the room's own origin (localStorage - every product page of the store opens
-   the same origin, so the shorts' room reads what the shirt's room wrote). "Complete the Look" lists those of the other
-   region first: measure the shirt, open the shorts, add the shirt - both on, with both their backs (applyLook's AI AUTO
-   STITCHES TOO). Nothing leaves the browser; a storage failure only means no memory. */
-const TRIED_KEY = "pear_tried_garments", TRIED_MAX = 6;
-let _galleryValidated = (() => {
-  try { return new URLSearchParams(location.search).get("classify_pending") !== "1"; } catch (_) { return false; }
-})();
-function readTriedGarments() {
-  try { const a = JSON.parse(localStorage.getItem(TRIED_KEY) || "[]"); return Array.isArray(a) ? a.filter((r) => r && typeof r.img === "string") : []; }
-  catch (_) { return []; }
-}
-/** Remember a garment with a verified gallery. `front`/`back` are the classifier's (or the validated gallery's). */
-function rememberTriedGarment(item, front, back) {
-  try {
-    const store = typeof window !== "undefined" ? window.__pearStoreDomain : null;
-    if (!item || !store || typeof front !== "string" || !/^https?:\/\//i.test(front)) return;
-    const bottoms = typeof isBottomsGarment === "function" ? isBottomsGarment(item) : item.garmentType === "lower_body";
-    const okBack = typeof back === "string" && /^https?:\/\//i.test(back) && !sameImage(back, front);
-    const rec = { img: front, ...(okBack ? { imgBack: back } : {}), name: String(item.name || "").slice(0, 80),
-      type: bottoms ? "pants" : "shirt", store, at: Date.now() };
-    const list = readTriedGarments().filter((r) => !sameImage(r.img, front));
-    list.unshift(rec);
-    localStorage.setItem(TRIED_KEY, JSON.stringify(list.slice(0, TRIED_MAX)));
-  } catch (_) { /* no storage - no memory */ }
-}
-/** The remembered garments of the OTHER region from this store, as "Complete the Look" cards (newest first). */
-function triedComplementsFor(currentItem) {
-  const store = typeof window !== "undefined" ? window.__pearStoreDomain : null;
-  if (!store || !currentItem) return [];
-  const wantType = currentItem.garmentType === "lower_body" ? "shirt" : "pants";
-  const own = currentItem.img;
-  return readTriedGarments()
-    .filter((r) => r.store === store && r.type === wantType && !(own && sameImage(r.img, own)))
-    .map((r) => ({ id: r.img, img: r.img, ...(r.imgBack ? { imgBack: r.imgBack } : {}), type: r.type,
-      name: r.name || "פריט שמדדת", custom: true, tried: true }));
-}
-/* ── end THE GARMENTS YOU TRIED ── */
-
 async function fetchStoreLookItems(currentItem) {
   const domain = window.__pearStoreDomain;
   if (!domain) return recommendFor(currentItem);   // demo/catalog mode - existing behavior
 
   const wantType = currentItem.garmentType === "lower_body" ? "shirt" : "pants";
-  /* The garments the shopper tried first (THE GARMENTS YOU TRIED), then the store's catalog. */
-  const tried = typeof triedComplementsFor === "function" ? triedComplementsFor(currentItem) : [];
   try {
     const resp = await fetch("/api/store-catalog", {
       method: "POST",
@@ -19674,12 +19534,10 @@ async function fetchStoreLookItems(currentItem) {
         custom: true,
       }))
       .filter((it) => it.type === wantType)
-      .filter((it) => !tried.some((t) => sameImage(t.img, it.img)))
-      .reduce((acc, it) => acc.concat(it), tried.slice())
       .slice(0, 4);
   } catch (e) {
     console.warn("[PEAR] fetchStoreLookItems failed - hiding Complete the Look:", e?.message || e);
-    return tried.slice(0, 4);
+    return [];
   }
 }
 
@@ -19696,14 +19554,6 @@ let _lookRenderToken = 0;
 
 async function renderCompleteTheLook(item) {
   const myToken = ++_lookRenderToken;
-  /* A garment shown with a VERIFIED gallery is remembered here too (THE GARMENTS YOU TRIED): when the server already holds the
-     classifier's verdict the widget opens the room on the sorted gallery and sends no correction - the common case, and the
-     one the first cut missed (the PEAK room never remembered its shirt). Only the active single garment; typeof: sliced suites. */
-  if (typeof rememberTriedGarment === "function" && typeof _galleryValidated !== "undefined" && _galleryValidated &&
-      typeof activeItem !== "undefined" && item === activeItem && typeof resolveLook === "function" && !resolveLook()) {
-    const g = galleryOf(item);
-    rememberTriedGarment(item, g.front || item.img, distinctBackOf(item, g));
-  }
   const recs = window.__pearStoreDomain ? await fetchStoreLookItems(item) : recommendFor(item);
   if (myToken !== _lookRenderToken) return;   // a newer item took over while this was in flight
 
@@ -19728,7 +19578,7 @@ async function renderCompleteTheLook(item) {
       <div class="cl-card__media">${garmentThumb(r)}</div>
       <div class="cl-card__body">
         <span class="cl-card__cat">${r.type === "pants" ? "Pants" : "Shirt"}${SUBTYPE_LABEL_HE[r.subType] ? " · " + SUBTYPE_LABEL_HE[r.subType] : ""}</span>
-        <div class="cl-card__name">${r.name}${r.tried ? " · מדדת" : ""}</div>
+        <div class="cl-card__name">${r.name}</div>
         ${r.price != null ? `<span class="cl-card__price">$${r.price}</span>` : ""}
       </div>
       <button class="cl-card__look" data-look="${i}">הוסף ללוק · Add to Look</button>
