@@ -6014,7 +6014,8 @@ function inputGateHeld() {
    on every internal reconnect, so it can go stale after a garment swap - stale-but-real is
    the point: it is what a rejoined room shows during the round-trip before applyActive()
    re-derives the CURRENT state on top of it. Never the composite: small matters, because
-   client.js base64s it before the handshake can proceed.
+   client.js base64s it before the handshake can proceed. (One exception, measured: a FULL LOOK's
+   floor is its front outfit composite, 60-85 KB - see resolveLookFloor() below.)
 
    AND IT IS NO LONGER OPTIONAL (2026-09-19). It shipped as best-effort - no floor meant a bare
    connect, and a connect that failed with one retried bare. That is the "initialize anyway
@@ -6075,6 +6076,38 @@ async function resolveInitialConditioning(item) {
   };
 }
 
+/* ── A FULL LOOK'S FLOOR IS ITS FRONT OUTFIT (2026-10-11) ─────────────────────────────────────────────────────────
+   "Never the composite" was written for the old look composite - 1024x2048, ~0.6 MB, base64ed by the SDK before the
+   join. The full look seeded the session with the TOP's single front packshot and the top's own prompt instead, so the
+   engine started on the shirt alone and go-live's first applyLook() was a NEW image to it: acknowledged slowly, the
+   reveal's settle hold waiting on it - the full-look sessions revealed 7.0-14.2s after connect (s4, s5, mv3j8ba0) where
+   the single garments revealed in 5.5-5.7s (s1-s3). The outfit composite (THE OUTFIT SHAPE) is 768x1152 at JPEG 0.88,
+   60-85 KB - a product photo's size. So a look's floor is that composite: stitchLookBlob()'s cached Blob for both halves'
+   FRONT (lookHalfFor(x, "front") - what applyLook() asks for at go-live, effectiveAngle() being "front" until the watcher
+   locks) with the look's wire prompt. adoptInitialStateAsWire() then records it as on the wire, and go-live's first
+   applyLook() is the no-op it already is for a single garment. Still the FRONT only (a floor faces the camera, §2.1).
+   Bounded by LOOK_FLOOR_WAIT_MS: a composite not built by then (it is prewarmed when the look completes) is not waited
+   for - null, and the caller seeds the top's packshot exactly as before. */
+const LOOK_FLOOR_WAIT_MS = 2500;
+async function resolveLookFloor(look) {
+  if (!look || typeof lookHalfFor !== "function" || typeof stitchLookBlob !== "function" || typeof wireLookPrompt !== "function") return null;
+  const a = lookHalfFor(look.top, "front"), b = lookHalfFor(look.bottom, "front");
+  if (!a || !b) return null;
+  const promptText = Promise.resolve(wireLookPrompt("initialConditioning"));
+  promptText.catch(() => {});
+  let timer = null;
+  const blob = await Promise.race([
+    Promise.resolve(stitchLookBlob(a, b)).catch(() => null),
+    new Promise((r) => { timer = setTimeout(() => r(null), LOOK_FLOOR_WAIT_MS); }),
+  ]);
+  clearTimeout(timer);
+  if (!blob || !usableImageRef(blob).usable) return null;
+  let text = null;
+  try { text = await promptText; } catch (_) { text = null; }
+  if (!text) return null;
+  return { prompt: { text, enhance: false }, image: blob };
+}
+
 /* Read by buildRealtimeConnectOpts() on every attempt of a connect. Module-level rather than
    a parameter because the retry loop rebuilds the options per attempt and must rebuild them
    IDENTICALLY. Cleared by teardown(). _sessionInitialGarmentId is whose garment it is. */
@@ -6099,9 +6132,13 @@ function garmentIdOf(item) {
 }
 
 /* abbrevImg() labels EVERY Blob a "stitched combined ref" - true where it was written, false
-   here: the floor is never the composite (see resolveInitialConditioning), and a log that
-   says it is would send the next reader chasing §2.3's double-logo bug. */
-function describeFloorImage(image) {
+   here: a single garment's floor is never a composite (see resolveInitialConditioning), and a log
+   that says it is would send the next reader chasing §2.3's double-logo bug. A full look's floor
+   IS its front outfit composite (resolveLookFloor) - the one floor that says so. */
+function describeFloorImage(image, look = false) {
+  if (look && typeof Blob !== "undefined" && image instanceof Blob) {
+    return `full look's front outfit composite, Blob ${image.type || "image"} ${image.size.toLocaleString()} bytes (prewarmed)`;
+  }
   if (typeof Blob !== "undefined" && image instanceof Blob) {
     return `front packshot, Blob ${image.type || "image"} ${image.size.toLocaleString()} bytes (prewarmed)`;
   }
@@ -6116,12 +6153,15 @@ async function primeInitialConditioning() {
   /* Read the selection, await its bytes, then confirm it is STILL the selection: a garment
      tapped during a slow download must not open a session seeded with the one before it.
      Bounded - a selection that keeps moving gets the latest read on the second pass. */
-  let item = null, look = null, floor = null;
+  let item = null, look = null, floor = null, floorIsLook = false;
   for (let pass = 1; pass <= 2; pass++) {
     look = resolveLook();
     item = look ? look.top : activeItem;   // one image slot - the TOP, as applyLook documents
     try {
-      floor = await resolveInitialConditioning(item);
+      /* A FULL LOOK'S FLOOR IS ITS FRONT OUTFIT - the top's packshot only when the composite is not ready. */
+      const lookFloor = look && typeof resolveLookFloor === "function" ? await resolveLookFloor(look) : null;
+      floorIsLook = !!lookFloor;
+      floor = lookFloor || await resolveInitialConditioning(item);
     } catch (e) {
       console.error(`[VTO Pipeline] REFUSING to initialize the render session - Garment ID: ${garmentIdOf(item)}`,
         `| ${e?.message || e}`, "\n  → no session is opened and no token is minted: a session with no",
@@ -6129,7 +6169,8 @@ async function primeInitialConditioning() {
       throw e;
     }
     const nowLook = resolveLook();
-    if ((nowLook ? nowLook.top : activeItem) === item) break;
+    /* ...and a look's floor carries its bottom too: a bottom swapped meanwhile makes that composite stale. */
+    if ((nowLook ? nowLook.top : activeItem) === item && (!floorIsLook || (nowLook && nowLook.bottom === look.bottom))) break;
     console.warn("[VTO Pipeline] the selected garment changed while its bytes loaded - re-resolving for the new one");
   }
   _sessionInitialState = floor;
@@ -6139,7 +6180,7 @@ async function primeInitialConditioning() {
     `| name: ${item?.name ?? "(none)"}`,
     look ? `| full look, top + ${look.bottom?.name ?? "?"} (${garmentIdOf(look.bottom)})` : "",
     `| front: ${abbrevImg(g.front || item?.img)} | back: ${abbrevImg(g.back)}`,
-    `| initialState: ${describeFloorImage(floor.image)} - sent inside the join; the SDK publishes`,
+    `| initialState: ${describeFloorImage(floor.image, floorIsLook)} - sent inside the join; the SDK publishes`,
     "no video until Decart acknowledges it, and replays it on any internal reconnect");
 }
 
@@ -15866,21 +15907,38 @@ const MODEL_READY_STABLE_MS     = 300;   // ...spanning at least this many ms
    back's acknowledgement time on the loading screen instead of on the turn.
    The back sent is byte for byte what the turn sends: the same garmentBlobCached() Blob (and its
    pre-encoded form - withPreEncodedReferences()) and the same wire prompt. Only for an AI Auto garment
-   with a real back; not for a look. The orientation, the engine and every swap are untouched.
-   ?prime_back=0 turns it off (main's hold); a TEST record carries prime-sent / prime-acked. */
+   with a real back. The orientation, the engine and every swap are untouched.
+   ?prime_back=0 turns it off (main's hold); a TEST record carries prime-sent / prime-acked.
+   A FULL LOOK TOO (2026-10-11). It was "not for a look", and every full-look session paid for it on the turn: the
+   back composite (the shirt's back over the shorts' back) went out cold and was acknowledged 2,399ms, 1,269ms and -
+   session mv3j8ba0 - not at all in the 3.1s left of the window (the back view rendered plain), where the single
+   garments' primed backs were acknowledged on the turn in 305-355ms (s1-s3, the same PEAK tee and CHICAGO shorts). So
+   a look primes its BACK composite: stitchLookBlob()'s cached Blob for lookHalfFor(top/bottom, "back") - the very Blob
+   applyLook() sends on the turn - with the look's wire prompt (angle-free, the same string). A look whose halves have
+   no back of their own has a back composite that IS the front one: nothing to prime. */
 let _primedBackGen = -1;
 async function primeBackReference(gen) {
   if (_primedBackGen === gen) return false;
   _primedBackGen = gen;
   try { if (new URLSearchParams(location.search).get("prime_back") === "0") return false; } catch (_) { /* on */ }
   const item = typeof activeItem !== "undefined" ? activeItem : null;
-  if (!item || currentAngle !== AUTO_ANGLE || (typeof resolveLook === "function" && resolveLook())) return false;
-  const back = typeof distinctBackOf === "function" ? distinctBackOf(item, galleryOf(item)) : null;
-  if (!back) return false;
-  const blob = await garmentBlobCached(back);
-  if (!blob || gen !== sessionGen || !rtClient || !isLive()) return false;
-  let prompt = null;
-  try { prompt = await wirePrompt(item, "back", "primeBack", { inProfile: false }); } catch (_) { prompt = null; }
+  if (!item || currentAngle !== AUTO_ANGLE) return false;
+  const look = typeof resolveLook === "function" ? resolveLook() : null;
+  let blob = null, prompt = null;
+  if (look) {
+    if (typeof lookHalfFor !== "function" || typeof stitchLookBlob !== "function" || typeof wireLookPrompt !== "function") return false;
+    const bt = lookHalfFor(look.top, "back"), bb = lookHalfFor(look.bottom, "back");
+    if (!bt || !bb || (bt === lookHalfFor(look.top, "front") && bb === lookHalfFor(look.bottom, "front"))) return false;
+    blob = await stitchLookBlob(bt, bb);
+    if (!blob || gen !== sessionGen || !rtClient || !isLive()) return false;
+    try { prompt = await wireLookPrompt("primeBack"); } catch (_) { prompt = null; }
+  } else {
+    const back = typeof distinctBackOf === "function" ? distinctBackOf(item, galleryOf(item)) : null;
+    if (!back) return false;
+    blob = await garmentBlobCached(back);
+    if (!blob || gen !== sessionGen || !rtClient || !isLive()) return false;
+    try { prompt = await wirePrompt(item, "back", "primeBack", { inProfile: false }); } catch (_) { prompt = null; }
+  }
   if (!prompt || gen !== sessionGen || !rtClient) return false;
   const t0 = Date.now();
   if (typeof traceOrient === "function") traceOrient("prime-sent", { kb: Math.round((blob.size || 0) / 1024) });

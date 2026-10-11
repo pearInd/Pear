@@ -1387,8 +1387,23 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   enough for the reveal gate (17 uploads, torn down). Same side + same prompt now sends nothing. Verified through the source
   room's mock engine with the visual fixture's person as the camera: revealed 3.2s after connect, no upload while square to the
   lens, the back composite at 50 degrees, the front at 297.
-- `full-look` (47), `garment-box` §7. The look prompt is unchanged (`trace:prompt` identical). **The outfit shape is measured by
-  one real session - its result is recorded below when it is in.**
+- `full-look` (47), `garment-box` §7. The look prompt is unchanged (`trace:prompt` identical).
+- **s6/s7 never revealed - THE MEASUREMENT RIG, not the room (2026-10-11).** Both look sessions had no camera vote for 60 ticks
+  and no output frame. Replayed for free before go-live: a `<video>` attached to the camera track the way the orientation
+  watcher attaches got 0 frames in 3s - on a single garment too. The rig's camera (a recorded clip drawn on a canvas,
+  `captureStream(30)`) emits only on the page's rendering updates, so a consumer attached later could starve; a device camera
+  does not. The rig now writes one VideoFrame per tick to a track generator (92 frames in 3s). The room's own engine input
+  (`captureStream(0)` + `requestFrame()`) was never affected. Two billed sessions were lost to this.
+- **THE LOOK'S BACK IS PRIMED; ITS FLOOR IS ITS FRONT OUTFIT (2026-10-11, session `mv3j8ba0` - the look rendered: the PEAK tee with
+  its print over the CHICAGO shorts with their lettering, the stripes at the side; the back view plain).** Two look-only gaps:
+  `primeBackReference()` was "not for a look", so the back composite went out cold on the turn (acked 2,399ms / 1,269ms / not
+  at all in the 3.1s left) where the primed single garments took 305-355ms; and the floor was the TOP's packshot, so go-live's
+  first `applyLook()` was a new image and the looks revealed 7.0-14.2s after connect against 5.5-5.7s. Now a look primes its back
+  composite (the cached Blob the turn sends, the look prompt; nothing when no half has a back of its own), and
+  `resolveLookFloor()` seeds the session with the front outfit composite (60-85 KB) and the look prompt - recorded on the wire,
+  so go-live's first look apply is the no-op - falling back to the top's packshot when the composite is not ready in
+  `LOOK_FLOOR_WAIT_MS`. Mock engine: initialState = the front composite, the back primed, the turn's back the same Blob, revealed
+  3.2s. `back-prime` §5b-§5d, `full-look` §8 (two mutations caught). Single garments are untouched.
 
 ---
 

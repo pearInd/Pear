@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo mask, the head out of frame, the tick waits for a fresh pose reading, the full look in AI Auto; the 10-09 changes REVERTED (not on main)_
+_Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor (s8 rendered both garments, the back plain - fixed); s6/s7 lost to the measurement rig's camera, fixed; not on main_
 
 ## At a glance
 
@@ -346,6 +346,13 @@ _Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo m
   never saw a quiet wire - a bug the look path always had (it slowed the earlier look sessions' reveal to 13-19s and queued the
   back swap). Fixed (an unchanged look sends nothing) and verified through the room's mock engine: reveal 3.2s, the back at 50
   degrees, the front back at 297. 6 real sessions today in all. **Not yet seen through the real engine.**
+- **2026-10-11, later:** s6/s7 (no reveal) were the MEASUREMENT RIG's camera starving (a canvas stream that emits only on
+  page renders - reproduced for free on a single garment too; the rig now pushes its frames). s8 through the real engine,
+  record mv3j8ba0: the look rendered - the PEAK tee with its print over the CHICAGO shorts with their lettering, the stripes at
+  the side - but the back view was plain (the back composite was sent cold on the turn and never acknowledged in the window)
+  and the reveal came 7s after connect (single garments: 5.5s). Fixed: the look's back composite is primed at connect, and
+  the session is seeded with the look's front outfit instead of the shirt alone. Mock: revealed 3.2s, the turn's back a
+  repeat. Unit suite, visual gate (40/40), build, trace:prompt identical. 8 real sessions in all.
 - **Stage:** done (core).
 - **Done:** language toggle + English strings `a7de91c`, `310b174`; geo-IP language
   lock fix + `fitting-room/i18n.js` module `4ecda99`; cart popover i18n `82de850`.

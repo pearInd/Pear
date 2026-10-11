@@ -225,5 +225,48 @@ console.log("\n── §7 the card shows both views of both garments; a store it
   check("§7.5 the four views lay out two by two", /\.active-garment__media > span\.ag-duo--views \{ grid-template-columns: 1fr 1fr;/.test(css) && /\.ag-view \{[^}]*aspect-ratio: 1 \/ 1;/.test(css));
 }
 
+console.log("\n── §8 a full look's floor is its front outfit - the engine has seen it before go-live's first apply ──");
+{
+  /* MEASURED (2026-10-11): the full-look sessions revealed 7.0-14.2s after connect (s4, s5, mv3j8ba0) where the single garments
+     revealed in 5.5-5.7s - the session was seeded with the TOP's packshot, so go-live's first applyLook() was a new image. */
+  const src = between(APP, "const LOOK_FLOOR_WAIT_MS = ", "\n/* Read by buildRealtimeConnectOpts()");
+  const guard = between(APP, "function usableImageRef(ref) {", "\n/**\n * The hard stop");
+  const mk = ({ never = false, prompt = "LOOK" } = {}) => {
+    const asked = [], blob = new Blob(["outfit"], { type: "image/jpeg" });
+    const env = {
+      lookHalfFor: (it, side) => (side === "back" ? it.imgBack || it.img : it.img),
+      stitchLookBlob: (a, b) => { asked.push([a, b]); return never ? new Promise(() => {}) : Promise.resolve(blob); },
+      wireLookPrompt: async () => prompt, setTimeout, clearTimeout, Blob, URL, console: { log() {}, warn() {} },
+    };
+    const f = new Function(...Object.keys(env), guard + "\n" + src.replace(/^const LOOK_FLOOR_WAIT_MS = \d+;/, "const LOOK_FLOOR_WAIT_MS = 30;") + "\nreturn resolveLookFloor;")(...Object.values(env));
+    return { f, asked, blob };
+  };
+  {
+    const m = mk(); const fl = await m.f({ top: PEAK, bottom: SHORTS });
+    check("§8.1 the floor is the stitch of both halves' FRONTS - the cached Blob applyLook() asks for at go-live - with the look prompt",
+      fl && fl.image === m.blob && fl.prompt.text === "LOOK" && fl.prompt.enhance === false &&
+      m.asked.length === 1 && m.asked[0][0] === PEAK.img && m.asked[0][1] === SHORTS.img, JSON.stringify({ fl, asked: m.asked }));
+  }
+  {
+    const m = mk({ never: true }); const t0 = Date.now(); const fl = await m.f({ top: PEAK, bottom: SHORTS });
+    check("§8.2 a composite not ready within LOOK_FLOOR_WAIT_MS is not waited for - null, the top's packshot seeds as before", fl === null && Date.now() - t0 < 1000);
+  }
+  {
+    const m = mk({ prompt: "" });
+    check("§8.3 no look prompt, no look floor (a floor's prompt is never empty)", (await m.f({ top: PEAK, bottom: SHORTS })) === null);
+  }
+  const prime = between(APP, "async function primeInitialConditioning() {", "\n/* ── THE ACKNOWLEDGED FLOOR IS ON THE WIRE");
+  check("§8.4 primeInitialConditioning seeds a look with resolveLookFloor() first, the top's packshot only as the fallback",
+    /const lookFloor = look && typeof resolveLookFloor === "function" \? await resolveLookFloor\(look\) : null;\s*floorIsLook = !!lookFloor;\s*floor = lookFloor \|\| await resolveInitialConditioning\(item\);/.test(prime));
+  check("§8.5 ...and re-resolves when the look's bottom changed meanwhile (that composite is stale)",
+    /\(!floorIsLook \|\| \(nowLook && nowLook\.bottom === look\.bottom\)\)/.test(prime));
+  const adopt = between(APP, "function adoptInitialStateAsWire(why) {", "\n}\n");
+  const apply = between(APP, "async function applyLook(top, bottom) {", "\n/* buildLookPrompt()");
+  check("§8.6 the floor is recorded as on the wire, so go-live's first applyLook() is the no-op (same Blob, same prompt)",
+    /lastSentImageRef = _sessionInitialState\.image;/.test(adopt) && /lastSentPrompt = _sessionInitialState\.prompt\.text;/.test(adopt) &&
+    /if \(primaryImage === lastSentImageRef && prompt === lastSentPrompt\) \{/.test(apply) &&
+    /const lookAngle = currentAngle === AUTO_ANGLE && typeof effectiveAngle === "function" \? effectiveAngle\(\) : null;/.test(apply));
+}
+
 console.log(`\n${failed ? "✗" : "✓"} full-look: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
