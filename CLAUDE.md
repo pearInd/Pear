@@ -1365,7 +1365,9 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   photos ([0, 0.15]) - the model was handed the 2048x3072 original; at 600 wide the front came back 0.07-0.50. A Shopify photo
   is now analysed 768 wide (`analysisUrl`), a bottom keeps a quarter of its box below the hem and 3% above, and the version is in
   the memo key (v1 answers are never served again). This also fixes the rear-photo MASK for bottoms (§2.38), which used the same
-  wrong band.
+  wrong band. **v3 (the same day):** v2 still boxed the tee ([0, 0.14] / [0, 0.17] at 768 wide, temperature 0) - the model's
+  LABEL fails, not its boxes - so it is asked for both garments' boxes at once and the region is taken by POSITION
+  (`pickRegionBox`: the lower-body garment is the lower box).
 - **The card (`lookViewThumbs`):** a full look shows four views - each half's front and back, as the swaps send them (a half
   with no back says "אין גב"); and "Custom upload" only for an uploaded crop - a store product reads "Store item".
 - **THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2726ee2)** and **THE EARLY VERDICT (24d9abf)** - two listener bugs found on the

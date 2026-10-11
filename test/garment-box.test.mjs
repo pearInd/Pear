@@ -161,7 +161,7 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
   const c2 = await good.referenceBackBand("https://cdn.example.com/tee-3.jpg");
   check("a good answer comes back as the band, asked for with the photo and its region",
     c1 && c1.y0 === 0.3419 && c1.y1 === 0.8954 && c1.x0 === 0.17 &&
-      /\/api\/garment-box\?image_url=https%3A%2F%2Fcdn\.example\.com%2Ftee-3\.jpg%3Fwidth%3D1000&region=top&v=2$/.test(asked[0]),
+      /\/api\/garment-box\?image_url=https%3A%2F%2Fcdn\.example\.com%2Ftee-3\.jpg%3Fwidth%3D1000&region=top&v=3$/.test(asked[0]),
     asked[0]);
   check("...once per photo: another spelling of the same photo is the memo (canonical key)", asked.length === 1 && c2 === c1);
   check("THE FRONT IS NEVER ASKED ABOUT - it is sent exactly as before", good.referenceBackBand(item.img) === null && asked.length === 1);
@@ -214,7 +214,7 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
 console.log("\n── §7 the photo the model sees, and a bottom's hem (v2, 2026-10-11) ──");
 {
   const GB = await import("../lib/garment-box.js");
-  check("§7.1 v2", GB.GARMENT_BOX_VERSION === 2);
+  check("§7.1 v3 (both garments asked, the region by position)", GB.GARMENT_BOX_VERSION === 3);
   const a = GB.analysisUrl("http://fox.co.il/cdn/shop/files/3108650200-1.jpg?v=1752403462");
   const b = GB.analysisUrl("https://cdn.shopify.com/s/files/1/0638/8252/6908/files/3108650200-4.jpg?crop=center&height=1499&width=2048&v=1");
   check("§7.2 a Shopify photo (the store's /cdn/shop/ or cdn.shopify.com) is analysed 768 wide - crop and height dropped, its version kept",
@@ -233,6 +233,26 @@ console.log("\n── §7 the photo the model sees, and a bottom's hem (v2, 2026
     return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ worn_by_person: true, box_2d: [70, 238, 498, 793], confidence: 0.9 }) }] } }] }) };
   } });
   check("§7.6 ...and that is the URL the server actually fetches (https, 768 wide)", /^https:\/\/fox\.co\.il\/cdn\/shop\/files\/x-1\.jpg\?width=768$/.test(fetched || ""), fetched);
+}
+
+console.log("\n── §8 both garments asked, the region by POSITION (v3) ──");
+{
+  const GB = await import("../lib/garment-box.js");
+  /* the CHICAGO front photo: the white tee above the shorts - the model labelled the tee as the lower-body garment (v1/v2) */
+  const tee = [0, 256, 115, 762], shorts = [70, 238, 498, 793];
+  const asked = { worn_by_person: true, confidence: 0.9, upper_box_2d: tee, lower_box_2d: shorts };
+  const swapped = { ...asked, upper_box_2d: shorts, lower_box_2d: tee };
+  const b1 = GB.garmentBandFromDetection(asked, "bottom").band, b2 = GB.garmentBandFromDetection(swapped, "bottom").band;
+  check("§8.1 the lower-body garment is the LOWER box - the shorts, even with the labels swapped",
+    b1 && b2 && b1.y0 > 0.05 && b1.y1 > 0.55 && JSON.stringify(b1) === JSON.stringify(b2), JSON.stringify([b1, b2]));
+  check("§8.2 ...and the upper-body garment the UPPER box (the pick itself; this tee is under the minimum box to be a band)",
+    JSON.stringify(GB.pickRegionBox(asked, "top")) === JSON.stringify(tee) && JSON.stringify(GB.pickRegionBox(swapped, "top")) === JSON.stringify(tee));
+  check("§8.3 one garment found counts only for its own region",
+    GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, upper_box_2d: [345, 167, 870, 833], lower_box_2d: null }, "bottom").band === null &&
+    !!GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, upper_box_2d: [345, 167, 870, 833], lower_box_2d: null }, "top").band);
+  check("§8.4 a v1/v2 answer (one box_2d) still reads as before", !!GB.garmentBandFromDetection({ worn_by_person: true, confidence: 0.9, box_2d: [345, 167, 870, 833] }, "top").band);
+  const p = GB.garmentBoxPrompt("bottom");
+  check("§8.5 the prompt asks for both boxes and names the product's region", /upper_box_2d/.test(p) && /lower_box_2d/.test(p) && /LOWER body/.test(p));
 }
 
 console.log(fails === 0 ? "\ngarment-box: OK" : `\ngarment-box: ${fails} FAILED`);
