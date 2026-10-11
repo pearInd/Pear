@@ -142,8 +142,13 @@ console.log("\n── §4 the garments you tried ──");
 
 console.log("\n── §5 the wiring ──");
 {
-  check("§5.1 the classifier's verdict validates the gallery and remembers the garment (single garments only), sandbox-safe",
-    /if \(!activeItem \|\| !front\) return;\s*\n\s*\/\*[^\n]*\*\/\s*\n\s*if \(typeof _galleryValidated !== "undefined"\) _galleryValidated = true;[^\n]*\n\s*if \(typeof rememberTriedGarment === "function" && typeof resolveLook === "function" && !resolveLook\(\)\) rememberTriedGarment\(activeItem, front, back\);/.test(APP));
+  const lis = between(APP, 'window.addEventListener("message", (e) => {\n  if (e.source !== window.parent) return;\n  if (!e.data || e.data.type !== "PEAR_UPDATE_GARMENT") return;', "\n});\n");
+  check("§5.1 any verdict - the bare ready signal too - validates the gallery, before the garment fields are read",
+    lis.indexOf('if (typeof _galleryValidated !== "undefined") _galleryValidated = true;') !== -1 &&
+    lis.indexOf('if (typeof _galleryValidated !== "undefined") _galleryValidated = true;') < lis.indexOf("if (!front) return;"));
+  check("§5.1b ...and a full correction remembers the garment (single garments only), sandbox-safe",
+    /if \(typeof rememberTriedGarment === "function" && typeof resolveLook === "function" && !resolveLook\(\)\) rememberTriedGarment\(activeItem, front, back\);/.test(lis) &&
+    lis.indexOf("rememberTriedGarment(activeItem, front, back)") > lis.indexOf("if (!activeItem) {"));
   const bill = between(APP, "function startBillingWindow(gen) {", "\n}\n");
   check("§5.2 the reveal remembers a measured garment only when its gallery is validated (never the unclassified guess)",
     /typeof _galleryValidated !== "undefined" && _galleryValidated &&/.test(bill) && /rememberTriedGarment\(activeItem, g\.front \|\| activeItem\.img, distinctBackOf\(activeItem, g\)\);/.test(bill));
@@ -156,6 +161,31 @@ console.log("\n── §5 the wiring ──");
   check("§5.5 a garment shown with an already-verified gallery is remembered too (the widget sends no correction then)",
     /_galleryValidated &&\s*\n\s*typeof activeItem !== "undefined" && item === activeItem && typeof resolveLook === "function" && !resolveLook\(\)\) \{\s*\n\s*const g = galleryOf\(item\);\s*\n\s*rememberTriedGarment\(item, g\.front \|\| item\.img, distinctBackOf\(item, g\)\);/.test(rc) &&
     rc.indexOf("rememberTriedGarment") < rc.indexOf("await "));
+}
+
+console.log("\n── §6 the early verdict - a correction before the room has a garment ──");
+{
+  const lis = between(APP, 'window.addEventListener("message", (e) => {\n  if (e.source !== window.parent) return;\n  if (!e.data || e.data.type !== "PEAR_UPDATE_GARMENT") return;', "\n});\n");
+  check("§6.1 with no garment yet the correction is HELD, not dropped",
+    /if \(!activeItem\) \{ if \(typeof _earlyGarmentUpdate !== "undefined"\) _earlyGarmentUpdate = e\.data; return; \}/.test(lis));
+  const enter = between(APP, "function enterRoom() {", "\n}\n");
+  check("§6.2 enterRoom() replays it right after the garment is set",
+    /setActiveItem\(toItem\(handoff\), \{ silent: true \}\);\s*\n\s*\/\*[^\n]*\*\/\s*\n\s*if \(typeof replayEarlyGarmentUpdate === "function"\) replayEarlyGarmentUpdate\(\);/.test(enter));
+  const rp = between(APP, "let _earlyGarmentUpdate = null;", "\nwindow.addEventListener(\"message\", (e) => {\n  if (e.source !== window.parent) return;\n  if (!e.data || e.data.type !== \"PEAR_UPDATE_GARMENT\")");
+  const sent = [];
+  const parent = { name: "parent" };
+  class MessageEvent { constructor(type, init) { this.type = type; Object.assign(this, init); } }
+  const mk = (active) => new Function("window", "MessageEvent", "activeItem", rp + "\nreturn { hold: (d) => { _earlyGarmentUpdate = d; }, replayEarlyGarmentUpdate, get held() { return _earlyGarmentUpdate; } };")(
+    { parent, dispatchEvent: (ev) => sent.push(ev) }, MessageEvent, active);
+  const R = mk({ name: "PEAK" });
+  const msg = { type: "PEAR_UPDATE_GARMENT", garment_url: PEAK.img, garment_back: PEAK.imgBack };
+  R.hold(msg);
+  check("§6.3 the replay goes through the listener itself - the same message, from the parent - once",
+    R.replayEarlyGarmentUpdate() === true && sent.length === 1 && sent[0].data === msg && sent[0].source === parent && R.held === null &&
+    R.replayEarlyGarmentUpdate() === false && sent.length === 1);
+  const N = mk(null);
+  N.hold(msg);
+  check("§6.4 no garment yet, nothing replayed", N.replayEarlyGarmentUpdate() === false && sent.length === 1);
 }
 
 console.log(`\n${failed ? "✗" : "✓"} full-look: ${passed} passed, ${failed} failed`);

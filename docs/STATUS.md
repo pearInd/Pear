@@ -341,6 +341,9 @@ _Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo m
   photos only the shirt's photo reached the engine, and FOX had no way to put two products together. Now: one combined image
   per side (shirt + shorts front / shirt + shorts back), the shirt cut to its own band, and the room remembers what you tried
   so the shorts' page offers your shirt under "Complete the Look". Verified on the preview through the engine - see below.
+  Found on the way and fixed: if the classifier answered while you were still on the size screen, the room dropped its answer
+  and went live with the gallery's second photo as the back (on PEAK a three-quarter FRONT photo) - now held and applied when
+  you enter the fitting room.
 
 ## Hebrew/English i18n
 - **Stage:** done (core).

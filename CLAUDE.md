@@ -1363,7 +1363,13 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   verdict (front + distinct back - never the unclassified guess the room opens on) or when the room opens on an already
   classified gallery (no correction is sent then - the common case), per store, 6 at most; "Complete the
   Look" lists those of the other region first ("· מדדת"), then the store's. Measure the shirt, open the shorts, add it.
-- `full-look` (31). The look prompt (`lookAnchorPrompt`, "the top above the bottom") is unchanged - `trace:prompt` identical.
+- **THE EARLY VERDICT (found driving it):** `enterRoom()` builds the garment only when the shopper leaves the size screen, and
+  the classifier's correction that landed before that was DROPPED (`if (!activeItem || !front) return`) - a shopper slower on
+  height and weight than the classifier (~20-35s on PEAK) went live on the room's opening guess: the gallery's second photo as
+  the back, on PEAK the model three-quarters to the FRONT (§2.1). Held now (`_earlyGarmentUpdate`) and replayed through the same
+  listener right after `setActiveItem` (`replayEarlyGarmentUpdate`). Any verdict, the bare ready signal too, marks the gallery
+  validated.
+- `full-look` (37). The look prompt (`lookAnchorPrompt`, "the top above the bottom") is unchanged - `trace:prompt` identical.
 
 ---
 

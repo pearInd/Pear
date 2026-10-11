@@ -3488,6 +3488,8 @@ function enterRoom() {
     focusMode = true;
     document.body.classList.add("focus-mode");
     setActiveItem(toItem(handoff), { silent: true });
+    /* A classifier verdict that landed on the size screen is applied now (THE EARLY VERDICT). */
+    if (typeof replayEarlyGarmentUpdate === "function") replayEarlyGarmentUpdate();
     const params = new URLSearchParams(location.search);
     console.log('[PEAR] garment_back param:', params.get('garment_url_back'));
     console.log('[PEAR] activeItem.imgBack set to:', activeItem?.imgBack);
@@ -3794,6 +3796,16 @@ function hotSwapIfLive(toastMsg) {
    room can silently swap to the real front/back - no reconnect, no reopening the
    modal. Trusted only from the embedding parent frame (we don't know the host's
    origin ahead of time, so e.source is the check, same as any iframe↔parent bridge). */
+/* THE EARLY VERDICT's hold - see the listener below. One message, the newest; consumed by replayEarlyGarmentUpdate(). */
+let _earlyGarmentUpdate = null;
+/** Replay a correction that arrived before the room had a garment, through the listener itself (its own checks, its own order). */
+function replayEarlyGarmentUpdate() {
+  const data = _earlyGarmentUpdate;
+  _earlyGarmentUpdate = null;
+  if (!data || typeof activeItem === "undefined" || !activeItem) return false;
+  try { window.dispatchEvent(new MessageEvent("message", { data, source: window.parent })); return true; }
+  catch (_) { return false; }
+}
 window.addEventListener("message", (e) => {
   if (e.source !== window.parent) return;
   if (!e.data || e.data.type !== "PEAR_UPDATE_GARMENT") return;
@@ -3959,12 +3971,20 @@ window.addEventListener("message", (e) => {
      that fails the suite for a reason unrelated to what it tests - the same treatment
      verifyGarmentAsset() gets at its call sites. */
   if (typeof resolveClassifyGate === "function") resolveClassifyGate("classifier verdict received");
-
+  /* The verdict is in - a ready signal included (the classifier agreed with the gallery the room opened on): the gallery is
+     validated (THE GARMENTS YOU TRIED). typeof: suites run this handler standalone. */
+  if (typeof _galleryValidated !== "undefined") _galleryValidated = true;
   const front = e.data.garment_url;
   const back = e.data.garment_back;
-  if (!activeItem || !front) return;
-  /* The verdict is in: this gallery is the classifier's - remembered for a full look (THE GARMENTS YOU TRIED). */
-  if (typeof _galleryValidated !== "undefined") _galleryValidated = true;   // typeof: suites run this handler standalone
+  if (!front) return;
+  /* ── THE EARLY VERDICT (2026-10-10) - a correction that lands before the room has a garment ─────────────────────────────
+     enterRoom() builds activeItem only when the shopper leaves the size screen; until then this returned here and the
+     correction was DROPPED - so a shopper who spent longer on height and weight than the classifier took (~20-35s on the
+     PEAK tee) went live on the room's unclassified opening guess: the gallery's second photo as the back, which on PEAK is
+     the model three-quarters to the FRONT (§2.1) - the print-less back. Found while driving the full look: the shirt's room,
+     left on the size screen, never took its verdict. Held now, and replayed through this same listener the moment
+     enterRoom() has the garment (replayEarlyGarmentUpdate). */
+  if (!activeItem) { if (typeof _earlyGarmentUpdate !== "undefined") _earlyGarmentUpdate = e.data; return; }
   if (typeof rememberTriedGarment === "function" && typeof resolveLook === "function" && !resolveLook()) rememberTriedGarment(activeItem, front, back);
   const composite = typeof e.data.garment_composite === "string" && e.data.garment_composite
     ? e.data.garment_composite : undefined;
