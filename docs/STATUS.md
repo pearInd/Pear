@@ -12,7 +12,7 @@ _Last updated: 2026-10-11 · REVERTED IN PRODUCTION at the owner's request ("it 
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
-| Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch, **[PR #1](https://github.com/pearInd/Pear/pull/1) waiting on your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
+| Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch after two more review rounds (54 findings fixed), **[PR #1](https://github.com/pearInd/Pear/pull/1) waiting on your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
@@ -192,11 +192,24 @@ _Last updated: 2026-10-11 · REVERTED IN PRODUCTION at the owner's request ("it 
   BLOCKED; `--only=1` (the equals form) was ignored and imported every chart. Also: after a
   refusal, images on the store's own host are no longer fetched. Main `0818688` merged in `d86bdc5`
   (no conflicts); branch pushed and PR #1 opened 2026-10-06.
-- **Verified 2026-10-06 (after merging main `0818688`):** unit suite green (4,035 checks, real
-  Chromium for the browser tests); `npm run mutation:capture` 21/21 killed with Chromium (without
-  Chromium the CSS-visibility one is reported SKIPPED); `trace:prompt --json` byte-identical to main,
-  `lib/prompts.js` and `fitting-room/config.js` byte-identical to main; `qa:visual` 40/40 (and again
-  in the pre-push hook).
+  **Review round 4 (2026-10-07..11, `d44b5c2`):** a full review of the PR (4 lenses, every finding
+  checked by 3 skeptics) confirmed 40 findings - all fixed with tests: the browser's page cap,
+  deadlines on a stuck page, guide clicks and refusals, new reasons (UNREACHABLE, IMAGE NOT READ,
+  IMAGE READER RATE-LIMITED, BROWSER UNAVAILABLE), yes/no flags that take no value, a skipped save
+  exits 1, the live check tells live/stale/not served apart, MHTML saves, image files judged by
+  their bytes, lazy-loaded chart images; docs and the mutation script (baseline first; a crash or
+  timeout is INVALID, never a kill) follow. **Round 5 (`9a12cd1`):** a re-review of those fixes
+  confirmed 14 more, all fixed with tests: a page-wide theme wrapper (Debut/Timber) no longer
+  counts as a guide container; one product seen by two stages is no longer saved store-wide; a
+  refused guide request is BLOCKED unless a chart is kept, and stops store-host images; an image
+  URL whose query names the product keeps it; a guide modal's own title no longer types it as the
+  product; MHTML charset as Chrome writes it; `import:chart` exits 2 on a source it cannot use.
+  Main `ff46ba5` merged in `d2136b6` and main `be93232` in `c9e13c2` (only STATUS.md's header
+  line conflicted).
+- **Verified 2026-10-11 (after merging main `be93232`):** unit suite green (4,280 checks, real
+  Chromium for the browser tests); `npm run mutation:capture` 38/38 killed with Chromium;
+  `trace:prompt --json` byte-identical to main; the branch's diff against main touches only the
+  scanner, its tests, the mutation script, docs, three `package.json` scripts and `test/run.mjs`.
 - **Coverage — sweep from your machine, 2026-10-03, 11 stores, dry runs (all exit 0):**
 
   | Store | Result |
@@ -459,7 +472,7 @@ _Last updated: 2026-10-11 · REVERTED IN PRODUCTION at the owner's request ("it 
 ## Other branches (not merged)
 | Branch | Ahead / behind main | Note |
 |---|---|---|
-| `claude/project-thread-cr4uyn` | Phase 2 capture, main `0818688` merged in | size-guide capture CLI - [PR #1](https://github.com/pearInd/Pear/pull/1), your review |
+| `claude/project-thread-cr4uyn` | Phase 2 capture, main `be93232` merged in | size-guide capture CLI - [PR #1](https://github.com/pearInd/Pear/pull/1), your review |
 | `size-capture-phase2-local` | — | the 2026-10-03 WIP as pushed from your machine; superseded by the branch above |
 | `hide/edge` | merged into main 2026-10-04 | the hidden build - main now |
 | `hide/main-v2` | superseded by `hide/edge` | not to be merged |
