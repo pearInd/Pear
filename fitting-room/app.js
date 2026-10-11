@@ -19353,6 +19353,8 @@ function injectReplayStyles() {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      /* the name's own direction (2026-10-11, the UI audit): in Hebrew a Latin name was cut at its START ("...O shorts") */
+      unicode-bidi: plaintext;
     }
     .pear-rz-badge {
       display: inline-flex;
@@ -19394,6 +19396,9 @@ function injectReplayStyles() {
       display: flex;
       gap: 10px;
       margin-top: 14px;
+      /* (2026-10-11, the UI audit) the two buttons cannot shrink below their words: under ~360px they overflowed the card
+         and the page scrolled sideways (280/320px phones). They stack there, full width; one row wherever they fit. */
+      flex-wrap: wrap;
     }
     .pear-rz-btn {
       flex: 1;
@@ -19812,7 +19817,7 @@ async function renderCompleteTheLook(item) {
       <div class="cl-card__media">${garmentThumb(r)}</div>
       <div class="cl-card__body">
         <span class="cl-card__cat">${r.type === "pants" ? "Pants" : "Shirt"}${SUBTYPE_LABEL_HE[r.subType] ? " · " + SUBTYPE_LABEL_HE[r.subType] : ""}</span>
-        <div class="cl-card__name">${r.name}${r.tried ? " · מדדת" : ""}</div>
+        <div class="cl-card__name">${r.name}${r.tried ? ` · <span data-i18n="clTried">${t("clTried")}</span>` : ""}</div>
         ${r.price != null ? `<span class="cl-card__price">$${r.price}</span>` : ""}
       </div>
       <button class="cl-card__look" data-look="${i}">הוסף ללוק · Add to Look</button>

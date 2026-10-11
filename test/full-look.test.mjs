@@ -174,7 +174,9 @@ console.log("\n── §5 the wiring ──");
   check("§5.3 'Complete the Look' lists the garments you tried first, then the store's - and still the tried ones if the store's fail",
     /const tried = typeof triedComplementsFor === "function" \? triedComplementsFor\(currentItem\) : \[\];/.test(store) &&
     /\.reduce\(\(acc, it\) => acc\.concat\(it\), tried\.slice\(\)\)/.test(store) && /return tried\.slice\(0, 4\);/.test(store));
-  check("§5.4 a tried card says so", /\$\{r\.tried \? " · מדדת" : ""\}/.test(APP));
+  check("§5.4 a tried card says so - in the shopper's language (clTried: מדדת / Tried), repainted by a language switch",
+    /\$\{r\.tried \? ` · <span data-i18n="clTried">\$\{t\("clTried"\)\}<\/span>` : ""\}/.test(APP) &&
+    /clTried:\s*\{ he: "מדדת", en: "Tried" \}/.test(readFileSync(new URL("../fitting-room/i18n.js", import.meta.url), "utf8")));
   const rc = between(APP, "async function renderCompleteTheLook(item) {", "\n}\n");
   check("§5.5 a garment shown with an already-verified gallery is remembered too (the widget sends no correction then)",
     /_galleryValidated &&\s*\n\s*typeof activeItem !== "undefined" && item === activeItem && typeof resolveLook === "function" && !resolveLook\(\)\) \{\s*\n\s*const g = galleryOf\(item\);\s*\n\s*rememberTriedGarment\(item, g\.front \|\| item\.img, distinctBackOf\(item, g\)\);/.test(rc) &&

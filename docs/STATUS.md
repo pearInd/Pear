@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor - verified through the engine (s9: both garments, the back print on the back view, reveal 5.6s); s6/s7 lost to the measurement rig's camera, fixed; not on main_
+_Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): a UI pass at every device size (layout only); the full look in AI Auto - its back composite primed at connect and its front outfit as the session's floor - verified through the engine (s9: both garments, the back print on the back view, reveal 5.6s); s6/s7 lost to the measurement rig's camera, fixed; not on main_
 
 ## At a glance
 
@@ -361,6 +361,16 @@ _Last updated: 2026-10-11 · branch merge/edge-main (preview-oct8): the full loo
 - **Done:** language toggle + English strings `a7de91c`, `310b174`; geo-IP language
   lock fix + `fitting-room/i18n.js` module `4ecda99`; cart popover i18n `82de850`.
 - **Remaining:** none recorded. New strings must go through `i18n.js`.
+
+## The UI across devices (2026-10-11)
+- **Stage:** done (layout fixes only - nothing in how the room works changed). CLAUDE.md §2.43.
+- Audited every room state at 14 sizes (280-1920px, the store's 480px frame) in Hebrew and English, plus the widget on the
+  FOX page. Fixed: the language switch covering the step row (phones, the store frame, Hebrew 921-1090px); the page
+  scrolling sideways after a session on 280/320px; "Retake" cut; the camera guide's button see-through on small phones;
+  garment names cut at the wrong end in Hebrew; Add to Cart breaking mid-phrase; the "tried" marker in Hebrew in the
+  English UI; the widget's close button invisible on phones and sitting on the step label.
+- **Your call:** the store's chat and accessibility buttons draw over our modal; raising the modal above them would also
+  hide the store's accessibility button while the room is open.
 
 ## Security hardening + client-code hiding
 - **Stage:** in progress.

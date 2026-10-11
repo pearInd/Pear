@@ -1411,6 +1411,34 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
 
 ---
 
+### 2.43 The UI at every device size - an audit, layout only (2026-10-11)
+"Change nothing in how it works - go over the whole UI and make sure it works well, the same UI, on every device." A
+read-only pass over every room state (identity, size form + cookie banner + terms, fitting, the look, the camera guide,
+preview + timer, loading, live, after the session, OTP, locked) at 14 viewports (280-1920px, phones, the store's
+480x820/480x680 frame, tablets, laptops) in Hebrew and English through the mock engine, measuring horizontal scroll,
+unclipped overflow, covered controls, cut text and tap targets, plus the widget on the real FOX page. Fixed, CSS/markup only:
+- **The language switch covered Screen 1's step row** up to ~550px (every phone and the store's 480px frame: "...1 of 2 ·
+  Size" in English, the percent hidden in Hebrew) and in the Hebrew two-column layout up to ~1090px. The row reserves
+  `--hdr-gutter-l` less its own left offset (style.css, THE LANGUAGE SWITCH'S CORNER - two formulas that follow the
+  column geometry; measured at 48 width/language points, 0 overlaps, 0 padding where none was needed).
+- **The replay panel scrolled the page sideways** on 280/320px phones (its two buttons cannot shrink below their words):
+  they stack there (app.js injected CSS, `flex-wrap`).
+- **"Retake" was cut** ("tetake" at 390px) and "מדוד שוב" broke in two: the pill keeps its width, the head wraps.
+- **The camera guide's pinned button was see-through** over the scrolling steps on 280/320px (in both states - a phone
+  keeps `:hover` after the tap that opens the camera, on that same spot).
+- **Names were cut at the wrong end** in Hebrew ("... tee", "...O shorts"): the focus bar's label and name are two runs (the
+  label gives way first), and every name/email ellipsis uses `unicode-bidi: plaintext`.
+- **Add to Cart broke mid-phrase** up to 375px: it wraps between the Hebrew and the English only.
+- **"· מדדת" showed in Hebrew in the English UI** (the tried-garment marker): `data-i18n="clTried"` (מדדת / Tried).
+- **The widget's close button** was a white x on 15% white - invisible on the room's light header, the phone's only way out
+  - and sat on the Hebrew step label: a dark glass disc with a light rim, 36px 8px into the corner on phones, and the room
+  keeps that corner on Screen 1 when embedded (`html.pear-embedded`, < 480px).
+**Not changed (stated):** the store's own chat (Glassix, z-index 2147482998+) and accessibility buttons draw OVER our
+modal (999999) - raising ours would also hide the store's accessibility button while the room is open: the owner's call.
+The 280px header (the pear glyph touches the pencil) and the 280px Add to Cart (three lines) are left as they are. Full-page
+screenshots show `.reveal-up` sections blank until scrolled - an artifact, not a bug. In demo mode the session ends on the
+locked screen on wide viewports - the demo gate, not layout.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

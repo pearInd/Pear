@@ -938,6 +938,38 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    leftover-space audit as the .container changes above. */
 #screen-calculator .calc-main { padding-top: 0; padding-bottom: 16px; }
 .calc-main .step-progress { width: 100%; max-width: 472px; padding-top: 12px; }
+/* ── THE LANGUAGE SWITCH'S CORNER on Screen 1 (2026-10-11, the UI audit) ──────────────────────────────────
+   .lang-switch is pinned to the page's physical top-left, and this row (the step label + the percent) shares
+   that top band with nothing reserved for it: up to ~550px wide - every phone, and the store's 480px frame on
+   desktop - the row's left end ran under the switch ("…1 of 2 · Size" in English, the word "Step" hidden; the
+   percent peeking from behind it in Hebrew), and so did the Hebrew percent in the two-column layout up to
+   ~1090px (the form column on the left there). The row keeps the switch's gutter (--hdr-gutter-l, the token
+   the header and the focus bar reserve with), less how far its own left edge already sits from the page's
+   left - the column's padding, the 472px row centred in it, the row's own padding. max(0px, …): wherever the
+   row already clears the switch nothing moves. Measured at 280-1920px in both languages (the row's left vs
+   the switch's right). If the column geometry above changes, these two formulas follow it. */
+@media (max-width: 920px) {
+  .calc-main .step-progress-label {
+    padding-left: max(0px, calc(var(--hdr-gutter-l) - clamp(16px, 3vw, 40px)
+      - max(0px, (100vw - 2 * clamp(16px, 3vw, 40px) - 472px) / 2) - clamp(18px, 5vw, 28px)));
+  }
+}
+@media (min-width: 921px) {
+  /* Two columns (.calc-card 2fr 3fr, gap 2px, in a 1180px shell): the 3fr form column is on the LEFT in Hebrew. */
+  html[dir="rtl"] .calc-main .step-progress-label {
+    padding-left: max(0px, calc(var(--hdr-gutter-l) - max(0px, (100vw - 1180px) / 2) - clamp(16px, 3vw, 40px)
+      - ((min(1180px, 100vw) - 2px) * 3 / 5 - 2 * clamp(16px, 3vw, 40px) - 472px) / 2 - clamp(18px, 5vw, 28px)));
+  }
+}
+/* ...and on a phone inside the store's widget (html.pear-embedded, narrower than the widget's 480px frame - so the frame
+   is the whole screen) the widget's close button sits in the page's top-RIGHT corner, 8px in and 36px wide
+   (pear-widget.js, .pear-widget-close at max-width 520px): the Hebrew step label starts there. 50px from the right edge
+   is kept clear, less the row's own inset. */
+@media (max-width: 479px) {
+  html.pear-embedded .calc-main .step-progress-label {
+    padding-right: max(0px, calc(50px - clamp(16px, 3vw, 40px) - clamp(18px, 5vw, 28px)));
+  }
+}
 #screen-calculator .container { margin: 0 auto 12px; }
 .calc-main__copyright {
   margin: 16px auto 0; text-align: center;
@@ -2679,6 +2711,12 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .pip-retake:hover .pip-retake__icon { transform: rotate(-180deg); }
 .pip-retake__en { font-size: .68rem; font-weight: 600; opacity: .6; letter-spacing: .04em; }
 .pip-retake[hidden] { display: none; }
+/* THE RETAKE PILL KEEPS ITS WORDS (2026-10-11, the UI audit): squeezed by the title on a phone, the pill shrank and its
+   overflow:hidden (the sheen, below) cut its English ("tetake" at 390px) and broke "מדוד שוב" in two. It keeps its
+   natural width; when a row cannot hold the title and both buttons, the buttons drop under the title (the pill's
+   margin-inline-start:auto keeps them at the row's end). One row wherever it fits, as before. */
+.pip-head { flex-wrap: wrap; row-gap: 10px; }
+.pip-retake { flex-shrink: 0; white-space: nowrap; }
 
 .pip-clear {
   font-size: .74rem; font-weight: 700; color: var(--muted);
@@ -3838,6 +3876,12 @@ body.focus-mode.is-scrolled .profile-btn {
 .bac__en   { font-weight: 600; font-size: .76rem; opacity: .68; letter-spacing: .04em; }
 .bac__icon { font-weight: 700; margin-inline-end: 2px; }
 .bac__label { display: inline-flex; align-items: center; gap: 7px; transition: opacity .3s var(--ease), transform .4s var(--power); }
+/* EACH PHRASE STAYS WHOLE (2026-10-11, the UI audit): under 600px the row keeps the help button's gutter on both sides
+   (see "Permanent clearance from the fixed help button"), and up to 375px wide that left too little for one line - the
+   words broke mid-phrase ("Add to / Cart", "הוסף / לסל"). The label now wraps between the Hebrew and the English, never
+   inside either; one line wherever it fits, as before. */
+.bac__label { flex-wrap: wrap; justify-content: center; row-gap: 0; }
+.bac__label > span { white-space: nowrap; }
 /* spinner + check are centred overlays so the button width never jumps */
 .bac__spinner, .bac__check {
   position: absolute; top: 50%; left: 50%;
@@ -4139,6 +4183,17 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
   min-width: 0; flex: 1 1 auto;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* THE NAME IS CUT AT ITS OWN END (2026-10-11, the UI audit): one ellipsis on the whole line cut the line's visual LEFT end,
+   which in Hebrew is the START of a Latin garment name - "מדידת פריט ממוקדת: ... tee" on a 390px phone, the name gone.
+   The label and the name are two runs now, each with its own ellipsis, the name in its own direction (plaintext); the
+   label gives way first, so a narrow phone still shows which garment this is. */
+.focus-bar__text { display: flex; gap: .3em; }
+.focus-bar__text > span, .focus-bar__text > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.focus-bar__text > span { flex: 0 1000 auto; }
+.focus-bar__text > strong { flex: 0 1 auto; unicode-bidi: plaintext; }
+/* The same fix wherever a garment name, a person's name or an email is cut with an ellipsis: in its own direction, so a
+   Latin name in the Hebrew UI loses its END ("CHICAGO sh…"), never its start ("…CAGO shorts" on a gallery tile). */
+.live-gallery-item__name, .cart-line__title, .profile-dropdown__name, .profile-dropdown__email { unicode-bidi: plaintext; }
 .focus-bar__badge { flex-shrink: 0; }
 /* once the rails appear (≥1340px) keep every full-width bar inside the gutter.
    Split left/right instead of the symmetric padding-inline shorthand: the
@@ -5916,6 +5971,12 @@ body.has-cookie-banner .pear-help-widget {
   box-shadow: 0 -10px 22px -6px rgba(238, 238, 236, .95), 0 8px 24px -6px rgba(0, 0, 0, .12);
   animation: camGuideStep .62s var(--ease-spring) .58s both;
 }
+/* NOT SEE-THROUGH (2026-10-11, the UI audit): pinned to the bottom while a small phone scrolls the steps under it, the
+   button's translucent tint let the step text show through its own label (280-320px). The same tint, over the guide's
+   own backdrop colour instead of over the scrolling text. */
+.cam-guide__go.btn-primary { background: linear-gradient(var(--pear-tint), var(--pear-tint)), #ecece8; }
+/* ...hovered too: a phone keeps :hover after a tap, and the tap that opens the camera lands where this button appears. */
+.cam-guide__go.btn-primary:hover:not(:disabled) { background: linear-gradient(rgba(141, 182, 0, .26), rgba(141, 182, 0, .26)), #ecece8; }
 .cam-guide__go::after {
   content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
   background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .55) 50%, transparent 70%);
