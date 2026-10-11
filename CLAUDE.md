@@ -1369,7 +1369,13 @@ the wrong time." Two TEST sessions on the preview (records `mv0o1l3b` PEAK, `mv0
   the back, on PEAK the model three-quarters to the FRONT (§2.1). Held now (`_earlyGarmentUpdate`) and replayed through the same
   listener right after `setActiveItem` (`replayEarlyGarmentUpdate`). Any verdict, the bare ready signal too, marks the gallery
   validated.
-- `full-look` (37). The look prompt (`lookAnchorPrompt`, "the top above the bottom") is unchanged - `trace:prompt` identical.
+- **THE VERDICT IS FOR THE ROOM'S OWN GARMENT (the first real full-look session, record `mv3f87ox` - "it measured the shorts
+  twice, as the shorts and as the shirt"):** the shorts' room, the PEAK shirt added from "Complete the Look" at 51s, the shorts'
+  classifier verdict at 61s - the listener wrote it onto `activeItem`, which was the shirt just added: the shirt's slot took the
+  shorts' photos. The listener now writes to `target` - the room's own garment, `_handoffItem` set by `enterRoom()` (the active
+  one only without it) - and a corrected half of a look rebuilds the look's composites. color-lock / plain-back-anchor /
+  size-chart-overlay pin the writes on `target`.
+- `full-look` (40). The look prompt (`lookAnchorPrompt`, "the top above the bottom") is unchanged - `trace:prompt` identical.
 
 ---
 

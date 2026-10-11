@@ -146,9 +146,17 @@ console.log("\n── §5 the wiring ──");
   check("§5.1 any verdict - the bare ready signal too - validates the gallery, before the garment fields are read",
     lis.indexOf('if (typeof _galleryValidated !== "undefined") _galleryValidated = true;') !== -1 &&
     lis.indexOf('if (typeof _galleryValidated !== "undefined") _galleryValidated = true;') < lis.indexOf("if (!front) return;"));
-  check("§5.1b ...and a full correction remembers the garment (single garments only), sandbox-safe",
-    /if \(typeof rememberTriedGarment === "function" && typeof resolveLook === "function" && !resolveLook\(\)\) rememberTriedGarment\(activeItem, front, back\);/.test(lis) &&
-    lis.indexOf("rememberTriedGarment(activeItem, front, back)") > lis.indexOf("if (!activeItem) {"));
+  check("§5.1b ...and a full correction remembers the room's own garment, sandbox-safe",
+    /if \(typeof rememberTriedGarment === "function"\) rememberTriedGarment\(target, front, back\);/.test(lis) &&
+    lis.indexOf("rememberTriedGarment(target, front, back)") > lis.indexOf("if (!target) {"));
+  /* THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2026-10-11): "it measured the shorts twice, as the shorts and as the shirt". */
+  check("§5.6 the correction is written to the room's OWN garment (enterRoom's), never to a garment added since",
+    /const target = \(typeof _handoffItem !== "undefined" && _handoffItem\) \|\| \(typeof activeItem !== "undefined" \? activeItem : null\);/.test(lis) &&
+    !/\bactiveItem\.(img|imgBack|pearImages|composite|colorHex|textOcr|backIsPlain|backSource)\s*=/.test(lis) &&
+    /target\.img = front;/.test(lis) && /target\.imgBack = back;/.test(lis));
+  check("§5.7 enterRoom() records which garment that is", /setActiveItem\(toItem\(handoff\), \{ silent: true \}\);\s*\n\s*_handoffItem = activeItem;/.test(APP));
+  check("§5.8 a corrected half of a full look rebuilds the look's composites",
+    /if \(typeof activeItem !== "undefined" && target !== activeItem && typeof prewarmLookComposites === "function"\) prewarmLookComposites\(\);/.test(lis));
   const bill = between(APP, "function startBillingWindow(gen) {", "\n}\n");
   check("§5.2 the reveal remembers a measured garment only when its gallery is validated (never the unclassified guess)",
     /typeof _galleryValidated !== "undefined" && _galleryValidated &&/.test(bill) && /rememberTriedGarment\(activeItem, g\.front \|\| activeItem\.img, distinctBackOf\(activeItem, g\)\);/.test(bill));
@@ -167,10 +175,10 @@ console.log("\n── §6 the early verdict - a correction before the room has a
 {
   const lis = between(APP, 'window.addEventListener("message", (e) => {\n  if (e.source !== window.parent) return;\n  if (!e.data || e.data.type !== "PEAR_UPDATE_GARMENT") return;', "\n});\n");
   check("§6.1 with no garment yet the correction is HELD, not dropped",
-    /if \(!activeItem\) \{ if \(typeof _earlyGarmentUpdate !== "undefined"\) _earlyGarmentUpdate = e\.data; return; \}/.test(lis));
+    /if \(!target\) \{ if \(typeof _earlyGarmentUpdate !== "undefined"\) _earlyGarmentUpdate = e\.data; return; \}/.test(lis));
   const enter = between(APP, "function enterRoom() {", "\n}\n");
   check("§6.2 enterRoom() replays it right after the garment is set",
-    /setActiveItem\(toItem\(handoff\), \{ silent: true \}\);\s*\n\s*\/\*[^\n]*\*\/\s*\n\s*if \(typeof replayEarlyGarmentUpdate === "function"\) replayEarlyGarmentUpdate\(\);/.test(enter));
+    /setActiveItem\(toItem\(handoff\), \{ silent: true \}\);\s*\n\s*_handoffItem = activeItem;[^\n]*\n\s*\/\*[^\n]*\*\/\s*\n\s*if \(typeof replayEarlyGarmentUpdate === "function"\) replayEarlyGarmentUpdate\(\);/.test(enter));
   const rp = between(APP, "let _earlyGarmentUpdate = null;", "\nwindow.addEventListener(\"message\", (e) => {\n  if (e.source !== window.parent) return;\n  if (!e.data || e.data.type !== \"PEAR_UPDATE_GARMENT\")");
   const sent = [];
   const parent = { name: "parent" };

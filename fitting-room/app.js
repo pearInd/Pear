@@ -3488,6 +3488,7 @@ function enterRoom() {
     focusMode = true;
     document.body.classList.add("focus-mode");
     setActiveItem(toItem(handoff), { silent: true });
+    _handoffItem = activeItem;   // the room's own garment - the widget's corrections are about it, whatever is added after
     /* A classifier verdict that landed on the size screen is applied now (THE EARLY VERDICT). */
     if (typeof replayEarlyGarmentUpdate === "function") replayEarlyGarmentUpdate();
     const params = new URLSearchParams(location.search);
@@ -3798,6 +3799,8 @@ function hotSwapIfLive(toastMsg) {
    origin ahead of time, so e.source is the check, same as any iframe↔parent bridge). */
 /* THE EARLY VERDICT's hold - see the listener below. One message, the newest; consumed by replayEarlyGarmentUpdate(). */
 let _earlyGarmentUpdate = null;
+/* The garment the room was opened for (enterRoom) - every widget correction is about it (THE VERDICT IS FOR THE ROOM'S OWN GARMENT). */
+let _handoffItem = null;
 /** Replay a correction that arrived before the room had a garment, through the listener itself (its own checks, its own order). */
 function replayEarlyGarmentUpdate() {
   const data = _earlyGarmentUpdate;
@@ -3809,20 +3812,27 @@ function replayEarlyGarmentUpdate() {
 window.addEventListener("message", (e) => {
   if (e.source !== window.parent) return;
   if (!e.data || e.data.type !== "PEAR_UPDATE_GARMENT") return;
+  /* ── THE VERDICT IS FOR THE ROOM'S OWN GARMENT (2026-10-11) - "it measured the shorts twice, as the shorts and as the shirt" ──
+     The widget's correction describes the product the room was OPENED for. It was written onto whatever activeItem was at
+     the time - and in a full look that is the garment the shopper just added: the shorts' room, the PEAK shirt added from
+     "Complete the Look" at 51s, the shorts' verdict at 61s - the shirt's slot took the shorts' front and back, and the look
+     went live as the shorts twice (record mv3f87ox). `target` is the room's own garment (_handoffItem, set by enterRoom()),
+     the active one only when there is none (a sandboxed suite, a catalog session). */
+  const target = (typeof _handoffItem !== "undefined" && _handoffItem) || (typeof activeItem !== "undefined" ? activeItem : null);
 
-  /* Kids/adult verdict, captured BEFORE the activeItem check below - Screen 1 (no
-     activeItem yet) needs this every bit as much as Screen 2 does, and the widget
+  /* Kids/adult verdict, captured BEFORE the target check below - Screen 1 (no
+     target yet) needs this every bit as much as Screen 2 does, and the widget
      sends it on the SAME message that would otherwise be dropped entirely by the
      early return below while the visitor is still on the measurement form. Synced
-     onto activeItem too when it already exists, so nothing downstream needs to
+     onto target too when it already exists, so nothing downstream needs to
      know which of the two variables to read - resolvedGarmentAgeGroup() checks
-     activeItem first and falls back to this. "uncertain" is a real, meaningful
+     target first and falls back to this. "uncertain" is a real, meaningful
      value here (the classifier ran and found no confident answer) - distinct from
      undefined (no correction has arrived, or an older widget build never sent one). */
   /* The host product's REAL size list, handled BEFORE (and independently of) the
      classifier verdict below - it outranks it, and it can arrive on a message that the
      age-group branch would otherwise be the only reader of. Same Screen-1-safe
-     treatment: recorded on pendingSizes, and synced onto activeItem when one exists.
+     treatment: recorded on pendingSizes, and synced onto target when one exists.
      Stored RAW, exactly as parseHandoff() does - every reader normalises through
      parseSizeList() - so this listener stays free of module-level dependencies. */
   /* Stock for that same list, handled BEFORE the size block below so that block's own
@@ -3843,13 +3853,13 @@ window.addEventListener("message", (e) => {
     pendingSoldOutSizes = incomingSoldOut;
     /* Re-stamp onto whatever is active NOW. This correction is about the product the
        room currently holds, and later in this same handler the classifier's verdict can
-       REPLACE activeItem.img with a different gallery photo - leaving the stamp on the
+       REPLACE target.img with a different gallery photo - leaving the stamp on the
        open-time URL would make resolvedSoldOutSizes() disown its own fresh data. The
        per-item write below already short-circuits that path, so this is the belt to its
-       braces: it keeps the pending fallback correct for a product whose activeItem is
+       braces: it keeps the pending fallback correct for a product whose target is
        rebuilt afterwards. */
-    if (activeItem && activeItem.img) pendingSoldOutForImg = activeItem.img;
-    if (activeItem) activeItem.soldOutSizes = incomingSoldOut;
+    if (target && target.img) pendingSoldOutForImg = target.img;
+    if (target) target.soldOutSizes = incomingSoldOut;
     console.log("[PEAR] stock correction:", parseSizeList(incomingSoldOut).join("/") || "(nothing sold out)");
     const sizeFormEl4 = $("sizeForm");
     if (sizeFormEl4 && !sizeFormEl4.hidden) { try { calculateSize(); } catch {} }
@@ -3871,7 +3881,7 @@ window.addEventListener("message", (e) => {
   const incomingChart = e.data.garment_size_chart;
   if (typeof incomingChart === "string" || Array.isArray(incomingChart)) {
     pendingSizeChart = incomingChart;
-    if (activeItem) activeItem.sizeChart = incomingChart;
+    if (target) target.sizeChart = incomingChart;
     console.log("[PEAR] store size-chart correction received",
       "(" + (Array.isArray(incomingChart) ? incomingChart.length + " row(s)" : String(incomingChart).length + " chars") +
       ") - decoded and bounded server-side with the next size verdict");
@@ -3882,7 +3892,7 @@ window.addEventListener("message", (e) => {
   const incomingSizes = e.data.garment_sizes;
   if (incomingSizes && incomingSizes.length) {
     pendingSizes = incomingSizes;
-    if (activeItem) activeItem.sizes = incomingSizes;
+    if (target) target.sizes = incomingSizes;
     const sizeFormEl = $("sizeForm");
     if (sizeFormEl && !sizeFormEl.hidden) { try { calculateSize(); } catch {} }
     // The room may already be open - rebuild the ladder against the real variants and
@@ -3894,8 +3904,8 @@ window.addEventListener("message", (e) => {
        resolved by DEFAULT (a cut/fit title like "STRAIGHT BASIC" abstains on every
        keyword tier), so categoryResolved is false and this re-resolve is exactly what
        it is for - an item already settled by real evidence returns at the guard. */
-    if (activeItem) {
-      refineActiveItemCategory(activeItem).catch((e) =>
+    if (target) {
+      refineActiveItemCategory(target).catch((e) =>
         console.warn("[PEAR] category re-resolve after late sizes failed:", e?.message || e));
     }
   }
@@ -3912,7 +3922,7 @@ window.addEventListener("message", (e) => {
   if (e.data.garment_size_type === "numeric" || e.data.garment_size_type === "alpha" ||
       e.data.garment_size_type === "unknown") {
     pendingSizeRunType = e.data.garment_size_type;
-    if (activeItem) activeItem.sizeRunType = pendingSizeRunType;
+    if (target) target.sizeRunType = pendingSizeRunType;
     const sizeFormEl3 = $("sizeForm");
     if (sizeFormEl3 && !sizeFormEl3.hidden) { try { calculateSize(); } catch {} }
   }
@@ -3926,7 +3936,7 @@ window.addEventListener("message", (e) => {
   const incomingTitle = e.data.garment_title || e.data.garment_name;
   if (typeof incomingTitle === "string" && incomingTitle.trim()) {
     pendingTitle = incomingTitle;
-    if (activeItem && !activeItem.title) activeItem.title = incomingTitle;
+    if (target && !target.title) target.title = incomingTitle;
     const sizeFormEl2 = $("sizeForm");
     if (sizeFormEl2 && !sizeFormEl2.hidden) { try { calculateSize(); } catch {} }
   }
@@ -3935,9 +3945,9 @@ window.addEventListener("message", (e) => {
     pendingAgeGroup = e.data.garment_age_group;
     pendingAgeGroupConfidence = Number.isFinite(e.data.garment_age_group_confidence)
       ? e.data.garment_age_group_confidence : undefined;
-    if (activeItem) {
-      activeItem.ageGroup = pendingAgeGroup;
-      activeItem.ageGroupConfidence = pendingAgeGroupConfidence;
+    if (target) {
+      target.ageGroup = pendingAgeGroup;
+      target.ageGroupConfidence = pendingAgeGroupConfidence;
     }
     // Screen 1 may still be showing (the classify round trip can resolve WHILE the
     // visitor is filling in height/weight) - if so, re-derive the age field's
@@ -3962,7 +3972,7 @@ window.addEventListener("message", (e) => {
      on exactly the products that were never at risk.
 
      RELEASING IS NOT RE-ANCHORING. This touches no reference and dispatches nothing -
-     the unchanged path still returns below without altering activeItem, so a mid-session
+     the unchanged path still returns below without altering target, so a mid-session
      image churn cannot be introduced here (re-uploading a reference mid-session renders
      a generic garment; the conditioning gate is one-shot).
 
@@ -3978,14 +3988,14 @@ window.addEventListener("message", (e) => {
   const back = e.data.garment_back;
   if (!front) return;
   /* ── THE EARLY VERDICT (2026-10-10) - a correction that lands before the room has a garment ─────────────────────────────
-     enterRoom() builds activeItem only when the shopper leaves the size screen; until then this returned here and the
+     enterRoom() builds target only when the shopper leaves the size screen; until then this returned here and the
      correction was DROPPED - so a shopper who spent longer on height and weight than the classifier took (~20-35s on the
      PEAK tee) went live on the room's unclassified opening guess: the gallery's second photo as the back, which on PEAK is
      the model three-quarters to the FRONT (§2.1) - the print-less back. Found while driving the full look: the shirt's room,
      left on the size screen, never took its verdict. Held now, and replayed through this same listener the moment
      enterRoom() has the garment (replayEarlyGarmentUpdate). */
-  if (!activeItem) { if (typeof _earlyGarmentUpdate !== "undefined") _earlyGarmentUpdate = e.data; return; }
-  if (typeof rememberTriedGarment === "function" && typeof resolveLook === "function" && !resolveLook()) rememberTriedGarment(activeItem, front, back);
+  if (!target) { if (typeof _earlyGarmentUpdate !== "undefined") _earlyGarmentUpdate = e.data; return; }
+  if (typeof rememberTriedGarment === "function") rememberTriedGarment(target, front, back);
   const composite = typeof e.data.garment_composite === "string" && e.data.garment_composite
     ? e.data.garment_composite : undefined;
   /* The widget's classify+synthesize round trip has now FINISHED, whatever it found -
@@ -3993,13 +4003,13 @@ window.addEventListener("message", (e) => {
      below (a message confirming "no back exists" still means the wait is over; the
      chip should stop looking like something is in progress). Read BEFORE clearing, so
      the unchanged branch below knows whether it owes a repaint purely for the spinner. */
-  const wasAwaitingBack = !!activeItem?._awaitingBackCorrection;
-  if (activeItem) {
-    if (activeItem._awaitingBackTimer) { clearTimeout(activeItem._awaitingBackTimer); activeItem._awaitingBackTimer = null; }
-    activeItem._awaitingBackCorrection = false;
+  const wasAwaitingBack = !!target?._awaitingBackCorrection;
+  if (target) {
+    if (target._awaitingBackTimer) { clearTimeout(target._awaitingBackTimer); target._awaitingBackTimer = null; }
+    target._awaitingBackCorrection = false;
   }
   /* THE "BANNER STILL SHOWS FRONT" BUG. This used to bail out here whenever front/back
-     matched what activeItem already held, WITHOUT looking at whether a composite had
+     matched what target already held, WITHOUT looking at whether a composite had
      arrived. pear-widget.js builds the composite AFTER /api/classify-images resolves -
      strictly later than the initial DOM-order guess this room opens on - so on any
      store where the DOM back-detection already agrees with the classifier (increasingly
@@ -4008,17 +4018,17 @@ window.addEventListener("message", (e) => {
      delivery of garment_composite - and the old guard discarded it, unread, before this
      line. The chip (and the model's actual reference) then stayed on the single front
      photo for the entire session, every time DOM detection happened to be right. */
-  const unchanged = activeItem.img === front && activeItem.imgBack === back &&
-    (composite === undefined || activeItem.composite === composite);
+  const unchanged = target.img === front && target.imgBack === back &&
+    (composite === undefined || target.composite === composite);
   if (unchanged) {
     // Nothing about the garment itself changed, but if the chip was showing the
     // "waiting" indicator it still needs one repaint to clear it.
     if (wasAwaitingBack) renderActiveGarment();
     return;
   }
-  activeItem.img = front;
+  target.img = front;
   if (Array.isArray(e.data.garment_images) && e.data.garment_images.length) {
-    activeItem.pearImages = e.data.garment_images;
+    target.pearImages = e.data.garment_images;
   }
   // Back asset: TRUST the classifier's verdict completely now, including when it's
   // undefined - that means Gemini genuinely found no back-view photo in this item's
@@ -4030,12 +4040,12 @@ window.addEventListener("message", (e) => {
   // content), and reach Lucy prompted as "this is the BACK, do NOT render the front"
   // - so the model suppressed the graphic it could actually see. No fallback here
   // anymore; resolveFrontBack() in pear-widget.js is the single source of truth.
-  activeItem.imgBack = back;
+  target.imgBack = back;
   /* Provenance of that back, straight from /api/classify-images (dom | classifier |
      synthetic | none). Purely diagnostic - a generated rear is treated exactly like a
      photographed one downstream, because by the time it gets here it IS a real,
      distinct image asset that preloadGarmentAssets() will validate like any other. */
-  activeItem.backSource = e.data.garment_back_source || "unknown";
+  target.backSource = e.data.garment_back_source || "unknown";
   /* ── SAMPLED MAIN-FABRIC COLOUR, from the same /api/classify-images call ──────────
      Consumed by colorLockSentence() in the prompt builder. `typeof === "string"` and
      not `||`, deliberately: an absent field (older widget build, or a colour the
@@ -4043,14 +4053,14 @@ window.addEventListener("message", (e) => {
      and must not be collapsed with a present-but-empty value into one "falsy" case
      that reads as a verdict. Same null-vs-empty discipline as text_ocr server-side. */
   if (typeof e.data.garment_color_hex === "string" && e.data.garment_color_hex) {
-    activeItem.colorHex = e.data.garment_color_hex;
+    target.colorHex = e.data.garment_color_hex;
   }
   /* The garment's own lettering, from the FRONT photo (see identityLockSentence). "" is
      assigned deliberately - it is the verdict "the classifier looked and this garment is
      plain", which must be distinguishable from an absent field. `typeof` and not a
      truthiness test, for exactly that reason. */
   if (typeof e.data.garment_text_ocr === "string") {
-    activeItem.textOcr = e.data.garment_text_ocr;
+    target.textOcr = e.data.garment_text_ocr;
   }
   /* ── IS THE REAR BLANK? - selects PLAIN_BACK_ANCHOR over BACK_CATEGORY_ANCHOR ──────
      Only a real boolean is stored. An absent field leaves this undefined, and
@@ -4058,7 +4068,7 @@ window.addEventListener("message", (e) => {
      the existing wording. Assigning `false` on an absent field would be a verdict nobody
      reached; assigning `true` would suppress a real rear print. */
   if (typeof e.data.garment_back_is_plain === "boolean") {
-    activeItem.backIsPlain = e.data.garment_back_is_plain;
+    target.backIsPlain = e.data.garment_back_is_plain;
   }
   /* Unified COMBINED reference, stitched by the widget on the store page (see
      createGarmentComposite in pear-widget.js). When present it IS the model
@@ -4067,16 +4077,16 @@ window.addEventListener("message", (e) => {
      than a second, independently built one. A data: URL, so every downstream path
      (garmentBlobCached, garmentImageRef) already handles it without a proxy hop. */
   if (composite) {
-    activeItem.composite = composite;
+    target.composite = composite;
     /* Panel geometry the widget actually drew. Diagnostic only - the composite is used
        verbatim either way - but it is what turns "the back renders as the front" from a
        guess into a readable fact, because it is the one signal that can contradict the
        LEFT=FRONT / RIGHT=BACK contract the prompt asserts. Optional: an older widget
        build sends no layout and describeCompositeLayout() just reports that. */
     const layout = e.data.garment_composite_layout;
-    activeItem._compositeLayout = (layout && typeof layout === "object") ? layout : null;
+    target._compositeLayout = (layout && typeof layout === "object") ? layout : null;
     console.log("[PEAR] COMBINED composite received from the widget:",
-      abbrevImg(activeItem.composite), "·", describeCompositeLayout(activeItem._compositeLayout));
+      abbrevImg(target.composite), "·", describeCompositeLayout(target._compositeLayout));
   }
   // currentAngle is deliberately NOT set here: renderPerspectiveSelector() re-derives
   // it (AI Auto when the corrected pair qualifies, else front) with no user input.
@@ -4084,17 +4094,17 @@ window.addEventListener("message", (e) => {
   // The widget's own composite (if it sent one) is already applied above. When it
   // didn't - imgBack alone arrived, e.g. a classifier verdict without a stitched
   // asset - build one locally right now rather than waiting for go-live. No-ops
-  // instantly if activeItem.composite is already set.
-  ensureActiveGarmentComposite(activeItem);
+  // instantly if target.composite is already set.
+  ensureActiveGarmentComposite(target);
   renderPerspectiveSelector();
-  console.log("[PEAR] PEAR_UPDATE_GARMENT applied - front:", abbrevImg(activeItem.img),
-    "| back:", abbrevImg(activeItem.imgBack) || "(none)",
-    "| back source:", activeItem.backSource, "| mode:", currentAngle,
+  console.log("[PEAR] PEAR_UPDATE_GARMENT applied - front:", abbrevImg(target.img),
+    "| back:", abbrevImg(target.imgBack) || "(none)",
+    "| back source:", target.backSource, "| mode:", currentAngle,
     /* The one verdict in this message that silently changes what a BACK dispatch asserts, and
        it can land after go-live. The sentence it selects is built server-side now
        (describeRearConstruction() in lib/prompts.js); the raw flags that select it are what
        this log can still show. */
-    "| rear: backIsPlain=" + activeItem.backIsPlain + " looksPrinted=" + activeItem._backLooksPrinted);
+    "| rear: backIsPlain=" + target.backIsPlain + " looksPrinted=" + target._backLooksPrinted);
 
   /* Race guard (FIX 4). The widget opens this room immediately on a DOM-order guess
      and only posts the classifier's real front/back 1-7s later, so the corrected back
@@ -4104,6 +4114,8 @@ window.addEventListener("message", (e) => {
      otherwise not be fetched until the first turn, adding a visible stall exactly when
      the user turns around. Re-warming here makes the corrected rear photo resident
      before it is needed. hotSwapIfLive() below then re-issues the reference in place. */
+  /* The room's garment is half of a full look now: its composites are rebuilt with the corrected photos. */
+  if (typeof activeItem !== "undefined" && target !== activeItem && typeof prewarmLookComposites === "function") prewarmLookComposites();
   prewarmOrientationAssets();
   hotSwapIfLive("מעדכן תמונת בגד · updating garment view");
 });

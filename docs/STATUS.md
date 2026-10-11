@@ -344,6 +344,9 @@ _Last updated: 2026-10-10 · branch merge/edge-main (preview-oct8): rear-photo m
   Found on the way and fixed: if the classifier answered while you were still on the size screen, the room dropped its answer
   and went live with the gallery's second photo as the back (on PEAK a three-quarter FRONT photo) - now held and applied when
   you enter the fitting room.
+  The first real full-look session showed the shorts twice ("it measured the shorts as the shorts and as the shirt"): the
+  shorts' classifier answer, arriving after the shirt was added, was written onto the shirt. Now it is written to the garment
+  the room was opened for.
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
