@@ -1504,6 +1504,13 @@ BRANCH"):
 - **The fingerprint moved** (`lib/api-version.js`): until a Worker deploy, the room takes /prompt and /size from the origin
   (`/api/*`, ~350ms from Israel, prefetched before go-live) - the edge answers with the old engine and is refused by design.
 - **To ship to shoppers:** drop the `strict &&` from the line that measured well (one at a time), re-pin, `wrangler deploy`.
+- **Measured (3 real sessions on the preview, the rig - not the owner's body):** the TEST room sent `strict` on 12 of 12 prompt
+  requests. PEAK shirt with it (s10): no chain; shorts with it (s11) and the same camera with `strict` stripped (s12, the
+  control): the shopper's own top kept, no mark in either. The rig never drew the chain in any session (s1/s2 without the fix
+  neither), so it cannot prove the fix - the owner's own TEST sessions are the check (§2.38: 6 of 17).
+- **Found on the way, NOT caused by it:** the shorts' BACK reference (`3108650200-4.jpg`, a close-up with the model's legs)
+  rendered as a giant pair of shorts at the frame's left edge for ~1s of the back view - in s11 AND in the control s12, so
+  it is on the shopper's wire today. s3 (another camera clip) did not show it. Not yet seen on a real body.
 
 ## 3. Cross-file lockstep
 
