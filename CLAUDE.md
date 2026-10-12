@@ -1551,6 +1551,15 @@ BRANCH"):
     late back never stays on a front. `?ack_watch=0` off. Proven in the mock (`?mock_drop_ack=N`, the session's Nth set()
     ignored - `PEAR_VISUAL_DROP_ACK=4`): without it the BACK never reaches the wire (the agent times out at 180 degrees -
     b3/b5 exactly); with it (`PEAR_VISUAL_TRACE=1`) the re-send lands the back at 90 degrees, the front returns, 40/40.
+  - **THE COLLAGE IS NEVER THE FIRST IMAGE (TEST sessions only - `primeInitialConditioning`'s `collageFirst`):** full frames (a
+    crop around the body hid it) show the look's FRONT outfit composite drawn INTO THE ROOM from the reveal to the first swap in
+    2 of 4 look sessions - the whole frame in b4, a giant pair of shorts beside the shopper in c3 (2026-10-12) - while the same
+    composite re-sent on the return never was. The first image a session gets is joined before any camera frame. A TEST look
+    session opens on the top's packshot (a single garment's floor - never drawn) and the outfit goes out right after the connect
+    (primeAtConnect's applyActive) as an ordinary write. Measured below.
+  - **Second round, 2026-10-12 (c1-c3, the user's path, the deployed engine):** shirt c1 and shorts c2 right in every frame - front,
+    side, back, return; the swaps acked in 284-434ms; no stall; nothing drawn into the room (full frames checked). Look c3: the
+    turn right, the collage drawn at the left from 0 to 2.7s - the reason for the rule above.
   - `trace` kb in a look's swap events is the TOP's photo size (traceSwapTimeline reads GARMENT_BACK/FRONT), not the
     composite's - do not read a look's swap kb as what was sent.
 

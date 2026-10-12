@@ -6197,8 +6197,15 @@ async function primeInitialConditioning() {
     look = resolveLook();
     item = look ? look.top : activeItem;   // one image slot - the TOP, as applyLook documents
     try {
-      /* A FULL LOOK'S FLOOR IS ITS FRONT OUTFIT - the top's packshot only when the composite is not ready. */
-      const lookFloor = look && typeof resolveLookFloor === "function" ? await resolveLookFloor(look) : null;
+      /* A FULL LOOK'S FLOOR IS ITS FRONT OUTFIT - the top's packshot only when the composite is not ready.
+         THE COLLAGE IS NEVER THE FIRST IMAGE (2026-10-12, TEST sessions only): two of four look sessions (b4, c3) drew the
+         front outfit composite INTO THE ROOM from the reveal until the first swap - the whole frame (b4), a giant pair of
+         shorts beside the shopper (c3) - and the same composite sent later in those sessions (the return) never was. The
+         first image a session gets is joined before any camera frame; a single garment's (a person in the product) never
+         drew. A TEST session opens on the top's packshot, and the outfit goes out right after the connect (primeAtConnect's
+         applyActive()) as an ordinary write. */
+      const collageFirst = !(typeof traceEnabled === "function" && traceEnabled());
+      const lookFloor = look && collageFirst && typeof resolveLookFloor === "function" ? await resolveLookFloor(look) : null;
       floorIsLook = !!lookFloor;
       floor = lookFloor || await resolveInitialConditioning(item);
     } catch (e) {

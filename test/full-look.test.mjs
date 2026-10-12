@@ -259,7 +259,9 @@ console.log("\n── §8 a full look's floor is its front outfit - the engine h
   }
   const prime = between(APP, "async function primeInitialConditioning() {", "\n/* ── THE ACKNOWLEDGED FLOOR IS ON THE WIRE");
   check("§8.4 primeInitialConditioning seeds a look with resolveLookFloor() first, the top's packshot only as the fallback",
-    /const lookFloor = look && typeof resolveLookFloor === "function" \? await resolveLookFloor\(look\) : null;\s*floorIsLook = !!lookFloor;\s*floor = lookFloor \|\| await resolveInitialConditioning\(item\);/.test(prime));
+    /const lookFloor = look && collageFirst && typeof resolveLookFloor === "function" \? await resolveLookFloor\(look\) : null;\s*floorIsLook = !!lookFloor;\s*floor = lookFloor \|\| await resolveInitialConditioning\(item\);/.test(prime) &&
+    /* (2026-10-12) a TEST session never opens on the collage - the top's packshot, the outfit right after the connect. */
+    /const collageFirst = !\(typeof traceEnabled === "function" && traceEnabled\(\)\);/.test(prime));
   check("§8.5 ...and re-resolves when the look's bottom changed meanwhile (that composite is stale)",
     /\(!floorIsLook \|\| \(nowLook && nowLook\.bottom === look\.bottom\)\)/.test(prime));
   const adopt = between(APP, "function adoptInitialStateAsWire(why) {", "\n}\n");
