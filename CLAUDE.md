@@ -1557,9 +1557,10 @@ BRANCH"):
     opened on the top's packshot, the outfit sent right after the connect. c4 drew it anyway (a giant torso and shorts at the
     left for 2.4s, the shopper's own clothes on the body) - so it is not the join. Reverted. Open: what makes the engine draw
     the collage at a session's start (3 of 5 look sessions) and not on a return.
-  - **Second round, 2026-10-12 (c1-c3, the user's path, the deployed engine):** shirt c1 and shorts c2 right in every frame - front,
-    side, back, return; the swaps acked in 284-434ms; no stall; nothing drawn into the room (full frames checked). Look c3: the
-    turn right, the collage drawn at the left from 0 to 2.7s - the reason for the rule above.
+  - **Second round, 2026-10-12 (c1-c5, the user's path, the deployed engine, the ack watchdog on):** shirt c1 and c5 and shorts c2
+    right in every frame - front, side, back, return; every swap acked in 284-434ms (the watchdog never had to fire); no stall;
+    nothing drawn into the room (full frames checked). Looks c3 and c4: the turn right (the PEAK back print and the shorts' plain
+    back on the back view, both fronts on the return), but the collage drawn into the room for the first 2.4-2.7s - OPEN.
   - `trace` kb in a look's swap events is the TOP's photo size (traceSwapTimeline reads GARMENT_BACK/FRONT), not the
     composite's - do not read a look's swap kb as what was sent.
 
