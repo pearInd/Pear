@@ -235,6 +235,19 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of
    quality/upload/encode overhead per the cost trade. Tokens scale with FRAMES, not
    pixels, so this lowers visual quality + pipeline cost, not the token count itself. */
 const LIVE_W = 512, LIVE_H = 288;
+/* THE ENGINE SEES THE BODY (2026-10-12, TEST sessions only until the owner has measured it - docs/plans/refit-and-sides.md
+   R1). "When I turn 90 degrees it must not guess whether I have a belly - it must see it." The render model works at 1088x624
+   (the SDK's model table); 512x288 hands it a full-length shopper ~160px tall - the belly side-on ~15px - upscaled 2.1x, and
+   on a desktop the camera itself is asked for 512x288. A TEST session sends 896x504 (under 960, so two simulcast layers) from
+   a camera asked for 1280x720. 30a7710 shipped 896x504 together with a reference crop and the pair was reverted - the crop cut
+   references to fragments, which the engine draws into the room (§2.46); this is the resolution alone. ?hi_input=0 off. */
+const LIVE_HI_W = 896, LIVE_HI_H = 504;
+function liveInputSize() {
+  let off = false;
+  try { off = new URLSearchParams(location.search).get("hi_input") === "0"; } catch (_) { off = true; }
+  const hi = !off && typeof traceEnabled === "function" && traceEnabled();
+  return hi ? { w: LIVE_HI_W, h: LIVE_HI_H, camW: 1280, camH: 720 } : { w: LIVE_W, h: LIVE_H, camW: LIVE_W, camH: LIVE_H };
+}
 
 /* Mobile detection (Feature 2 / mobile download fix). Drives the SAVE PATH only:
    iOS Safari ignores <a download>, so on mobile we hand the clip to the native
@@ -4435,8 +4448,9 @@ function buildVideoConstraints(facing) {
   if (isPhone) {
     video.aspectRatio = { ideal: portrait ? 9 / 16 : 16 / 9 };
   } else {
-    video.width  = { ideal: LIVE_W };
-    video.height = { ideal: LIVE_H };
+    const sz = typeof liveInputSize === "function" ? liveInputSize() : { camW: LIVE_W, camH: LIVE_H };
+    video.width  = { ideal: sz.camW };
+    video.height = { ideal: sz.camH };
   }
   return video;
 }
@@ -6283,8 +6297,8 @@ function buildRealtimeConnectOpts(gen) {
       // (canvas pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H). Kept in sync so any
       // SDK build that DOES honour them agrees with the throttle.
       fps: { ideal: LIVE_INFERENCE_FPS, max: LIVE_INFERENCE_FPS },
-      width: LIVE_W,
-      height: LIVE_H,
+      width: typeof liveInputSize === "function" ? liveInputSize().w : LIVE_W,
+      height: typeof liveInputSize === "function" ? liveInputSize().h : LIVE_H,
     },
     /* ── mirror: false, EXPLICITLY - never "auto", never omitted ────────────────────
        THE MIRROR IS OWNED BY EXACTLY ONE LAYER NOW: CSS, via
@@ -6672,8 +6686,9 @@ async function connectRealtime({ force = false } = {}) {
          receives a canvas capture pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H - the
          SDK's own fps/resolution caps are no-ops on Chromium (see the throttler note). */
       const camClone = new MediaStream(localStream.getVideoTracks().map((t) => t.clone()));
+      const inSize = typeof liveInputSize === "function" ? liveInputSize() : { w: LIVE_W, h: LIVE_H };
       inputThrottle = createThrottledInputStream(camClone, {
-        fps: LIVE_INFERENCE_FPS, width: LIVE_W, height: LIVE_H,
+        fps: LIVE_INFERENCE_FPS, width: inSize.w, height: inSize.h,
       });
       realtimeInput = inputThrottle.stream;
 
