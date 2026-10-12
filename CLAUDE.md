@@ -1523,9 +1523,29 @@ BRANCH"):
   the FRONT 201ms on order 0.09 and the back print sat on a three-quarter chest at 4.06-4.18s; 10-11 18:26 held 141ms on
   0.37. Replayed: 150ms / 91ms sooner, the outbound BACK and the swap count unchanged; before the side nothing changes.
   `return-side` §1.22, `head-frame` §3.6.
-- **The Worker is deployed from production's tree (be93232) + this engine** - its `lib/prompts.js` and `lib/api-version.js` are
-  main's, so main's room keeps reading /prompt and /size from the edge; the preview (TEST prompt restores, §2.45) reads them
-  from the origin.
+- **NOT DEPLOYED.** The Worker deploy (production's tree be93232 + this engine, so main's prompts and fingerprint stay the
+  edge's) was refused by the session's permission check, so the deployed Worker is still e55ef6c6 and these two rules run
+  nowhere yet. A real session through a local copy of the engine (the rig routing only the /orient socket) was lost to the rig
+  (b1: a 27s engine connect, the link dropping, 1 output fps) - the rules were never measured on the engine.
+- **THE LOWER BODY'S REAR PHOTO GOES WHOLE (53df320, app.js `referenceBackHint`, TEST sessions only):** the masked CHICAGO rear
+  photo (shorts floating in the top 40% of an empty backdrop) was drawn as a giant pair of shorts at the frame's edge through
+  the whole back view - s11 and s12 (2026-10-11, both). Same camera, the photo whole (b2, `mv4xjup1`): the plain back on the
+  back view, the stripes at the side, CHICAGO on the front, the shopper's own top untouched, no stall. `garment-box`.
+- **Measured 2026-10-12, five billed sessions (b1-b5, the rig; the deployed engine except b1):**
+  - shorts (b2): every frame right - see above.
+  - full look (b3, b4): b3's back composite was NEVER acknowledged (sent +1.82s, no ack in the 3.2s left) - the front outfit
+    stayed through the back view (CHICAGO on the back, no PEAK back print); b4's back acked in 266ms and the back view was right,
+    but the first 2.4s showed the front outfit composite ITSELF filling the frame - the engine drawing the reference, the
+    collage failure (§2.42's striped strip). s9 (2026-10-11) had neither.
+  - shirt (b5): a cropped tank top for the first 1.8s, then the PEAK tee; the back photo NEVER acknowledged (as b3) - the front
+    print on the back view; the front right at the end.
+  - **THE UNACKNOWLEDGED BACK** - 2 of 4 sessions that day, 0 of the 7 before (s9-s12, b2, b4, the owner's 10-11 sessions): the
+    turn's back is a primed repeat (the prime acked in ~270ms in both), nothing different on the room side around the send.
+    The room cannot route around it today: every image write goes through one wire queue (`sendCondition`), and the SDK waits
+    30s for `set_image_ack`, so a dropped set holds the FRONT return, the re-anchors and any re-send for the rest of the
+    window. A re-send after a give-up lands ~1.4s+ after the first send - on the return, the back on the front. Open.
+  - `trace` kb in a look's swap events is the TOP's photo size (traceSwapTimeline reads GARMENT_BACK/FRONT), not the
+    composite's - do not read a look's swap kb as what was sent.
 
 ## 3. Cross-file lockstep
 
