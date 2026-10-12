@@ -956,7 +956,21 @@ function engineAckHigh() {
   return _engineAckMs.length ? Math.max(..._engineAckMs) : null;
 }
 
-function sendCondition(label, send, { skipIfBusy = false } = {}) {
+/* THE WIRE IS NOT HELD BY A WRITE THE ENGINE IGNORED (2026-10-12, TEST sessions only - maybeSwap's ACK WATCHDOG). With
+   releaseAfterMs the queue moves on after that long even while this write still waits for its acknowledgement: the SDK waits
+   30s for a set_image_ack, and a dropped one held the FRONT return, every re-anchor and any re-send behind it for the rest
+   of the window (b3 / b5, 2026-10-12). The write itself still settles - or times out in the SDK - on its own. */
+let _swapWireReleaseMs = 0;
+const SWAP_ACK_RESEND_MS = 650;   // a primed repeat acks in ~270-470ms (TEST records 2026-10-11/12); past this it was dropped
+const SWAP_ACK_GIVEUP_MS = 800;   // ...and the re-send's own window, after which the swap failed
+/** The ack watchdog's first window in ms, or 0 (off): TEST sessions only, until the owner has measured it; ?ack_watch=0 off. */
+function swapAckWatchMs() {
+  try {
+    if (new URLSearchParams(location.search).get("ack_watch") === "0") return 0;
+  } catch (_) { return 0; }
+  return typeof traceEnabled === "function" && traceEnabled() ? SWAP_ACK_RESEND_MS : 0;
+}
+function sendCondition(label, send, { skipIfBusy = false, releaseAfterMs = 0 } = {}) {
   if (skipIfBusy && wireBusy()) {
     console.log(`[PEAR] ${label}: a conditioning write is already in flight - skipped`,
       "(background re-conditioning is re-offered on the next tick)");
@@ -968,8 +982,10 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   const epoch = wireEpoch;
   wireWrites++;
   const queuedAt = Date.now();
+  let releaseQueue = null;
+  const released = releaseAfterMs > 0 ? new Promise((res) => { releaseQueue = res; }) : null;
   const run = async () => {
-    if (epoch !== wireEpoch) return false;   // the session this write was for is gone
+    if (epoch !== wireEpoch) { if (releaseQueue) releaseQueue(); return false; }   // the session this write was for is gone
     isSettingCondition = true;
     /* A TEST record names any write that waited behind another (THE SWAP FLOW's timing - the 23:57 swaps took 411-546ms
        from the decision to the wire). typeof: runs standalone in suites. */
@@ -985,11 +1001,17 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
        the SDK. A queued write that never gets this far never held the wire. */
     wireInFlight++;
     const sentAt = Date.now();
+    const releaseTimer = releaseQueue ? setTimeout(() => {
+      if (typeof traceOrient === "function") traceOrient("wire-release", { label, ms: releaseAfterMs });
+      releaseQueue();
+    }, releaseAfterMs) : null;
     try {
       await send();
       if (ENGINE_PACE_LABELS.has(label)) noteEngineAck(Date.now() - sentAt);
       return true;
     } finally {
+      if (releaseTimer) clearTimeout(releaseTimer);
+      if (releaseQueue) releaseQueue();
       /* UNCONDITIONAL, unlike the epoch-scoped release beside it: the write was on the wire
          whether or not its session still exists, and it leaves the wire when it settles. */
       wireInFlight--;
@@ -999,7 +1021,7 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   /* Both handlers, so a REJECTED predecessor still releases the queue - a single failed
      set() must not wedge every later write for the life of the session. */
   const next = wireQueue.then(run, run);
-  wireQueue = next.then(() => {}, () => {});
+  wireQueue = (released ? Promise.race([next, released]) : next).then(() => {}, () => {});
   return next;
 }
 
@@ -4918,6 +4940,14 @@ function mockAckMs() {
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 && n <= 5000 ? n : 120;
 }
+/* ?mock_drop_ack=N (mock only): the Nth set() of the session is IGNORED - never applied, never acknowledged - the engine
+   behaviour b3/b5 recorded on 2026-10-12 (maybeSwap's ACK WATCHDOG). 0 = off. */
+function mockDropAckAt() {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("mock_drop_ack"); } catch (_) { return 0; }
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 && n < 100 ? n : 0;
+}
 
 /* How long the BILLED window runs. LIVE_DURATION_MS - the real 5s cap - in every real
    session, always; ?mock_live_ms= can only widen it, and only under ?mock_decart=1.
@@ -5218,8 +5248,14 @@ async function mockRealtimeConnect(inputStream, opts) {
     }, mockAckMs()));
   }
 
+  let setCalls = 0;
+  const dropAt = typeof mockDropAckAt === "function" ? mockDropAckAt() : 0;
   const session = {
-    set: (payload) => record("set", payload || {}),
+    set: (payload) => {
+      setCalls++;
+      if (dropAt > 0 && setCalls === dropAt) { MOCK_DECART_STATE.droppedSets = (MOCK_DECART_STATE.droppedSets || 0) + 1; return new Promise(() => {}); }
+      return record("set", payload || {});
+    },
     setPrompt: (prompt) => record("setPrompt", { prompt }),
     on: (event, handler) => { if (event === "error") session.__onError = handler; },
     getConnectionState: () => MOCK_DECART_STATE.connectionState,
@@ -10541,7 +10577,42 @@ function createOrientationWatcher() {
     const trace = typeof traceSwapTimeline === "function"
       ? traceSwapTimeline(next, predictive, !!heldGate, next === "back" ? GARMENT_BACK : GARMENT_FRONT) : null;
     try {
-      await applyActive();                       // one rtClient.set() - pre-cached Blob payload
+      /* THE ACK WATCHDOG (2026-10-12, TEST sessions only - swapAckWatchMs). b3 and b5 that day: the turn's BACK - the same
+         image primed at connect and acknowledged in ~270ms - was never acknowledged, the engine kept rendering the FRONT (its
+         print on the shopper's back) and the SDK held the wire for 30s, so the FRONT return never went out either. 2 of 4
+         sessions that day, 0 of the 7 before; nothing on the room's side differed around the send. A repeat reference acks in
+         ~270-470ms, so one not acknowledged in SWAP_ACK_RESEND_MS is sent again at once (the wire released - sendCondition's
+         releaseAfterMs - so the re-send is not queued behind the dropped one; the SDK matches set_image_acks in order, so the
+         re-send's ack settles either promise). Not acknowledged SWAP_ACK_GIVEUP_MS after that: the swap failed - the lock rolls
+         back to what is on the wire (the catch below), and an acknowledgement that still arrives afterwards re-sends the side
+         the lock now holds, so a late back can never stay on the shopper's front. ?ack_watch=0 is the room without it. */
+      const ackWatchMs = typeof swapAckWatchMs === "function" ? swapAckWatchMs() : 0;
+      if (ackWatchMs > 0) {
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        const send = () => { _swapWireReleaseMs = ackWatchMs; try { return applyActive(); } finally { _swapWireReleaseMs = 0; } };
+        const first = send();
+        first.catch(() => {});
+        let got = await Promise.race([first.then(() => "ack", () => "fail"), wait(ackWatchMs).then(() => "slow")]);
+        if (got === "slow" && !disposed) {
+          if (typeof traceOrient === "function") traceOrient("swap-resend", { next, ms: ackWatchMs });
+          const again = send();
+          again.catch(() => {});
+          got = await Promise.race([first.then(() => "ack", () => "fail"), again.then(() => "ack", () => "fail"),
+            wait(SWAP_ACK_GIVEUP_MS).then(() => "giveup")]);
+          if (got !== "ack") {
+            const late = () => {
+              if (disposed || autoOrientation === next) return;
+              if (typeof traceOrient === "function") traceOrient("swap-late-ack", { next, now: autoOrientation });
+              applyActive().catch(() => {});
+            };
+            first.then(late, () => {}); again.then(late, () => {});
+            if (typeof traceOrient === "function") traceOrient("swap-giveup", { next, ms: ackWatchMs + SWAP_ACK_GIVEUP_MS });
+            throw new Error("the render engine did not acknowledge the reference");
+          }
+        } else if (got === "fail") await first;   // its own error, for the catch below
+      } else {
+        await applyActive();                     // one rtClient.set() - pre-cached Blob payload
+      }
       if (heldGate) heldGate.unhold("swap acknowledged");
       if (trace) trace.acknowledged();
       /* Decart's render of the new reference is still to come - the freeze watchdog must not read that
@@ -12901,6 +12972,8 @@ async function referenceImageFor(item, activeImg = activeImageOf(item), out = {}
 
 async function applyGarment(item) {
   if (!rtClient) throw new Error("not connected");
+  /* An orientation swap's write under the ACK WATCHDOG (maybeSwap) - read before the first await. typeof: sandboxed. */
+  const wireRelease = typeof _swapWireReleaseMs === "number" ? _swapWireReleaseMs : 0;
 
   /* THE "MIXING" BUG. Snapshot the angle ONCE, synchronously, right here - before any
      async work below. referenceImageFor() can await a real fetch/decode, or (the
@@ -13234,7 +13307,7 @@ async function applyGarment(item) {
      prompt-only-flip/side-profile run this function standalone against a fixed sandbox
      global list, where a bare reference would throw ReferenceError. */
   const condBefore = typeof sampleRenderSignature === "function" ? sampleRenderSignature() : null;
-  await sendCondition("applyGarment", () => rtClient.set(payload));
+  await sendCondition("applyGarment", () => rtClient.set(payload), wireRelease > 0 ? { releaseAfterMs: wireRelease } : undefined);
   /* Stamped only AFTER set() resolves, which is what makes a retry correct: applyActive()
      re-enters this function on a rejection, and if these had been written optimistically
      the second attempt would see its own reference "already on the wire" and take the
@@ -13401,6 +13474,8 @@ async function applyActive() {
  */
 async function applyLook(top, bottom) {
   if (!rtClient) throw new Error("not connected");
+  /* An orientation swap's write under the ACK WATCHDOG (maybeSwap) - read before the first await. typeof: sandboxed. */
+  const wireRelease = typeof _swapWireReleaseMs === "number" ? _swapWireReleaseMs : 0;
 
   // Gallery sync: resolve each half against the active angle first.
   /* In AI Auto, each half's photo for the side the shopper shows (lookHalfFor - the validated distinct back on the back),
@@ -13517,7 +13592,7 @@ async function applyLook(top, bottom) {
       // Same unconditional image as the enriched payload above - never a clearing set().
       await rtClient.set({ prompt, enhance: false, image: primaryImage });
     }
-  });
+  }, wireRelease > 0 ? { releaseAfterMs: wireRelease } : undefined);
   /* Keep the reference tracker honest: a look sends its OWN stitched image, so whatever
      applyGarment() last recorded is no longer what the model holds. Without this, going
      look → single garment could match a stale lastSentImageRef and take the prompt-only

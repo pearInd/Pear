@@ -578,7 +578,8 @@ console.log("\n── §7 DETECTION IS LOCAL; THE SWAP TIMELINE IS MEASURED ─�
     /first rendered frame presented after the ack/.test(trace) && /local \|yaw\|/.test(trace));
   check("...and maybeSwap() drives it around the one set() it times",
     /const trace = typeof traceSwapTimeline === "function"/.test(SRC) &&
-    /await applyActive\(\);[^\n]*\n\s*if \(heldGate\) heldGate\.unhold\("swap acknowledged"\);\s*\n\s*if \(trace\) trace\.acknowledged\(\);/.test(SRC));
+    /* (2026-10-12) the shopper's path is still one await applyActive(); a TEST session's ACK WATCHDOG wraps the same set(). */
+    /\} else \{\n\s*await applyActive\(\);[^\n]*\n\s*\}\n\s*if \(heldGate\) heldGate\.unhold\("swap acknowledged"\);\s*\n\s*if \(trace\) trace\.acknowledged\(\);/.test(SRC));
 }
 
 console.log("\n── §8 A LIVE LOG MUST SAY WHY THE PREDICTION DID OR DID NOT FIRE ──");

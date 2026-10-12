@@ -1544,6 +1544,13 @@ BRANCH"):
     The room cannot route around it today: every image write goes through one wire queue (`sendCondition`), and the SDK waits
     30s for `set_image_ack`, so a dropped set holds the FRONT return, the re-anchors and any re-send for the rest of the
     window. A re-send after a give-up lands ~1.4s+ after the first send - on the return, the back on the front. Open.
+  - **THE ACK WATCHDOG (the answer, TEST sessions only - `maybeSwap`, `sendCondition`'s `releaseAfterMs`, `ack-watchdog`):** an
+    orientation swap not acknowledged in SWAP_ACK_RESEND_MS (650; a primed repeat acks in ~270-470ms) is sent again at once,
+    the wire released so the re-send is not queued behind the dropped one; not acknowledged SWAP_ACK_GIVEUP_MS (800) later,
+    the swap fails and the lock rolls back to what is on the wire; an ack that still arrives re-sends the lock's side, so a
+    late back never stays on a front. `?ack_watch=0` off. Proven in the mock (`?mock_drop_ack=N`, the session's Nth set()
+    ignored - `PEAR_VISUAL_DROP_ACK=4`): without it the BACK never reaches the wire (the agent times out at 180 degrees -
+    b3/b5 exactly); with it (`PEAR_VISUAL_TRACE=1`) the re-send lands the back at 90 degrees, the front returns, 40/40.
   - `trace` kb in a look's swap events is the TOP's photo size (traceSwapTimeline reads GARMENT_BACK/FRONT), not the
     composite's - do not read a look's swap kb as what was sent.
 

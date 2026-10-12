@@ -394,7 +394,7 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
     unguarded.length === 0,
     unguarded.join("\n        ") || "");
   check("...with the mutex serialising a user-driven write rather than dropping it",
-    /function sendCondition\(label, send, \{ skipIfBusy = false \} = \{\}\)/.test(SRC) &&
+    /function sendCondition\(label, send, \{ skipIfBusy = false, releaseAfterMs = 0 \} = \{\}\)/.test(SRC) &&
     /const next = wireQueue\.then\(run, run\);/.test(SRC),
     "a queue that only survives a RESOLVED predecessor wedges on the first failed send");
   /* ── AND THE COUNTER SURVIVES A SESSION BOUNDARY ────────────────────────────

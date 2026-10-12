@@ -690,7 +690,8 @@ console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
      the wire bookkeeping must not have been written optimistically - otherwise attempt
      two sees its own reference "already on the wire" and retries a failed image upload
      by not uploading the image. */
-  const setIdx = apply.indexOf('sendCondition("applyGarment", () => rtClient.set(payload));');
+  /* (2026-10-12) the write may carry the ACK WATCHDOG's wire release - same set(), same place. */
+  const setIdx = apply.indexOf('sendCondition("applyGarment", () => rtClient.set(payload)');
   const stampIdx = apply.indexOf("lastSentImageRef = imageRef || null;");
   check("the wire bookkeeping is stamped only AFTER set() resolves, so a retry re-uploads",
     setIdx !== -1 && stampIdx > setIdx, `set@${setIdx} stamp@${stampIdx}`);

@@ -128,6 +128,9 @@ function roomUrl(base) {
      beside the frames: every orientation tick, swap and link event of the harness's 360. Off
      unless asked, so the standard gate's URL is unchanged. */
   if (process.env.PEAR_VISUAL_TRACE) q.set("pear_trace", "1");
+  /* The engine ignoring one set() (2026-10-12) - mock_drop_ack=N drops the session's Nth set(); with PEAR_VISUAL_TRACE the
+     room's ACK WATCHDOG is on (TEST sessions only). */
+  if (process.env.PEAR_VISUAL_DROP_ACK) q.set("mock_drop_ack", process.env.PEAR_VISUAL_DROP_ACK);
   return `${base}/fitting-room/index.html?${q}`;
 }
 
