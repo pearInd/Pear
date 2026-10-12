@@ -7543,7 +7543,17 @@ function referenceBackHint(url) {
   for (const it of items) {
     if (!it) continue;
     const back = typeof distinctBackOf === "function" ? distinctBackOf(it) : null;
-    if (back && sameImage(back, url)) return { region: isBottomsGarment(it) ? "bottom" : "top" };
+    if (back && sameImage(back, url)) {
+      /* THE LOWER BODY'S REAR PHOTO GOES WHOLE (2026-10-12, TEST sessions only until the owner has measured it). The CHICAGO
+         shorts' rear photo, masked, is a pair of shorts floating in the top 40% of an empty backdrop; through a full turn in the
+         owner's hallway the engine drew it as a GIANT pair of shorts at the frame's left edge for the whole back view - s11 and
+         s12 (2026-10-11, the mask on, a prompt A/B between them: both). The same camera with the photo whole (b2, record
+         mv4xjup1): the shorts' plain back on the back view, the stripes at the side, CHICAGO on the front, nothing drawn into
+         the room, no stall. The mask was made for a TOP's rear photo (the store's model, head and arms - §2.38); a bottom's is
+         legs and shoes, which the front photo carries too. */
+      if (isBottomsGarment(it) && typeof traceEnabled === "function" && traceEnabled()) return null;
+      return { region: isBottomsGarment(it) ? "bottom" : "top" };
+    }
   }
   return null;
 }

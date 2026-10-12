@@ -190,6 +190,19 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
   const pants = make(async (u) => { asked.push(u); return { ok: true, json: async () => ({ band: null }) }; }, { ...item, bottoms: true });
   await pants.referenceBackBand(item.back);
   check("a bottoms garment asks for the lower body", /region=bottom/.test(asked[0]));
+  /* THE LOWER BODY'S REAR PHOTO GOES WHOLE in a TEST session (2026-10-12): nothing asked, nothing painted. A shopper's: as above. */
+  const makeT = (test, it) => new Function("fetch", "location", "activeItem", "resolveLook", "distinctBackOf", "sameImage",
+    "isBottomsGarment", "canonicalImageUrl", "abbrevImg", "AbortSignal", "console", "traceEnabled",
+    bandBlock + "\nreturn { referenceBackBand };")(
+    async (u) => { asked.push(u); return { ok: true, json: async () => ANSWER }; }, { origin: "https://app.example", search: "" }, it, () => null,
+    (x) => x.back || null, (a, b) => String(a).split("?")[0] === String(b).split("?")[0], (x) => x.bottoms === true,
+    (u) => String(u).split("?")[0], (u) => String(u).slice(0, 40), { timeout: () => undefined }, { log() {}, warn() {} }, () => test);
+  asked = [];
+  const tPants = makeT(true, { ...item, bottoms: true }), tTee = makeT(true, item), sPants = makeT(false, { ...item, bottoms: true });
+  check("a TEST session's bottoms: the rear photo goes whole - nothing asked", tPants.referenceBackBand(item.back) === null && asked.length === 0);
+  await tTee.referenceBackBand(item.back); await sPants.referenceBackBand(item.back);
+  check("...a TEST top is still masked, and a shopper's bottoms still asked for the lower body",
+    asked.length === 2 && /region=top/.test(asked[0]) && /region=bottom/.test(asked[1]), JSON.stringify(asked));
 
   const rowsFn = new Function(fnSrc("function refMaskRows(band, h) {") + "\nreturn refMaskRows;")();
   const r = rowsFn({ y0: 0.3419, y1: 0.8954 }, 1499);
