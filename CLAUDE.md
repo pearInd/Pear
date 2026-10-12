@@ -1512,6 +1512,21 @@ BRANCH"):
   rendered as a giant pair of shorts at the frame's left edge for ~1s of the back view - in s11 AND in the control s12, so
   it is on the shopper's wire today. s3 (another camera clip) did not show it. Not yet seen on a real body.
 
+### 2.46 The rules not yet measured ride on TEST sessions; the chest past the side goes now (2026-10-12)
+"I can't measure now - measure yourself, every frame front and back, shirt, shorts and the full look, 80 credits."
+- **`?test_rules=1` (both `ORIENT_KNOB_KEYS`):** the room adds it in `orientKnobs()` when `traceEnabled()` (store key TEST);
+  `lib/orient-engine.js` `ORIENT_TEST_RULES` gates THE HEAD OUT OF FRAME (§2.39 - production rolled it back with 2204800d) and
+  THE CHEST IS PAST THE SIDE. Without the knob the engine is a79b500's - Worker e55ef6c6's: 2,080 replayed sessions (13
+  recorded 360s + s3 x 4 speeds x 4 phases x 5 acks x headOut on/off), every action of every tick, 0 differences.
+- **THE CHEST IS PAST THE SIDE - IT GOES NOW (`sideNow`):** a projected return whose reading is already past the side
+  (order >= SIDE_FIRE) goes out at RETURN_MIN_DELAY_MS instead of waiting for its aim. The owner's 10-10 19:15 session held
+  the FRONT 201ms on order 0.09 and the back print sat on a three-quarter chest at 4.06-4.18s; 10-11 18:26 held 141ms on
+  0.37. Replayed: 150ms / 91ms sooner, the outbound BACK and the swap count unchanged; before the side nothing changes.
+  `return-side` §1.22, `head-frame` §3.6.
+- **The Worker is deployed from production's tree (be93232) + this engine** - its `lib/prompts.js` and `lib/api-version.js` are
+  main's, so main's room keeps reading /prompt and /size from the edge; the preview (TEST prompt restores, §2.45) reads them
+  from the origin.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

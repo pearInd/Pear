@@ -10853,7 +10853,7 @@ function createOrientationWatcher() {
    parameters, and no others, are forwarded - the tuning knobs, never the garment, the
    store key or anything else on the page URL. */
 const ORIENT_KNOB_KEYS = ["pose_pass", "post_peak", "early_turn", "early_turn_return", "early_turn_slow",
-  "early_turn_speed", "early_turn_loss", "predict_back", "return_side", "lat_lead", "back_gate", "lead_project"];
+  "early_turn_speed", "early_turn_loss", "predict_back", "return_side", "lat_lead", "back_gate", "lead_project", "test_rules"];
 const ORIENT_LINK_STEP_TIMEOUT_MS = 1200;   // a healthy link answers in ~10ms; past this, prove it with a ping
 const ORIENT_LINK_STEP_HARD_MS = 4000;      // past this a reply is abandoned and the link replaced regardless
 const ORIENT_LINK_RETRY_MS = 3000;
@@ -10877,6 +10877,8 @@ function orientKnobs() {
     const q = new URLSearchParams(location.search);
     for (const k of ORIENT_KNOB_KEYS) { const v = q.get(k); if (v !== null) out[k] = v; }
   } catch (_) { /* no location - defaults */ }
+  /* A TEST session asks the engine for the rules not yet measured (lib/orient-engine.js ORIENT_TEST_RULES); a shopper's never. */
+  if (!("test_rules" in out) && typeof traceEnabled === "function" && traceEnabled()) out.test_rules = "1";
   return out;
 }
 

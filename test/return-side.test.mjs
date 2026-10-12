@@ -33,6 +33,7 @@ const POSES = JSON.parse(readFileSync(new URL("./torso-twist-poses.json", import
 const S3 = JSON.parse(readFileSync(new URL("./return-side-s3.json", import.meta.url), "utf8"));
 const U1 = JSON.parse(readFileSync(new URL("./return-side-u1.json", import.meta.url), "utf8"));
 const PACE = JSON.parse(readFileSync(new URL("./return-side-pace.json", import.meta.url), "utf8"));
+const SIDENOW = JSON.parse(readFileSync(new URL("./return-side-sidenow.json", import.meta.url), "utf8"));
 const E = await import("../lib/orient-engine.js");
 
 let fails = 0;
@@ -219,6 +220,49 @@ console.log("\n── §1 the trigger ──");
     { vote: null, lock: "back", yawAbs: 20, at: 480, ord: -0.7, ordAt: 480 },    // ...and further
   ];
   check("§1.21 an order falling back toward the back never fires", !paced(750, true, falling).some((o) => o.fire));
+}
+
+console.log("\n── §1.22 THE CHEST IS PAST THE SIDE - IT GOES NOW (2026-10-12, TEST sessions only) ──");
+{
+  /* The owner's two sessions, their records' own ticks through the whole engine, the lock following the sends. Without the
+     knob it is production's engine (a79b500, Worker e55ef6c6): the FRONT exactly where the records say it went out. */
+  const replayRec = (rec, knobs) => {
+    const eng = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
+    let lock = "front"; const sent = [];
+    for (const k of rec.ticks) {
+      const smp = { t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0, yawAbs: k.y,
+        yawAt: k.y === null ? 0 : k.t - (k.ya ?? 0), lostAt: k.la === null ? 0 : k.t - k.la, ord: k.o, ordAt: k.o === null ? 0 : k.t - (k.oa ?? 0),
+        lat: k.lt, latHi: k.lh, lock, profile: !!k.p, dualView: true };
+      for (const a of eng.step(E.sanitizeOrientSample(smp))) if (a.do === "swap" && a.next !== lock) {
+        sent.push({ next: a.next, at: k.t - rec.reveal + (a.delay || 0), delay: a.delay || 0, o: k.o }); lock = a.next; }
+    }
+    return sent;
+  };
+  const S = SIDENOW.sessions;
+  const p1915 = replayRec(S.mv2lhqwq, {}), t1915 = replayRec(S.mv2lhqwq, { test_rules: "1" });
+  const p1826 = replayRec(S.mv3z5orq, {}), t1826 = replayRec(S.mv3z5orq, { test_rules: "1" });
+  const fr = (s) => s.find((x) => x.next === "front");
+  check("§1.22.1 production's engine, as recorded: 10-10 19:15 FRONT on the order 0.09 (past the side) held 201ms; 10-11 18:26 on 0.37, 141ms",
+    fr(p1915) && fr(p1915).o === 0.09 && fr(p1915).delay === 201 && fr(p1826) && fr(p1826).o === 0.37 && fr(p1826).delay === 141,
+    JSON.stringify({ p1915, p1826 }));
+  check("§1.22.2 a TEST session: the same reading, the FRONT out at the minimum 50ms - 150ms and 91ms sooner",
+    fr(t1915).o === 0.09 && fr(t1915).delay === 50 && fr(p1915).at - fr(t1915).at === 151 &&
+    fr(t1826).o === 0.37 && fr(t1826).delay === 50 && fr(p1826).at - fr(t1826).at === 91, JSON.stringify({ t1915, t1826 }));
+  check("§1.22.3 ...the outbound BACK untouched, and no more swaps", JSON.stringify(t1915.filter((x) => x.next === "back")) === JSON.stringify(p1915.filter((x) => x.next === "back")) &&
+    JSON.stringify(t1826.filter((x) => x.next === "back")) === JSON.stringify(p1826.filter((x) => x.next === "back")) && t1915.length === p1915.length && t1826.length === p1826.length);
+  /* Before the side nothing changes: the projection's trigger alone, a return whose reading before the side would be held. */
+  const before = (sideNow) => E.createOrientEngine(E.sanitizeOrientKnobs({})).internals.makeEarlyTurnTrigger(
+    40, 45, 50, 50, 10, [450, 960], 20, 0.2, true, true, sideNow);
+  const legs = [
+    { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1, ordAt: 0, lat: 330 },
+    { vote: "back", lock: "back", yawAbs: 10, at: 250, ord: -0.97, ordAt: 250, lat: 330 },
+    { vote: null, lock: "back", yawAbs: 60, at: 500, ord: -0.3, ordAt: 500, lat: 330 },
+  ];
+  const a = run(before(false), legs), b = run(before(true), legs);
+  check("§1.22.4 a reading still before the side (-0.3) decides the same with and without it", JSON.stringify(a) === JSON.stringify(b), JSON.stringify({ a, b }));
+  check("§1.22.5 the room asks for it only in a TEST session (orientKnobs, typeof-guarded traceEnabled), and both knob lists carry test_rules",
+    /if \(!\("test_rules" in out\) && typeof traceEnabled === "function" && traceEnabled\(\)\) out\.test_rules = "1";/.test(APP) &&
+    E.ORIENT_KNOB_KEYS.includes("test_rules") && /"lead_project", "test_rules"\]/.test(APP));
   /* PREDICTIVE BACK, gated on the order: a FRONT lock whose |yaw| passed the side and is falling is either a body
      passing to the back (the order on the back side) or one coming round to the lens (the order on the front). */
   const I = E.createOrientEngine(E.sanitizeOrientKnobs({})).internals;

@@ -55,8 +55,9 @@ for (const [clip, rows] of Object.entries(FX.headroom)) {
 }
 
 /* A record's ticks through the engine, the lock following its swaps at the send (as the room does). */
-function replay(rec, { headOut = false, from = 0 } = {}) {
-  const eng = E.createOrientEngine(E.sanitizeOrientKnobs({}));
+/* THE HEAD OUT OF FRAME rides on ?test_rules=1 since 2026-10-12 (TEST sessions only - lib/orient-engine.js ORIENT_TEST_RULES). */
+function replay(rec, { headOut = false, from = 0, knobs = { test_rules: "1" } } = {}) {
+  const eng = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
   let lock = "front"; const sent = [];
   for (const k of rec.ticks) {
     const smp = { t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
@@ -85,11 +86,14 @@ console.log("\n── §3 the reported session, from its own record ──");
   check("§3.4 ...the FRONT goes out on the way round, at the side view (|order| 0.17, |yaw| 83 at 2.69s)",
     front && front.t === 2690 && Math.abs(front.o) <= 0.25 && front.y >= 45, JSON.stringify(front));
   check("§3.5 ...and nothing after it: two swaps for the whole turn", hl.length === 2, JSON.stringify(hl));
+  check("§3.6 a shopper's session (no test_rules): headOut is ignored - the engine decides as production's does",
+    JSON.stringify(replay(rec, { headOut: true, knobs: {} })) === JSON.stringify(replay(rec, { knobs: {} })) &&
+    JSON.stringify(replay(rec, { knobs: {} })) === JSON.stringify(asSent), JSON.stringify(replay(rec, { headOut: true, knobs: {} })));
 }
 
 console.log("\n── §4 scripted turns, headless ──");
 const run = (readings) => {
-  const eng = E.createOrientEngine(E.sanitizeOrientKnobs({}));
+  const eng = E.createOrientEngine(E.sanitizeOrientKnobs({ test_rules: "1" }));
   let lock = "front"; const sent = [];
   for (const r of readings) {
     const smp = { t: r.t, vote: Math.abs(r.o) >= 0.25 ? (r.o > 0 ? "front" : "back") : null, poseVoted: Math.abs(r.o) >= 0.25,
@@ -136,8 +140,8 @@ console.log("\n── §5 untouched without the flag ──");
   const rec = FX.record;
   const a = replay(rec), b = replay(rec, { headOut: false });
   check("§5.2 a session that never sends it swaps exactly as before", JSON.stringify(a) === JSON.stringify(b));
-  check("§5.3 step() calls the rule typeof-guarded (suites slice it out alone - CLAUDE.md §2.6/§2.7)",
-    /function step\(s\) \{\n\s*\/\*[^*]*\*\/\n\s*if \(typeof headlessReading === "function"\) s = headlessReading\(s\);/.test(ENG));
+  check("§5.3 step() calls the rule typeof-guarded (suites slice it out alone - CLAUDE.md §2.6/§2.7), and only with the TEST knob",
+    /function step\(s\) \{\n\s*\/\*[^*]*\*\/\n\s*if \(typeof headlessReading === "function" && typeof ORIENT_TEST_RULES !== "undefined" && ORIENT_TEST_RULES\) s = headlessReading\(s\);/.test(ENG));
   check("§5.4 the room sends it only when true, and a TEST record carries it (ho)",
     /\.\.\.\(typeof _poseHeadOut !== "undefined" && _poseHeadOut === true \? \{ headOut: true \} : \{\}\),/.test(APP) &&
       /ho: s\.headOut === true \? 1 : undefined,/.test(APP));
