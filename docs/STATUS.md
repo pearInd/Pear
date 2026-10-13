@@ -11,7 +11,7 @@ _Last updated: 2026-10-11 · REVERTED IN PRODUCTION at the owner's request ("it 
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Suggested size when no exact size fits (183/73 "no size" report) | done on the branch, **PR waiting on your review**; then a `wrangler deploy` | `claude/project-thread-hmjoir` |
+| Suggested size when no exact size fits (183/73 "no size" report) | merged ([PR #2](https://github.com/pearInd/Pear/pull/2), `d69562d`); follow-up [PR #3](https://github.com/pearInd/Pear/pull/3) (152/77 -> M; everyone between S and XXL gets a size); then a `wrangler deploy` | main + branch |
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
 | Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch after two more review rounds (54 findings fixed), **[PR #1](https://github.com/pearInd/Pear/pull/1) waiting on your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
@@ -102,11 +102,14 @@ _Last updated: 2026-10-11 · REVERTED IN PRODUCTION at the owner's request ("it 
 ---
 
 ## Suggested size (2026-10-13)
-- **Stage:** done on `claude/project-thread-hmjoir`, PR waiting on your review. CLAUDE.md §2.45.
+- **Stage:** merged to main (`d69562d`). Follow-up the same day: 152/77 was suggested XXL (the store chart decided
+  from an estimated chest) - the suggestion now weighs width over height and the store chart no longer decides it
+  (152/77 -> M); and, by the owner's rule, every body inside the chart gets a size - only bigger than the largest
+  or smaller than the smallest gets none (160/100 -> XL). PR #3, merged with the owner's approval. CLAUDE.md §2.45.
 - A body in a gap between chart rows (183/73, short or slim adults) got "no match" - 65% of realistic adults on the
   letters chart. Now it gets the nearest size, labelled "No exact size for you. Suggested size:", and can continue.
-  Far bodies (135/75) and bodies above the largest size still get "no size".
-- **Waiting on you:** review and merge the PR; then `cd cloudflare/orient && npx wrangler deploy` (the Worker answers /size).
+  Bodies smaller than the smallest size (155/50, 135/75) and above the largest still get "no size".
+- **Waiting on you:** `cd cloudflare/orient && npx wrangler deploy` (the Worker answers /size).
 
 ## Children's sizing
 - **Stage:** done (core).
