@@ -1480,6 +1480,23 @@ behaviour changed.
   through the sink in ~40ms. Sampled: hover 1 -> 1.025 in ~320ms; quick tap 0.955 x 0.925 at ~200ms, out to 1.02 x 1.04, rest
   by ~740ms; a tapped button reads identical before and after (no sticky hover).
 
+### 2.45 The suggested size - a body in a gap of the chart (2026-10-13)
+"183cm/73kg says there is no size - absurd. When there is no exact size, suggest the closest one and say it is a
+suggestion." The genuine-fit rule (height AND weight inside one row) left gaps between rows: the letters chart answered
+"no match" for 65% of realistic adults (150-200cm, BMI 18-32) - short and tall-slim shoppers above all.
+- **THE SUGGESTED SIZE (`computeSizeVerdict()`, `lib/sizing.js`):** a body that fits no row of either chart is offered its
+  NEAREST row by `coreHwPenalty()` when it is within `APPROX_MAX_PENALTY` (40 = 20 cm/kg out in total), the verdict says
+  `approx: true`, and the room labels it `resultLabelApprox` ("No exact size for you. Suggested size:"); Continue opens.
+  The nearest chart says adult or child first; an adult-only product then asks the adult chart alone (a petite adult);
+  a kids-only product never gets a size for a body nearest the adult chart (no match, as before). A body that fits ONLY
+  a kids row on an adult-only product (169/53 - 2kg under S) gets its adult row within `APPROX_CROSS_MAX_PENALTY` (20).
+- **What did not move:** a body above the chart's ceiling is still "overflow" (no bigger size), a body far from every row
+  (135/75) still "no match"; `bodyCategory` is never set from a suggestion (it stays or becomes null), so the kids/adult
+  guard never blocks on a guess (§2.5). Proven against the previous module over 1,675,359 verdicts: 155,364 changed,
+  every one "nomatch" -> "ok" + approx; no "ok", "overflow" or "invalid" moved. `size-fit-pin` re-pinned.
+- Letters chart after it: 2.5% of those adults without a size (was 65%), all of them overflow or far from every row.
+  **Worker deploy** (`lib/api-version.js` changed) - until then the room takes /size from the origin.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

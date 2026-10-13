@@ -282,14 +282,26 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
     overflowsBoth.els.sizeResult.innerText === "sizeResultOverflow" &&
     overflowsBoth.els["btn-next-screen"].disabled === true);
 
-  /* The real GAP-BETWEEN-CHARTS case (not an overflow) must still say the GENERIC
-     no-match copy, distinguishing "no bigger size exists" from "this body sits in
-     neither chart's band". */
+  /* A body in a GAP between chart rows (176/62: too tall for 38, too light for 40) - since
+     2026-10-13 (THE SUGGESTED SIZE, lib/sizing.js) it is offered the NEAREST row, labelled
+     as a suggestion, and may continue. Before, it read "no match" - the owner's report. */
   const genuineGap = harness({ height: 176, weight: 62, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
   await genuineGap.api.calculateSize();
-  check("a body in the genuine gap between chart rows (not above the ceiling) gets the\n" +
-        "        GENERIC no-match copy, not the overflow copy",
-    genuineGap.els.sizeResult.innerText === "sizeResultNoMatch", genuineGap.els.sizeResult.innerText);
+  check("a body in a gap between chart rows gets the NEAREST size, labelled as a\n" +
+        "        suggestion (resultLabelApprox), and Continue is enabled",
+    genuineGap.api.getUserSize() === "40" && genuineGap.els.resultLabel.innerText === "resultLabelApprox" &&
+    genuineGap.els["btn-next-screen"].disabled === false,
+    { size: genuineGap.api.getUserSize(), label: genuineGap.els.resultLabel.innerText });
+
+  /* ...but a body FAR from every row (and not above the ceiling) still gets the GENERIC
+     no-match copy, distinguishing "no bigger size exists" from "this body sits in no
+     chart's band". */
+  const farGap = harness({ height: 140, weight: 70, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
+  await farGap.api.calculateSize();
+  check("a body far from every chart row (not above the ceiling) gets the GENERIC\n" +
+        "        no-match copy, not the overflow copy, and Continue stays locked",
+    farGap.els.sizeResult.innerText === "sizeResultNoMatch" && farGap.els["btn-next-screen"].disabled === true,
+    farGap.els.sizeResult.innerText);
 
   /* SNAP TO THE PRODUCT'S OWN LIST, EU chart, end to end. NOTE: this used to run against
      a "26-40" style list, back when isAdultPantsProduct() was widened to treat ANY
@@ -734,17 +746,21 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
     const h = harness(172, 60);   // fits ZARA-S and CHILD-18, but NO ADULT_PANTS_SIZE_CHART row
     h.api.setGarment(["36", "38", "40", "42", "44", "46"], "uncertain");   // product A: pants, genuine gap for this body
     await h.api.calculateSize();
-    check("product A (pants, genuine chart gap for 172/60): resolves 'child' and a\n" +
-          "        real 'no match' on ITS OWN candidate search - not itself a bug",
-      h.api.getBodyCategory() === "child" && h.api.getSizeCategory() === null,
-      { bodyCategory: h.api.getBodyCategory(), sizeCategory: h.api.getSizeCategory() });
+    /* Since 2026-10-13 (THE SUGGESTED SIZE): 172/60 fits only CHILD-18 on this product, and
+       sits 2cm from EU 38, so it is offered 38 as a suggestion and its body category is left
+       null (ambiguous - a slim adult or a tall teen; the guard never blocks on that). Before,
+       it read 'child' - the stale value this scenario was built around can no longer form. */
+    check("product A (pants, 172/60 fits only CHILD-18 here): offered EU 38 as a\n" +
+          "        suggestion, body category null - no 'child' to go stale",
+      h.api.getBodyCategory() === null && h.api.getSizeCategory() === "adult" && h.api.getUserSize() === "38",
+      { bodyCategory: h.api.getBodyCategory(), sizeCategory: h.api.getSizeCategory(), size: h.api.getUserSize() });
 
     // Shopper switches, mid-session, to an unrelated genuinely-adult letter product.
     // setActiveItem() does not call calculateSize() - simulated by NOT calling it here.
     h.api.setGarment(["S", "M"], "adult");
-    check("...(stale) body category from product A leaks in: still 'child' right after\n" +
-          "        the swap, before anything recomputes - the second reported failure",
-      h.api.getBodyCategory() === "child");
+    check("...and right after the swap, before anything recomputes, nothing stale blocks\n" +
+          "        (body category still null, no mismatch)",
+      h.api.getBodyCategory() === null && h.api.hasSizeCategoryMismatch() === false);
 
     // goLive()'s fix, again: re-run calculateSize() right before checking.
     await h.api.calculateSize();

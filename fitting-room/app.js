@@ -2302,6 +2302,9 @@ function applySizeVerdict(verdict) {
   if (verdict.storeChartLog && typeof logStoreChartLines === "function") logStoreChartLines(verdict.storeChartLog);
   if (verdict.storeChartDiag && typeof logStoreChartDiag === "function") logStoreChartDiag(verdict.storeChartDiag);
   sizeResult.innerText = formatSizeLabel(bestSize);
+  /* THE SUGGESTED SIZE (lib/sizing.js, 2026-10-13): no row fits this body exactly, so the
+     size is the nearest one - said plainly, never presented as an exact fit. */
+  if (verdict.approx) resultLabel.innerText = t("resultLabelApprox");
   resultBox.classList.add("show");
   if (resultActions) resultActions.classList.add("is-ready");
   /* STOCK IS PRESENTATION ONLY - it never moves the recommendation. bestSize is still
