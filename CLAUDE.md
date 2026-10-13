@@ -1496,6 +1496,12 @@ suggestion." The genuine-fit rule (height AND weight inside one row) left gaps b
   every one "nomatch" -> "ok" + approx; no "ok", "overflow" or "invalid" moved. `size-fit-pin` re-pinned.
 - Letters chart after it: 2.5% of those adults without a size (was 65%), all of them overflow or far from every row.
   **Worker deploy** (`lib/api-version.js` changed) - until then the room takes /size from the origin.
+- **The same day, "152cm/77kg is suggested XXL":** the store chart's decision (§2.5b) read an ESTIMATED 110cm chest and
+  said XXL. Now (1) the store chart never decides a suggestion (`approx ? null : storeChartRecommendation(...)`), and
+  (2) the nearest row is measured by `approxPenalty()` - 1 per cm of height, 2 per kg of weight (width is what has to
+  close; height mostly moves the length) - never past `APPROX_MAX_HEIGHT_MISS` (20cm), a tie to the nearer height.
+  152/77 -> M, 183/73 -> M, 135/75 still no match. Against the first cut: 59,409 verdicts changed, every one a
+  suggestion (which size, or 84 now "no match"); no exact fit moved. Letters chart: 2.1% of adults without a size.
 
 ## 3. Cross-file lockstep
 

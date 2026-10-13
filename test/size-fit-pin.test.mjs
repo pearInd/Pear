@@ -41,8 +41,13 @@ import { createHash } from "node:crypto";
    the previous lib/sizing.js: 155,364 of 1,675,359 verdicts changed, every one from
    "nomatch" to "ok" + approx (118,578 adult, 31,245 child, 5,541 child-only bodies offered
    an adult row on an adult-only product, their body category now null). No "ok", "overflow"
-   or "invalid" verdict moved. Previous pin: 22645f11f7c584753a2902b0326266f22ca4df4e5d92ec6b989bf2636fa7e705. */
-const PINNED = "ed7e645556f00ed3d5bf5180e1c7e2085f0930a9e85d3aabfe90587d30e0cf84";
+   or "invalid" verdict moved. Previous pin: 22645f11f7c584753a2902b0326266f22ca4df4e5d92ec6b989bf2636fa7e705.
+   RE-PINNED AGAIN the same day (152cm/77kg was suggested XXL): the suggestion counts height
+   half as much as weight, never past 20cm of height, and the store chart no longer decides a
+   suggestion. Against the first cut: 59,409 verdicts changed - only suggested sizes and
+   which bodies get one (84 now "nomatch", 22,986 newly suggested); no exact fit moved.
+   Previous pin: ed7e645556f00ed3d5bf5180e1c7e2085f0930a9e85d3aabfe90587d30e0cf84. */
+const PINNED = "d71819063db03f80efdf60169cc7d33f48d6f0eb202d11d4073b0324684d0d9e";
 const PRODUCT_PINNED = "b2d6cf0b9403b742a60787c397097125ca23cb062cdd2e22fd6a2c9d805a16a4";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");

@@ -296,7 +296,7 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
   /* ...but a body FAR from every row (and not above the ceiling) still gets the GENERIC
      no-match copy, distinguishing "no bigger size exists" from "this body sits in no
      chart's band". */
-  const farGap = harness({ height: 140, weight: 70, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
+  const farGap = harness({ height: 135, weight: 75, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
   await farGap.api.calculateSize();
   check("a body far from every chart row (not above the ceiling) gets the GENERIC\n" +
         "        no-match copy, not the overflow copy, and Continue stays locked",
