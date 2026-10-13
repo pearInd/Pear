@@ -35,7 +35,14 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-const PINNED = "22645f11f7c584753a2902b0326266f22ca4df4e5d92ec6b989bf2636fa7e705";
+/* RE-PINNED 2026-10-13 - THE SUGGESTED SIZE (lib/sizing.js, owner decision): a body that
+   fits no row but sits near one is offered that row, labelled as a suggestion. Over every
+   body (110-240cm x 18-220kg, 1cm/1kg) x 7 size lists x 3 age groups x 3 genders, against
+   the previous lib/sizing.js: 155,364 of 1,675,359 verdicts changed, every one from
+   "nomatch" to "ok" + approx (118,578 adult, 31,245 child, 5,541 child-only bodies offered
+   an adult row on an adult-only product, their body category now null). No "ok", "overflow"
+   or "invalid" verdict moved. Previous pin: 22645f11f7c584753a2902b0326266f22ca4df4e5d92ec6b989bf2636fa7e705. */
+const PINNED = "ed7e645556f00ed3d5bf5180e1c7e2085f0930a9e85d3aabfe90587d30e0cf84";
 const PRODUCT_PINNED = "b2d6cf0b9403b742a60787c397097125ca23cb062cdd2e22fd6a2c9d805a16a4";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");

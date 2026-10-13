@@ -270,11 +270,10 @@ const I18N = {
   resultLabelError:         { he: "שגיאה בנתונים:", en: "Data error:" },
   sizeResultInvalid:        { he: "נתונים לא הגיוניים", en: "Values out of range" },
   bestSizeOutOfRange:       { he: "מידה מחוץ לטווח", en: "Size out of range" },
-  // resultLabelApprox/bestSizeOutOfRange above are now DEAD - the "closest match"
-  // fallback that used them was removed (calculateSize() no longer scores rows
-  // that don't genuinely fit). Left in place rather than deleted, same as the
-  // backend age_group plumbing this replaces.
-  resultLabelApprox:        { he: "קירוב מידה מומלץ:", en: "Closest size match:" },
+  // bestSizeOutOfRange above is DEAD (the old unbounded "closest match" fallback).
+  // resultLabelApprox is LIVE again since 2026-10-13: lib/sizing.js's THE SUGGESTED SIZE
+  // offers the nearest row when none fits exactly (verdict.approx) - applySizeVerdict().
+  resultLabelApprox:        { he: "אין מידה מדויקת עבורך. מידה מוצעת:", en: "No exact size for you. Suggested size:" },
   // Shown when height+weight genuinely fit NEITHER chart - see calculateSize()'s
   // "fits neither" branch.
   resultLabelNoMatch:       { he: "לא נמצאה מידה מתאימה:", en: "No matching size found:" },

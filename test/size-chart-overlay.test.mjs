@@ -481,8 +481,10 @@ console.log("\n── §6 a confident stored chart decides - and still cannot re
   const calc = extract(LIB, "export function computeSizeVerdict(ev", "\n/* ══ THE WIRE");
   const at = calc.indexOf("storeChartRecommendation({");
   check("§6.4 the fit asks it only AFTER the guard state and the no-match exit are final",
-    at > calc.indexOf("const currentSizeCategory = adultFits.length") && at > calc.indexOf("if (!currentSizeCategory) {") &&
-    at > calc.indexOf("const bodyCategory = bodyAdultFits.length") && calc.indexOf("const bodyCategory = bodyAdultFits.length") > 0,
+    /* `let` since 2026-10-13: THE SUGGESTED SIZE may set both (before this call, never after - §6.5). */
+    at > calc.indexOf("let currentSizeCategory = adultFits.length") && at > calc.indexOf("if (!currentSizeCategory) {") &&
+    at > calc.indexOf("let approx = false;") && calc.indexOf("let approx = false;") > 0 &&
+    at > calc.indexOf("let bodyCategory = bodyAdultFits.length") && calc.indexOf("let bodyCategory = bodyAdultFits.length") > 0,
     "decision at " + at);
   check("§6.5 ...only for an ADULT size, and nothing after it writes the guard state",
     /if \(currentSizeCategory === "adult" && typeof storeChartRecommendation === "function"\)/.test(calc) &&
