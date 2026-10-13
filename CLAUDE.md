@@ -1502,6 +1502,12 @@ suggestion." The genuine-fit rule (height AND weight inside one row) left gaps b
   close; height mostly moves the length) - never past `APPROX_MAX_HEIGHT_MISS` (20cm), a tie to the nearer height.
   152/77 -> M, 183/73 -> M, 135/75 still no match. Against the first cut: 59,409 verdicts changed, every one a
   suggestion (which size, or 84 now "no match"); no exact fit moved. Letters chart: 2.1% of adults without a size.
+- **Then the owner's rule: "every person gets a size, unless bigger than XXL or smaller than S".** The 20 cm/kg limit
+  left the short-and-heavy (160cm/100kg) without a size. Now `nearestRow()` offers every body inside the chart its
+  nearest row; only a body above the ceiling ("overflow") or SMALLER than the smallest size - below it on height AND
+  weight, or more than `APPROX_SHORT_MAX` (15cm) shorter - gets none (on a non-adult-only product the kids chart is
+  then asked). A kids-only product asks the kids chart alone. Checked on every chart over 100-230cm x 15-160kg: every
+  "no match" is smaller-than-the-smallest, every size is one the product sells.
 
 ## 3. Cross-file lockstep
 
