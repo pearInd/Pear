@@ -17,7 +17,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
 | Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch after two more review rounds (54 findings fixed), **[PR #1](https://github.com/pearInd/Pear/pull/1) waiting on your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
 | Go-live wait (classification 18-22s) + the verdict reaching the room | done on the branch, **merge waiting on you** (CLAUDE.md §2.46) | `fix/classify-latency` |
-| The whole camera (zoom out), the garment's colour named, nothing added | done on the branch, measuring (CLAUDE.md §2.47); **Worker deploy** for the prompt words | `polish/view-color` (on `fix/classify-latency`) |
+| The whole camera (zoom out), the garment's colour named, nothing added | done on the branch and measured (3 real sessions, CLAUDE.md §2.47); **merge waiting on you**, then a **Worker deploy** for the prompt words | `polish/view-color` (on `fix/classify-latency`) |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |

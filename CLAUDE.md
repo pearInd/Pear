@@ -1573,6 +1573,12 @@ jewelry like chains." Measured before changing anything:
   invents it. `summoning-tokens` records why a noun cannot be the fix (no negative prompt in the SDK: "never ... tuxedo,
   bowtie" streamed back a tuxedo). `ADD_NOTHING_ELSE` ("Add nothing else to the subject.") is an operator over the subject
   the anchors already name, at P.LOW (shed first - it never evicts the fit sentence). Unproven until measured.
+- **Measured (real sessions, the cream pinstripe basketball shorts - "23" on the front, pinstripes behind, a stripe at the
+  side; the owner's 360 clip, wearing RED shorts):** q1 (16:9 camera): the prompt carried the measured #ebe6e2 ("Fabric:
+  cream."), front "23" on the right leg, the side stripe, a plain back (no number), front again - one cream throughout,
+  no jump at the swaps, the red fully replaced, nothing added, back ack 432ms, 10fps, no stall. q2 (a 3:4 portrait camera,
+  edge-column bands): the giant shorts in the band - fixed to black bands. q3 (the same, black bands): the bands stayed
+  black, the whole body head to feet in view, the same front/side/back sequence, 10fps, no stall.
 - **Proven:** 491,640 prompts old vs new - 202,850 identical, 283,990 only the appended clause, 4,434 only a (warm) colour
   name, 366 a renamed colour meeting the size phrase's budget; `prompt-engine` re-pinned; `wide-view` (27 checks);
   qa:visual 40/40. **Worker deploy** for the prompt changes (`lib/api-version.js` synced) - until then prompts come from
