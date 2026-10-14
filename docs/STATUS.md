@@ -11,7 +11,7 @@ _Last updated: 2026-10-11 · REVERTED IN PRODUCTION at the owner's request ("it 
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Suggested size when no exact size fits (183/73 "no size" report) | merged ([PR #2](https://github.com/pearInd/Pear/pull/2), `d69562d`); follow-up [PR #3](https://github.com/pearInd/Pear/pull/3) (152/77 -> M; everyone between S and XXL gets a size); then a `wrangler deploy` | main + branch |
+| Suggested size when no exact size fits (183/73 "no size" report) | merged ([PR #2](https://github.com/pearInd/Pear/pull/2), `d69562d`); follow-up [PR #3](https://github.com/pearInd/Pear/pull/3) (152/77 -> M; everyone between S and XXL gets a size); PR #4 (smaller than S -> suggested S); then a `wrangler deploy` | main + branch |
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
 | Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch after two more review rounds (54 findings fixed), **[PR #1](https://github.com/pearInd/Pear/pull/1) waiting on your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
@@ -108,7 +108,8 @@ _Last updated: 2026-10-11 · REVERTED IN PRODUCTION at the owner's request ("it 
   or smaller than the smallest gets none (160/100 -> XL). PR #3, merged with the owner's approval. CLAUDE.md §2.45.
 - A body in a gap between chart rows (183/73, short or slim adults) got "no match" - 65% of realistic adults on the
   letters chart. Now it gets the nearest size, labelled "No exact size for you. Suggested size:", and can continue.
-  Bodies smaller than the smallest size (155/50, 135/75) and above the largest still get "no size".
+  Bodies above the largest size still get "no size". Since 2026-10-14 (PR #4, owner's call) a body smaller than the
+  smallest size gets the smallest size as a suggestion (150/50 -> S, 135/75 -> S) instead of "no size".
 - **Waiting on you:** `cd cloudflare/orient && npx wrangler deploy` (the Worker answers /size).
 
 ## Children's sizing

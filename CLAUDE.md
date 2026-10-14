@@ -1508,6 +1508,12 @@ suggestion." The genuine-fit rule (height AND weight inside one row) left gaps b
   weight, or more than `APPROX_SHORT_MAX` (15cm) shorter - gets none (on a non-adult-only product the kids chart is
   then asked). A kids-only product asks the kids chart alone. Checked on every chart over 100-230cm x 15-160kg: every
   "no match" is smaller-than-the-smallest, every size is one the product sells.
+- **Then (2026-10-14): "smaller than the smallest size, he or she - say no exact size and suggest S".** A body smaller
+  than the smallest size is no longer "no match": `nearestRow()` returns the chart's SMALLEST row (S, EU 36, waist 28;
+  a kids product's smallest kids size), labelled as a suggestion. On a product that is not adult-only the kids chart is
+  still asked first (a small body may be a child's). An adult-only product suggests S even to a body that fits only a
+  kids row (158/46 - it used to get the kids/adult card); `bodyCategory` becomes null (§2.5). Only a body above the
+  chart's ceiling gets no size. Proven against the previous module: every change is "nomatch" -> suggested size.
 
 ## 3. Cross-file lockstep
 

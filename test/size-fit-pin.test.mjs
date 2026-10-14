@@ -52,8 +52,13 @@ import { createHash } from "node:crypto";
    row; smaller than the smallest size (below it on height AND weight, or 15cm+ shorter)
    gets none. Only suggestions moved (11,346 of 69,696 grid cases: 6,629 newly suggested,
    2,104 now smaller-than-S, the rest a different suggestion); no exact fit or overflow.
-   Previous pin: d71819063db03f80efdf60169cc7d33f48d6f0eb202d11d4073b0324684d0d9e. */
-const PINNED = "96dc07679830dc5db566189316b05628d672dd1f67239b1f96b807d867b6e1ba";
+   Previous pin: d71819063db03f80efdf60169cc7d33f48d6f0eb202d11d4073b0324684d0d9e.
+   RE-PINNED 2026-10-14 (owner: "smaller than the smallest size, he or she - no exact size,
+   suggest S"): a body smaller than the smallest size gets the chart's smallest size as a
+   suggestion instead of "no match". Every moved case is "nomatch" -> suggested size; no
+   exact fit, overflow or existing suggestion moved.
+   Previous pin: 96dc07679830dc5db566189316b05628d672dd1f67239b1f96b807d867b6e1ba. */
+const PINNED = "b4967acfb19375b8e7e99dfbc20943a257e182daeb43f5437548e5d500e96222";
 const PRODUCT_PINNED = "b2d6cf0b9403b742a60787c397097125ca23cb062cdd2e22fd6a2c9d805a16a4";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
