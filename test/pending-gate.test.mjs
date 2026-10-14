@@ -111,5 +111,44 @@ console.log("\n── syncCaptureButtonPendingState: the visual half tracks the 
   check("does not throw when the button element is not found", !threw);
 }
 
+console.log("\n── resolveClassifyGate: a verdict on the size screen is never lost to the repaint (2026-10-14) ──");
+{
+  /* The widget's verdict can land while the shopper is still on the size screen (no garment yet - enterRoom() builds it).
+     The release used to repaint unconditionally, renderActiveGarment() read null.type, and the throw - inside the
+     PEAR_UPDATE_GARMENT listener, before THE EARLY VERDICT was held - lost the verdict: the session went live on the
+     DOM-order guess. */
+  const btn = makeBtn();
+  let painted = 0;
+  const sandbox = {
+    activeOutfit: { top: null, bottom: null }, activeItem: null, $: () => btn,
+    location: { search: "?classify_pending=1" },
+    renderActiveGarment: () => { painted++; if (!sandbox.activeItem) throw new TypeError("Cannot read properties of null (reading 'type')"); },
+  };
+  const fn = new Function(...Object.keys(sandbox), code +
+    "\nreturn { resolveClassifyGate, livePendingReason, isPending: () => classifyPending };");
+  const api = fn(...Object.values(sandbox));
+  check("the gate arms from ?classify_pending=1", api.isPending() === true && typeof api.livePendingReason() === "string");
+  let threw = null;
+  try { api.resolveClassifyGate("classifier verdict received"); } catch (e) { threw = e; }
+  check("releasing it with NO garment yet does not throw", threw === null, threw && threw.message);
+  check("...the gate is released and the button synced (not busy)", api.isPending() === false && btn._attrs["aria-busy"] === "false");
+  check("...and no repaint was attempted without a garment", painted === 0, String(painted));
+}
+{
+  const btn = makeBtn();
+  let painted = 0;
+  const sandbox = {
+    activeOutfit: { top: null, bottom: null }, activeItem: { name: "Tee" }, $: () => btn,
+    location: { search: "?classify_pending=1" },
+    renderActiveGarment: () => { painted++; throw new Error("a repaint that fails for its own reason"); },
+  };
+  const fn = new Function(...Object.keys(sandbox), code + "\nreturn { resolveClassifyGate, isPending: () => classifyPending };");
+  const api = fn(...Object.values(sandbox));
+  let threw = null;
+  try { api.resolveClassifyGate("classifier verdict received"); } catch (e) { threw = e; }
+  check("with a garment the chip is repainted - and a failing repaint still never escapes the release",
+    painted === 1 && threw === null && api.isPending() === false, threw && threw.message);
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

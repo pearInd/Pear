@@ -3581,6 +3581,14 @@ function ensureActiveGarmentComposite(item) {
   item._compositeBuilding = true;
   createGarmentComposite(g.front || item.img, back).then((composite) => {
     item._compositeBuilding = false;
+    /* THE BUTTON HEARS THAT THE BUILD IS OVER (2026-10-14) - "go-live spinning forever": _compositeBuilding is one of
+       livePendingReason()'s reasons, and the button (and the prep overlay) were only re-synced through the repaint at the
+       end of this chain - which the early returns below skip. A classifier verdict replayed at enterRoom() (THE EARLY
+       VERDICT) lands its composite WHILE this build of the opening guess runs, so the build ended on the "already has a
+       composite" return and the button kept is-pending-back (pointer-events:none) for good - every time the classifier
+       beat the size screen, which a ~0.7s classifier always does. typeof: suites run this standalone. */
+    if (typeof syncAssetPrep === "function") syncAssetPrep();
+    if (typeof syncCaptureButtonPendingState === "function") syncCaptureButtonPendingState();
     if (!composite) return;   // createGarmentComposite already logs its own failure reason
     // Stale by the time it resolved: something else populated a composite on this
     // SAME item object in the meantime (e.g. the widget's postMessage won the race) -
@@ -12378,8 +12386,23 @@ function resolveClassifyGate(why) {
   classifyPending = false;
   console.log(`[PEAR] classification gate RELEASED (${why}) - try-on is now unblocked`);
   /* One repaint so the capture button drops its pending/spinner state immediately,
-     rather than at whatever the next unrelated render happens to be. */
-  if (typeof renderActiveGarment === "function") renderActiveGarment();
+     rather than at whatever the next unrelated render happens to be.
+     ── ONLY WITH A GARMENT TO PAINT (2026-10-14) - "the verdict that never landed" ──
+     A verdict that arrives while the shopper is still on the size screen finds no garment
+     yet (enterRoom() builds it on Continue), and renderActiveGarment() read `null.type`
+     there - a throw INSIDE the widget's PEAR_UPDATE_GARMENT listener, after the gate was
+     released and before THE EARLY VERDICT was held: the verdict was lost, and the session
+     went live on the DOM-order guess (on the FOX shorts 1154009415 the close-up front photo
+     as the back - the front's logo on the shopper's back), at times with the button stuck
+     busy. Production saw it whenever the classifier beat the size screen ("Cannot read
+     properties of null (reading 'type')" in its console); with the classifier answering in
+     ~0.7s it is the common path. enterRoom() paints the chip itself; the button is synced
+     either way. */
+  const hasGarment = (typeof activeItem !== "undefined" && !!activeItem) ||
+    (typeof activeOutfit !== "undefined" && !!activeOutfit && !!activeOutfit.top && !!activeOutfit.bottom);
+  if (hasGarment && typeof renderActiveGarment === "function") {
+    try { renderActiveGarment(); } catch (e) { console.warn("[PEAR] gate release repaint failed:", e?.message || e); }
+  }
   if (typeof syncCaptureButtonPendingState === "function") syncCaptureButtonPendingState();
 }
 

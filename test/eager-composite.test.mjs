@@ -108,6 +108,7 @@ function buildSandbox(loader) {
     activeItem: null,
     activeColor: null,   // module-level global galleryOf()'s variantAssetsOf() reads
     renderActiveGarment: () => renderCalls.push(sandbox.activeItem),
+    syncCaptureButtonPendingState: () => { sandbox.buttonSyncs = (sandbox.buttonSyncs || 0) + 1; },
   };
   const fn = new Function("scope",
     `with (scope) { ${code}
@@ -216,6 +217,28 @@ console.log("\n── SWAP GUARD: the shopper switches garments while a build is
     typeof oldItem._compositeObjectUrl === "string", oldItem._compositeObjectUrl);
   check("but the chip was NOT repainted for the item no longer on screen",
     renderCalls.length === 0, JSON.stringify(renderCalls));
+}
+
+console.log("\n── THE BUTTON HEARS THAT THE BUILD IS OVER: a verdict's composite landed while the opening guess was building ──");
+{
+  /* A classifier verdict replayed at enterRoom() brings the widget's composite while this item's local build (of the
+     opening guess) is still running; the build then ends on the "already has a composite" return - which skipped the only
+     repaint, so the go-live button kept its pending state (pointer-events:none) for good (2026-10-14). */
+  const loader = makeLoader();
+  const { sandbox, api, renderCalls } = buildSandbox(loader);
+  const item = { name: "Shorts", img: FRONT, imgBack: BACK };
+  sandbox.activeItem = item;
+  api.ensureActiveGarmentComposite(item);
+  check("the build is pending (the button would say so)", item._compositeBuilding === true);
+  item.composite = "data:image/jpeg;base64,THE_VERDICT_WON";   // the replayed verdict, mid-build
+  const syncsBefore = sandbox.buttonSyncs || 0;
+  loader.settleAll();
+  await flushAsync();
+  check("the build is over", item._compositeBuilding === false);
+  check("...and the button was re-synced although the build returned early", (sandbox.buttonSyncs || 0) > syncsBefore,
+    `${syncsBefore} -> ${sandbox.buttonSyncs || 0}`);
+  check("...without a repaint or an overwrite (the verdict's composite stands)", renderCalls.length === 0 &&
+    item.composite === "data:image/jpeg;base64,THE_VERDICT_WON" && !item._compositeObjectUrl);
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
