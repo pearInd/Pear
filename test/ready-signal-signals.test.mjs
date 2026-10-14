@@ -87,8 +87,11 @@ async function run(o) {
   let markClicked;
   const clicked = new Promise((r) => { markClicked = r; });
   const posted = [];
+  /* o.roomLoadsAt (ms after the click): until then the iframe holds about:blank - the store's origin - and a
+     postMessage(…, PEAR_BASE) to it is dropped, as a browser does; then the room "loads" (the iframe's load event). */
+  let roomUp = o.roomLoadsAt === undefined;
   Object.defineProperty(window.HTMLIFrameElement.prototype, "contentWindow", {
-    get() { return { postMessage: (m) => posted.push(m) }; },
+    get() { return { postMessage: (m) => { if (roomUp) posted.push(m); } }; },
     configurable: true,
   });
 
@@ -108,11 +111,14 @@ async function run(o) {
   // The open URL is captured AT CLICK TIME - it is what the room parsed on load.
   await sleep(0);
   const iframe = window.document.querySelector("iframe");
+  if (o.roomLoadsAt !== undefined && iframe) {
+    setTimeout(() => { roomUp = true; iframe.dispatchEvent(new window.Event("load")); }, o.roomLoadsAt);
+  }
   const openParams = iframe ? new URL(iframe.src).searchParams : new URLSearchParams();
-  await sleep((o.classifyDelay || 0) + (o.shopifyDelay || 0) + 150);
+  await sleep(Math.max((o.classifyDelay || 0) + (o.shopifyDelay || 0), o.roomLoadsAt || 0) + 150);
 
   const updates = posted.filter((m) => m && m.type === "PEAR_UPDATE_GARMENT");
-  return { btn, updates, msg: updates[updates.length - 1], openParams };
+  return { btn, updates, msg: updates[updates.length - 1], openParams, iframe, window, posted };
 }
 
 /* A single-view product (no back anywhere) - the classifier's "front" verdict matches
@@ -238,6 +244,31 @@ console.log("\n=== 5. merged with bd766b2: the shared builder re-reads through t
   check("5.5 ...and garment_gender + its source", r.openParams.get("garment_gender") === "women" &&
     r.openParams.get("garment_gender_source") === "jsonld",
     `${r.openParams.get("garment_gender")} / ${r.openParams.get("garment_gender_source")}`);
+}
+
+console.log("\n=== 6. a verdict FASTER than the room still reaches it (2026-10-14) ===");
+{
+  /* /api/classify-images answering in ~0.7s (the cache fix) beat the room document every time: posted to an iframe
+     still on about:blank, every verdict was dropped and the room's gate sat out its 30s, then went live on the
+     DOM-order guess (TEST record mv7xcssg). The widget now posts its newest verdict again on the room's load. */
+  const agree = await run({ html: PDP(), classify: "agree", classifyDelay: 0, roomLoadsAt: 120 });
+  check("6.1 the ready signal that beat the room is delivered once the room loads", agree.updates.length === 1 &&
+    agree.msg.garment_classify_done === true && same(agree.msg.garment_sizes, ["S", "M", "L"]),
+    JSON.stringify(agree.updates.map((u) => Object.keys(u))));
+  const re = await run({ html: PDP({ back: true }), classify: "reanchor", classifyDelay: 0, roomLoadsAt: 120 });
+  check("6.2 ...and so is a re-anchoring verdict (the real back)", re.updates.length === 1 &&
+    re.msg.garment_back === `${SHOP}-2_back.jpg`, JSON.stringify(re.updates.map((u) => u.garment_back)));
+  const failed = await run({ html: PDP(), classify: "fail", classifyDelay: 0, roomLoadsAt: 120 });
+  check("6.3 ...and so is the failure signal (the gate's release)", failed.updates.length === 1 &&
+    failed.msg.garment_classify_done === true, JSON.stringify(failed.updates));
+  re.iframe.dispatchEvent(new re.window.Event("load"));
+  await sleep(10);
+  const after = re.posted.filter((m) => m && m.type === "PEAR_UPDATE_GARMENT");
+  check("6.4 a room that loads again is told again (the same verdict)", after.length === 2 &&
+    after[1].garment_back === `${SHOP}-2_back.jpg`, String(after.length));
+  const slow = await run({ html: PDP(), classify: "agree", classifyDelay: 200, roomLoadsAt: 50 });
+  check("6.5 a room that loaded first gets the verdict exactly once (no duplicate)", slow.updates.length === 1,
+    JSON.stringify(slow.updates.map((u) => Object.keys(u))));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

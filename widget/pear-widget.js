@@ -3027,6 +3027,25 @@
     closeModal();
   });
 
+  /* ── THE VERDICT REACHES THE ROOM EVEN WHEN IT IS FASTER THAN THE ROOM (2026-10-14) ──────
+     The classifier's verdict (and the ready / failure signals) went out ONCE, the moment the
+     classify call settled. Posted before the room document has loaded, the iframe still holds
+     about:blank - the store's origin - and postMessage(…, PEAR_BASE) drops it without a word.
+     The room's classification gate (?classify_pending=1) then sat out its full 30s and went
+     live on the DOM-order guess: on the FOX shorts 1154009415 the close-up FRONT photo as the
+     back. Production never showed it only because /api/classify-images took 18-22s there, long
+     after any room had loaded; once that call answered in 0.7s (a cache fix) the verdict beat
+     the room every time (TEST record mv7xcssg: answered at 8.4s, the room up at ~13s, the
+     button busy until 43s). Now the newest message is kept on the iframe and posted again
+     on every "load" of its room document - the room registers its listener at module scope,
+     before "load" (and a room that reloads gets it again). A copy that arrives twice is harmless: the room releases an already-open
+     gate and reads an unchanged verdict as unchanged. */
+  function postVerdictToRoom(iframe, msg) {
+    if (!iframe) return;
+    iframe.__pearVerdict = msg;   // the newest - posted again on every "load" of the room (openModal)
+    iframe.contentWindow.postMessage(msg, PEAR_BASE);
+  }
+
   function openModal(garment) {
     closeModal(); // never stack two modals
 
@@ -3155,6 +3174,15 @@
        browser at least reached PEAR_BASE and got SOME response back for `src`. */
     iframe.addEventListener("load", function () {
       console.log("[PEAR widget] fitting-room iframe fired 'load' for:", src);
+      /* A verdict that beat the room document - or a room that loaded again - gets it now (postVerdictToRoom). */
+      if (iframe.__pearVerdict) {
+        try {
+          iframe.contentWindow.postMessage(iframe.__pearVerdict, PEAR_BASE);
+          console.log("[PEAR widget] classification verdict re-sent to the room after it loaded");
+        } catch (e) {
+          console.warn("[PEAR widget] verdict re-send failed:", e && e.message);
+        }
+      }
       // Belt-and-suspenders initial sync: the fitting room ALSO pulls one itself
       // via PEAR_CART_REQUEST_SYNC once its own cart UI is ready (the more
       // robust path, since it can't race its own message listener wiring up
@@ -3615,9 +3643,9 @@
               console.log("[PEAR widget] classifier agreed with the DOM-order guess - " +
                 "sending a ready signal with product signals only (no re-anchor)");
               try {
-                openedIframe.contentWindow.postMessage(Object.assign(
+                postVerdictToRoom(openedIframe, Object.assign(
                   { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true },
-                  productSignals(res)), PEAR_BASE);
+                  productSignals(res)));
               } catch (e) {
                 console.warn("[PEAR widget] ready signal failed to post:", e && e.message);
               }
@@ -3627,7 +3655,7 @@
               /* The product signals (sizes, stock, chart, kids/adult, run type, title)
                  come from productSignals() - the SAME builder the ready signal and the
                  failure path use, so the three messages cannot drift apart again. */
-              openedIframe.contentWindow.postMessage(Object.assign({
+              postVerdictToRoom(openedIframe, Object.assign({
                 type: "PEAR_UPDATE_GARMENT",
                 garment_url: frontUrl,
                 garment_back: backUrl || undefined,
@@ -3657,7 +3685,7 @@
                 /* Whether the rear is positively known blank. Omitted (not false-d) when
                    unknown, so the room can abstain rather than assume. */
                 garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined
-              }, productSignals(res)), PEAR_BASE);
+              }, productSignals(res)));
             } catch (_) {}
           });
         }).catch(function (err) {
@@ -3677,9 +3705,9 @@
             /* No verdict to relay (productSignals(null) omits garment_age_group), but the
                page re-reads still go out - a Shopify list or a JS-built picker that
                landed after the click is just as real when the classifier is down. */
-            openedIframe.contentWindow.postMessage(Object.assign(
+            postVerdictToRoom(openedIframe, Object.assign(
               { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true },
-              productSignals(null)), PEAR_BASE);
+              productSignals(null)));
           } catch (e) {
             console.warn("[PEAR widget] ready signal failed to post after error:", e && e.message);
           }
