@@ -1523,6 +1523,13 @@ async function classifyFrontBack(imageUrl) {
    this deploys safely before the V9 migration is applied. */
 async function garmentCacheQuery(imageUrl, columns) {
   const canonical = canonicalImageUrl(imageUrl);
+  const byImageUrl = () => supabase
+    .from("garment_cache")
+    .select(columns)
+    .eq("image_url", imageUrl)
+    .limit(1)
+    .maybeSingle();
+  if (garmentCacheLacks("canonical_url")) return byImageUrl();
   let { data, error } = await supabase
     .from("garment_cache")
     .select(columns)
@@ -1530,13 +1537,15 @@ async function garmentCacheQuery(imageUrl, columns) {
     .limit(1)
     .maybeSingle();
 
+  /* Only a missing canonical_url (or an error that names no column) is worth the image_url
+     retry: a missing SELECTED column fails that query exactly the same way, and on
+     production's v8-less table that doubled every probe (THE CACHE READ THAT TOOK 3s). */
   if (error && /column .* does not exist|Could not find the/i.test(error.message || "")) {
-    ({ data, error } = await supabase
-      .from("garment_cache")
-      .select(columns)
-      .eq("image_url", imageUrl)
-      .limit(1)
-      .maybeSingle());
+    const named = missingGarmentCacheColumn(error);
+    if (!named || named === "canonical_url") {
+      if (named) noteGarmentCacheAbsent("canonical_url");
+      ({ data, error } = await byImageUrl());
+    }
   }
   return { data, error };
 }
@@ -1594,6 +1603,30 @@ const GARMENT_CACHE_DROP_ORDER = [
 ];
 const _garmentCacheWarned = new Set();
 
+/* ── WHAT THIS TABLE IS KNOWN TO LACK - "THE CACHE READ THAT TOOK 3s" (2026-10-14) ──────
+   The column-by-column fallback above was right about WHICH columns to keep and wrong about
+   how often to find out: every read and every write started from the full column list and
+   rediscovered production's missing ones one failed query at a time - and each failed read
+   was asked twice (by canonical_url, then by image_url). Measured on app.pear-ai.io: GET
+   /api/garment-category answered a cache HIT in 3.4s (health: 0.33s), and POST
+   /api/classify-images took 18-22s on a 4-photo FOX product whose every photo was already
+   cached - the try-on button's spinner for the whole of that time. A column a NAMED error
+   said is missing is now remembered and never selected or written again in this process;
+   the memory expires after GARMENT_CACHE_ABSENT_TTL_MS, so a migration run later is picked
+   up without a redeploy. A guess (an error that names no column) is never remembered - it
+   can be wrong, and is only ever right for the one call that made it. */
+const GARMENT_CACHE_ABSENT_TTL_MS = 10 * 60 * 1000;
+const _garmentCacheAbsent = new Map();   // column -> when an error named it missing
+function garmentCacheLacks(col) {
+  const at = _garmentCacheAbsent.get(col);
+  if (at === undefined) return false;
+  if (Date.now() - at > GARMENT_CACHE_ABSENT_TTL_MS) { _garmentCacheAbsent.delete(col); return false; }
+  return true;
+}
+function noteGarmentCacheAbsent(col) {
+  if (col) _garmentCacheAbsent.set(col, Date.now());
+}
+
 /* The column a missing-column error names, or null. Covers PostgREST's
    "Could not find the 'x' column of 'garment_cache' in the schema cache" and Postgres's
    'column "x" of relation "garment_cache" does not exist' / "column garment_cache.x does
@@ -1628,8 +1661,12 @@ function warnGarmentCacheColumn(col) {
    image_url, exactly as the old bare-row tier did. */
 async function upsertGarmentCacheRow(row) {
   const payload = { ...row };
-  let onConflict = "canonical_url" in payload ? "canonical_url" : "image_url";
   const dropped = [];
+  /* Columns an earlier call already learned are missing are not offered again (THE CACHE READ THAT TOOK 3s). */
+  for (const k of Object.keys(payload)) {
+    if (k !== "image_url" && k !== "classification" && garmentCacheLacks(k)) { delete payload[k]; dropped.push(k); }
+  }
+  let onConflict = "canonical_url" in payload ? "canonical_url" : "image_url";
   for (let attempt = 0; attempt < 24; attempt++) {
     const { error } = await supabase.from("garment_cache").upsert([payload], { onConflict });
     if (!error) return { error: null, dropped };
@@ -1637,6 +1674,7 @@ async function upsertGarmentCacheRow(row) {
     const optional = Object.keys(payload).filter((k) => k !== "image_url" && k !== "classification");
     const col = nextColumnToDrop(error, optional);
     if (!col) return { error, dropped };
+    if (missingGarmentCacheColumn(error) === col) noteGarmentCacheAbsent(col);
     if (col === "canonical_url") onConflict = "image_url";
     warnGarmentCacheColumn(col);
     delete payload[col];
@@ -1685,7 +1723,9 @@ async function getCachedClassificationDetailed(imageUrl) {
      the old tiers (each of which still selected the v8 columns) read age_group back as
      null on production's v8-less table. Each missing column is dropped on its own, so
      age_group comes back whenever its column exists. */
-  let cols = (V11 + V12_ONLY + V13_ONLY + V14_ONLY).split(",").map((c) => c.trim());
+  /* ...and a column an earlier call learned is missing is not asked for again (THE CACHE READ THAT TOOK 3s). */
+  let cols = (V11 + V12_ONLY + V13_ONLY + V14_ONLY).split(",").map((c) => c.trim())
+    .filter((c) => c === "classification" || !garmentCacheLacks(c));
   for (let attempt = 0; attempt < 24 && cols.length > 1; attempt++) {
     const { data, error } = await garmentCacheQuery(imageUrl, cols.join(", "));
     if (!error) return data ? { ...CACHED_ROW_DEFAULTS, ...data } : null;
@@ -1695,6 +1735,7 @@ async function getCachedClassificationDetailed(imageUrl) {
     }
     const col = nextColumnToDrop(error, cols.filter((c) => c !== "classification"));
     if (!col) break;
+    if (missingGarmentCacheColumn(error) === col) noteGarmentCacheAbsent(col);
     warnGarmentCacheColumn(col);
     cols = cols.filter((c) => c !== col);
   }
@@ -2527,6 +2568,20 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
      a verdict - the specific failure mode that makes a real rear photo disappear. */
   const records = [];
   let rateLimited = 0;
+  /* THE CACHE READS GO OUT TOGETHER (2026-10-14, THE CACHE READ THAT TOOK 3s): one read per
+     photo, all at once, instead of one after another inside the loop - the loop below still
+     classifies the misses one at a time (Gemini's 60 RPM). Each promise is awaited inside the
+     loop's own try, so a read that throws lands in the same catch it always did. A miss whose
+     photograph THIS request already classified under another spelling is read again in the
+     loop, so it is still the hit it was when the reads were sequential. */
+  const cacheReads = new Map();
+  for (const url of uniqueUrls) {
+    if (scrapedBack && url === scrapedBack) continue;
+    const read = getCachedClassificationDetailed(url);
+    read.catch(() => {});   // awaited below; this only keeps an early rejection from going unhandled
+    cacheReads.set(url, read);
+  }
+  const classifiedHere = new Set();   // canonical URLs this request wrote a verdict for
   for (const url of uniqueUrls) {
     // A rear photo the storefront's own markup named needs no model call. It carries
     // no age_group opinion - the DOM only ever names WHICH photo is the back, never
@@ -2540,7 +2595,10 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
       continue;
     }
     try {
-      const cached = await getCachedClassificationDetailed(url);
+      let cached = await cacheReads.get(url);
+      if ((!cached || isStaleClassification(cached, CLASSIFIER_PROMPT_VERSION)) && classifiedHere.has(canonicalImageUrl(url))) {
+        cached = await getCachedClassificationDetailed(url);
+      }
       /* ── A VERDICT FROM AN OLDER PROMPT IS A CACHE MISS ─────────────────────────────
          See CLASSIFIER_PROMPT_VERSION. Without this, a prompt fix never reaches any photo
          already in garment_cache - which is how a mislabelled rear photo survived several
@@ -2606,6 +2664,7 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
           sizeRunType: scrapedSizeRunType || undefined,
         }
       );
+      classifiedHere.add(canonicalImageUrl(url));
       records.push({ ...rec, source: rec.view === "uncertain" ? "uncertain" : "gemini" });
       await new Promise((r) => setTimeout(r, 1100)); // stay under Gemini's 60 RPM
     } catch (err) {

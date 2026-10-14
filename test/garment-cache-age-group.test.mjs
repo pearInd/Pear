@@ -63,6 +63,7 @@ function fakeTable(columns, { anonymous = false } = {}) {
   const have = new Set(columns);
   const rows = [];
   const writes = [];
+  const calls = { select: 0, upsert: 0 };
   const missing = (cols, mode) => {
     const c = cols.find((k) => !have.has(k));
     if (!c) return null;
@@ -75,6 +76,7 @@ function fakeTable(columns, { anonymous = false } = {}) {
     from() {
       return {
         upsert: async (list, { onConflict }) => {
+          calls.upsert++;
           const row = list[0];
           const err = missing(Object.keys(row), "write");
           if (err) return { error: err };
@@ -84,6 +86,7 @@ function fakeTable(columns, { anonymous = false } = {}) {
           return { error: null };
         },
         select: (colStr) => {
+          calls.select++;
           const cols = colStr.split(",").map((c) => c.trim());
           let filter = null;
           const b = {
@@ -102,7 +105,7 @@ function fakeTable(columns, { anonymous = false } = {}) {
       };
     },
   };
-  return { client, rows, writes };
+  return { client, rows, writes, calls };
 }
 
 const canonical = (u) => String(u).split("?")[0].toLowerCase();
@@ -234,6 +237,70 @@ for (const name of ["production", "full"]) {
   await sa.save(URL1, "front", GEMINI);
   check("§5 [anonymous errors] scanner gives up age_group last", anon.rows[0] && anon.rows[0].age_group === "kids",
     JSON.stringify(anon.rows[0]));
+}
+
+console.log("\n── §6 server: a missing column is found out once, not on every read and write ──");
+/* THE CACHE READ THAT TOOK 3s (2026-10-14): app.pear-ai.io answered a cache HIT in 3.4s and a fully cached 4-photo
+   /api/classify-images in 18-22s - every read rediscovered production's missing columns one failed query at a time, and
+   asked each failed one twice (canonical_url, then image_url). These count the queries; on the code before the fix
+   §6.1 is 21 and §6.2 is 21 again. */
+{
+  const missingSelected = ["confidence", "source", "cue", ...V12, ...V13, ...V14];   // what a read selects that production lacks
+  const t = fakeTable(SCHEMAS.production);
+  const seed = loadServer(t.client);
+  await seed.saveClassification(URL1, "back", GEMINI);
+  const srv = loadServer(t.client);   // a fresh process: nothing learned yet
+  t.calls.select = 0;
+  const r1 = await srv.getCachedClassificationDetailed(URL1);
+  check("§6.1 the first read on production's table: one query per missing column, plus the answer - no image_url doubling",
+    t.calls.select === missingSelected.length + 1, `${t.calls.select} selects (expected ${missingSelected.length + 1})`);
+  t.calls.select = 0;
+  const r2 = await srv.getCachedClassificationDetailed(URL1);
+  check("§6.2 the next read in the same process: ONE query", t.calls.select === 1, `${t.calls.select} selects`);
+  check("§6.3 ...with the same answer, age_group included", r1 && r2 && r2.classification === "back" && r2.age_group === "kids" &&
+    JSON.stringify(r1) === JSON.stringify(r2), JSON.stringify(r2));
+  t.calls.upsert = 0;
+  const after = loadServer(t.client);
+  await after.getCachedClassificationDetailed(URL1);   // learns the read columns
+  await after.saveClassification(URL1, "back", GEMINI);
+  const firstWrite = t.calls.upsert;
+  t.calls.upsert = 0;
+  await after.saveClassification(URL1, "back", { ...GEMINI, ageGroup: "adult" });
+  check("§6.4 a write after the table is known: ONE upsert, and the value lands",
+    t.calls.upsert === 1 && t.rows[0].age_group === "adult", `${t.calls.upsert} upserts (first write ${firstWrite}), row ${JSON.stringify(t.rows[0])}`);
+
+  const full = fakeTable(SCHEMAS.full);
+  const sf = loadServer(full.client);
+  await sf.saveClassification(URL1, "front", GEMINI);
+  full.calls.select = 0;
+  const rf = await sf.getCachedClassificationDetailed(URL1);
+  check("§6.5 a complete table: one query, every column read", full.calls.select === 1 && rf.confidence === 0.92 && rf.age_group === "kids",
+    `${full.calls.select} selects, ${JSON.stringify(rf)}`);
+
+  const anon = fakeTable(SCHEMAS.productionPlus, { anonymous: true });
+  await loadServer(anon.client).saveClassification(URL1, "front", GEMINI);
+  const sa = loadServer(anon.client);
+  anon.calls.select = 0;
+  await sa.getCachedClassificationDetailed(URL1);
+  const firstAnon = anon.calls.select;
+  anon.calls.select = 0;
+  const ra = await sa.getCachedClassificationDetailed(URL1);
+  check("§6.6 an error that names NO column is never remembered (a guess) - the next read guesses again, same answer",
+    anon.calls.select === firstAnon && ra && ra.age_group === "kids", `${firstAnon} then ${anon.calls.select} selects, ${JSON.stringify(ra)}`);
+
+  /* The memory expires: a migration run later is picked up without a redeploy. */
+  const clock = { now: 1e12 };
+  const FakeDate = { now: () => clock.now };
+  const span = SERVER_SPAN + "\nreturn { saveClassification, getCachedClassificationDetailed };";
+  const tt = fakeTable(SCHEMAS.production);
+  await loadServer(tt.client).saveClassification(URL1, "front", GEMINI);
+  const timed = new Function("supabase", "canonicalImageUrl", "console", "Date", span)(tt.client, canonical, { warn() {}, log() {}, error() {} }, FakeDate);
+  await timed.getCachedClassificationDetailed(URL1);
+  clock.now += 11 * 60 * 1000;
+  tt.calls.select = 0;
+  await timed.getCachedClassificationDetailed(URL1);
+  check("§6.7 after GARMENT_CACHE_ABSENT_TTL_MS the missing columns are asked about again",
+    tt.calls.select === missingSelected.length + 1, `${tt.calls.select} selects`);
 }
 
 console.log("");
