@@ -4072,8 +4072,6 @@ window.addEventListener("message", (e) => {
   if (typeof e.data.garment_color_hex === "string" && e.data.garment_color_hex) target.colorHex = e.data.garment_color_hex;
   if (typeof e.data.garment_text_ocr === "string") target.textOcr = e.data.garment_text_ocr;
   if (typeof e.data.garment_back_is_plain === "boolean") target.backIsPlain = e.data.garment_back_is_plain;
-  /* The front's own plain verdict (2026-10-14) - read only by ONE GARMENT, ONE REFERENCE, never by the prompt. */
-  if (typeof e.data.garment_front_is_plain === "boolean") target.frontIsPlain = e.data.garment_front_is_plain;
   const unchanged = target.img === front && target.imgBack === back &&
     (composite === undefined || target.composite === composite);
   if (unchanged) {
@@ -7273,84 +7271,6 @@ async function blobLooksFlat(blob) {
   return flat;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   ONE GARMENT, ONE REFERENCE - a top plain on both sides is sent once (2026-10-14, CLAUDE.md §2.48)
-   ══════════════════════════════════════════════════════════════════════════════
-   REPORTED with a clip (FOX V-neck tee 1919148300, orange, plain front and back): "it jumped - I want it to stay one
-   shirt, not go up and down while I measure". Its TEST record: the shirt changed cut when the BACK photo went out
-   (acknowledged 2.12s) and again when the FRONT came back (3.71s) - wider, dropped shoulders, the hem down the shorts on
-   the store's back photo. The fit sentence flipping between the two angles was half of it (SHED IN LOCKSTEP,
-   lib/prompts.js). The other half is the photo, and it predates that: OASIS on 2026-09-27 and the 09-29 session both ran
-   the hem down the thighs "for exactly as long as the back reference was on the wire", the second one with the front's
-   lower-body sentence on the back anchor as well. The engine re-fits the garment to every new reference.
-   A garment plain on both sides gains nothing from its back photo - the back of a plain tee is the same fabric - so it is
-   sent as ONE reference for the whole measurement: the front-only path every product without a back photo already takes
-   (no swap, the front anchor throughout), and no re-drape (a full re-upload on movement - AI Auto stopped those on
-   2026-10-06 for the same reason). POSITIVE EVIDENCE ON EVERY COUNT, or the swap stays:
-     · one garment (not a look), a top, and a PLAIN KNIT one by the prompt engine's own construction verdict (plainKnit,
-       promptAnswerFor - no buttons, zip, placket or hood: a front closure sent over a back-facing body is drawn on the back);
-     · the classifier saw no graphic on the front (frontIsPlain) nor on the back (backIsPlain), and no lettering on the
-       front (textOcr "");
-     · the pixels agree: neither photo measures a graphic (blobLooksPrinted) and both are the same fabric colour.
-   ?one_view=0 keeps the swap. A TEST record carries the verdict and its reason ("one-view"). */
-const ONE_VIEW_COLOUR_MAX_L1 = 60;   // |dR|+|dG|+|dB| of the two photos' central medians - the fabric-colour agreement bar
-let _oneViewItem = null;              // the garment the live session sends as one reference (set at go-live)
-
-/** Per-channel median of a relative box of a Blob's bitmap, or null when it cannot be read. */
-async function blobBoxColour(blob, x0, y0, x1, y1) {
-  let bmp = null;
-  try {
-    bmp = await createImageBitmap(blob);
-    const W = 48, H = 48;
-    const off = typeof OffscreenCanvas !== "undefined"
-      ? new OffscreenCanvas(W, H)
-      : Object.assign(document.createElement("canvas"), { width: W, height: H });
-    const ctx = off.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(bmp, x0 * bmp.width, y0 * bmp.height, (x1 - x0) * bmp.width, (y1 - y0) * bmp.height, 0, 0, W, H);
-    const d = ctx.getImageData(0, 0, W, H).data;
-    return [0, 1, 2].map((k) => {
-      const v = [];
-      for (let i = k; i < d.length; i += 4) v.push(d[i]);
-      v.sort((a, z) => a - z);
-      return v[v.length >> 1];
-    });
-  } catch (_) {
-    return null;
-  } finally {
-    try { bmp && bmp.close && bmp.close(); } catch (_) { /* closed */ }
-  }
-}
-
-/** Can this garment go as one reference for the whole measurement? Never rejects.
-    @returns {Promise<{ok: boolean, why: string}>} why: "plain-both" or the first count that failed */
-async function oneReferenceWillDo(item, frontBlob, backBlob) {
-  try { if (new URLSearchParams(location.search).get("one_view") === "0") return { ok: false, why: "off" }; } catch (_) { /* no location */ }
-  try {
-    if (!item || !frontBlob || !backBlob) return { ok: false, why: "no-pair" };
-    if (typeof resolveLook === "function" && resolveLook()) return { ok: false, why: "look" };
-    if (isBottomsGarment(item)) return { ok: false, why: "bottoms" };
-    if (item.frontIsPlain !== true) return { ok: false, why: "front-unproven" };
-    if (item.backIsPlain !== true) return { ok: false, why: "back-unproven" };
-    if (typeof item.textOcr === "string" && item.textOcr.trim()) return { ok: false, why: "front-text" };
-    if (item._backLooksPrinted === true) return { ok: false, why: "back-pixels" };
-    /* The construction verdict rides the prompt reply - memoised, so the dispatch's own front prompt is this request. */
-    let knit;
-    try {
-      await wirePrompt(item, "front", "oneView");
-      knit = _plainKnitVerdicts.get(JSON.stringify(promptFactsOf(item)));
-    } catch (_) { /* no verdict - abstain */ }
-    if (knit !== true) return { ok: false, why: knit === false ? "construction" : "no-verdict" };
-    if (await blobLooksPrinted(frontBlob)) return { ok: false, why: "front-pixels" };
-    const a = await blobBoxColour(frontBlob, 0.38, 0.45, 0.62, 0.7), b = await blobBoxColour(backBlob, 0.38, 0.45, 0.62, 0.7);
-    if (!a || !b) return { ok: false, why: "colour-unread" };
-    const dist = Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
-    if (dist > ONE_VIEW_COLOUR_MAX_L1) return { ok: false, why: `colour-${dist}` };
-    return { ok: true, why: "plain-both" };
-  } catch (e) {
-    return { ok: false, why: "failed" };
-  }
-}
-
 /* ── Context-Aware Asset Switching - pre-cached per-orientation Blobs ─────────
    The instant-swap guarantee: rtClient.set({ image }) accepts a Blob directly, and a Blob
    ships the bytes over the already-open session - Decart never has to fetch a URL server-
@@ -8207,13 +8127,11 @@ function syncAssetPrep() {
  * preload-composite.test.mjs executes this function standalone with no module scope
  * (CLAUDE.md §2.7). This function deliberately stops at PREP_PRELOAD_CEIL; goLive()
  * writes the 100 once it has seen the {ok, hasBack} verdict.
- * @returns {Promise<{ ok: boolean, hasBack: boolean, oneView: boolean }>}
+ * @returns {Promise<{ ok: boolean, hasBack: boolean }>}
  *   ok=false      → at least one item's FRONT is unusable - goLive() must abort entirely
  *                    (there is no reasonable fallback for a missing front).
  *   hasBack=false → at least one item's BACK is missing/broken - goLive() should proceed
  *                    FRONT-ONLY rather than arm AI Auto with a known-bad asset.
- *   oneView=true  → hasBack is false by CHOICE: the garment is plain on both sides and goes as
- *                    one reference (ONE GARMENT, ONE REFERENCE) - nothing to announce to the shopper.
  */
 /* ── IS THE REFERENCE BIG ENOUGH TO CARRY THE ARTWORK? ─────────────────────────────
    ══════════════════════════════════════════════════════════════════════════════
@@ -8324,7 +8242,7 @@ async function preloadGarmentAssets() {
   };
   if (typeof assetPrepStep === "function") assetPrepStep(0, prepTotal);
 
-  let ok = true, hasBack = true, oneView = false;
+  let ok = true, hasBack = true;
   for (const item of items) {
     const g = galleryOf(item);
     const front = g.front || item.img;
@@ -8379,19 +8297,6 @@ async function preloadGarmentAssets() {
       hasBack = false;
       continue;   // no point validating a composite built from a back we already rejected
     }
-    /* ONE GARMENT, ONE REFERENCE (CLAUDE.md §2.48): a top plain on both sides goes as its front alone - the same
-       front-only run, chosen rather than fallen into, so no toast. typeof: this function runs standalone in suites. */
-    if (typeof oneReferenceWillDo === "function" && items.length === 1) {
-      const one = await oneReferenceWillDo(item, frontBlob, backBlob);
-      if (typeof traceOrient === "function") traceOrient("one-view", { on: one.ok, why: one.why });
-      if (one.ok) {
-        console.log("[PEAR] one reference for the whole measurement - plain on both sides, the back photo adds nothing -", label);
-        oneView = true;
-        hasBack = false;
-        continue;
-      }
-      console.log(`[PEAR] front and back both go on the wire (${one.why}) -`, label);
-    }
 
     /* THE GAP THIS CLOSES. This gate's entire job is "block go-live until every
        asset THIS RUN NEEDS is ready" - but until now it validated the plain
@@ -8431,7 +8336,7 @@ async function preloadGarmentAssets() {
       }
     }
   }
-  return { ok, hasBack, oneView };
+  return { ok, hasBack };
 }
 
 /* ── Context-Aware Asset Switching - OrientationWatcher ───────────────────────
@@ -12802,9 +12707,6 @@ function promptFactsOf(item) {
    common case: front -> back -> front - is answered without a request. Values are the
    text or the in-flight Promise for it, so concurrent asks share one request. */
 const _wirePrompts = new Map();
-/* The plain-knit verdict the prompt service answers beside each single-garment prompt (promptAnswerFor, lib/prompts.js),
-   keyed by the facts it was asked about. Read only by ONE GARMENT, ONE REFERENCE - a yes/no, never wording. */
-const _plainKnitVerdicts = new Map();   // JSON of promptFactsOf(item) -> boolean
 
 /**
  * The single-garment prompt for one dispatch - what imageOnlyPrompt(item, angle) returned
@@ -12882,9 +12784,6 @@ async function fetchWirePrompt(body) {
       if (!resp.ok) throw new Error(`prompt service HTTP ${resp.status}`);
       const data = await resp.json();
       if (!data || typeof data.prompt !== "string" || !data.prompt) throw new Error("malformed prompt response");
-      if (body && body.kind === "single" && typeof data.plainKnit === "boolean" && typeof _plainKnitVerdicts !== "undefined") {
-        _plainKnitVerdicts.set(JSON.stringify(body.item), data.plainKnit);
-      }
       return data.prompt;
     } catch (e) {
       lastErr = e;
@@ -17184,9 +17083,6 @@ async function goLive() {
       exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP ? PEAR_EXP : undefined,
       /* What the rear reference's mask did before go-live (maskReferenceBand) - numbers and reasons only. */
       ref: typeof _refMaskLog !== "undefined" && _refMaskLog.length ? _refMaskLog.slice(-3) : undefined,
-      /* The size chosen against the recommended one - the fit sentence's rung (§2.48: the 2026-10-14 clip could only be
-         read as "two up" from its frames). */
-      size: typeof getSizeDelta === "function" ? getSizeDelta() : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the
@@ -17340,11 +17236,8 @@ async function goLive() {
          unavailable to a shopper who was never offered one - a new false alarm created
          purely by widening the gate. Only a run that genuinely intended AI Auto has
          lost something worth reporting. */
-      /* ...and not when the front-only run was CHOSEN (ONE GARMENT, ONE REFERENCE): nothing was lost. */
-      if (wantedAutoView && !preload.oneView) toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
+      if (wantedAutoView) toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
     }
-    /* The garment this session sends as one reference - reconditionForTopology() reads it (no re-drape). */
-    _oneViewItem = preload.oneView ? activeItem : null;
     /* Every asset this run needs is now fetched, decoded and validated - so the prep
        overlay can retire and hand over the finalized card in one step. Guarded: this
        is the only caller that can settle the PRELOADING_BLOBS phase, since the preload
@@ -18965,12 +18858,6 @@ async function reconditionForTopology(step) {
      on the uplink the camera rides, for a fit the two swaps re-condition anyway. A single-view garment re-drapes as before. */
   if (step && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE) {
     if (typeof traceOrient === "function") traceOrient("redrape-skip", { reason: step.reason });
-    return;
-  }
-  /* ...AND NONE FOR A GARMENT SENT AS ONE REFERENCE (2026-10-14, ONE GARMENT, ONE REFERENCE): every re-upload makes the
-     engine fit the garment afresh, and holding one fit through the turn is that mode's whole point. typeof: suites. */
-  if (step && typeof _oneViewItem !== "undefined" && _oneViewItem && typeof activeItem !== "undefined" && _oneViewItem === activeItem) {
-    if (typeof traceOrient === "function") traceOrient("redrape-skip", { reason: step.reason, one: true });
     return;
   }
   if (typeof traceOrient === "function") traceOrient("redrape", { reason: step && step.reason });

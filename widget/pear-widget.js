@@ -2916,10 +2916,7 @@
            plain-back anchor instead of one that names "rear print, logos", which on a
            blank back is an instruction to invent graphics. `null` when the server did
            not answer (or is an older build) and must NOT be read as false. */
-        backIsPlain: (data && typeof data.back_is_plain === "boolean") ? data.back_is_plain : null,
-        /* The same verdict for the FRONT photo (server.js front_is_plain) - the room sends a garment plain on BOTH
-           sides as one reference (ONE GARMENT, ONE REFERENCE in app.js). null, never false, when unknown. */
-        frontIsPlain: (data && typeof data.front_is_plain === "boolean") ? data.front_is_plain : null
+        backIsPlain: (data && typeof data.back_is_plain === "boolean") ? data.back_is_plain : null
       };
     });
   }
@@ -3687,9 +3684,7 @@
                 garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
                 /* Whether the rear is positively known blank. Omitted (not false-d) when
                    unknown, so the room can abstain rather than assume. */
-                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined,
-                /* The front's verdict, the same way: omitted when unknown, so the room abstains. */
-                garment_front_is_plain: typeof res.frontIsPlain === "boolean" ? res.frontIsPlain : undefined
+                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined
               }, productSignals(res)));
             } catch (_) {}
           });
