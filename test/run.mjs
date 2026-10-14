@@ -547,6 +547,7 @@ const SUITES = [
   ["ready-signal-signals", "ready-signal-signals.test.mjs"],
   ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
   ["wide-view", "wide-view.test.mjs"],
+  ["lag-comp", "lag-comp.test.mjs"],
   ["engine-exp", "engine-exp.test.mjs"],
   ["garment-box", "garment-box.test.mjs"],
   ["head-frame", "head-frame.test.mjs"],

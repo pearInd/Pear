@@ -10092,7 +10092,7 @@ function createOrientationWatcher() {
         delayedSwapTimer = null;
         if (disposed) { resolve(); return; }
         maybeSwap(a.next, a.predictive === true).then(resolve, resolve);
-      }, Math.max(0, Math.min(400, Number(a.delay) || 0)));
+      }, Math.max(0, Math.min(a.lagComp ? 600 : 400, Number(a.delay) || 0)));
     });
   }
   /** The swap decided while another write held the wire, now that it is free - see SWAP_FLOW. */
@@ -10926,7 +10926,11 @@ function createOrientationWatcher() {
         else if (a.do === "swap") {
           /* A newer decision supersedes a delayed one (THE LANDING, PROJECTED); a delay is honoured only with the flow. */
           if (delayedSwapTimer) { clearTimeout(delayedSwapTimer); delayedSwapTimer = null; }
-          const sw = SWAP_FLOW && a.delay > 0 ? delayedSwap(a) : maybeSwap(a.next, a.predictive === true);
+          /* THE LAG, ACTED ON (TEST sessions only - see lagCompensationMs()): a slow render holds the swap for the excess. */
+          const comp = typeof lagCompensationMs === "function" ? lagCompensationMs() : null;
+          if (comp && comp.ms > 0 && typeof traceOrient === "function") traceOrient("lag-comp", { next: a.next, ms: comp.ms, lag: comp.lag, from: comp.from });
+          const delay = Math.max(Number(a.delay) || 0, comp && comp.ms > 0 ? comp.ms : 0);
+          const sw = SWAP_FLOW && delay > 0 ? delayedSwap({ ...a, delay, lagComp: !!(comp && comp.ms > 0) }) : maybeSwap(a.next, a.predictive === true);
           if (SWAP_FLOW) sw.catch(() => {}); else await sw;
         }
       }
@@ -11311,6 +11315,8 @@ function lagProbeStop() {
   _lagProbe = null;
   if (!p || !_trace) return;
   const s = p.lags.slice().sort((a, b) => a - b);
+  /* THE LAG, ACTED ON: this session's median is the next one's first estimate (no reading exists before a turn). */
+  if (s.length >= 5) { try { localStorage.setItem(LAG_PRIOR_KEY, String(s[s.length >> 1])); } catch (_) { /* no storage */ } }
   traceOrient("lag-sum", { out: p.n, matched: s.length, med: s.length ? s[s.length >> 1] : null,
     p25: s.length ? s[Math.floor(s.length * 0.25)] : null, p75: s.length ? s[Math.floor(s.length * 0.75)] : null });
 }
@@ -11364,6 +11370,37 @@ function traceOutputFrame(video) {
   const ms = Math.round(now - bestAt);
   p.lags.push(ms);
   traceOrient("lag", { ms, c: Math.round(contrast * 100) / 100 });
+}
+/* ── THE LAG, ACTED ON - TEST sessions only (2026-10-14) ──────────────────────────────────────────────────────────────
+   REPORTED: "in the middle of the measurement the front turned into the shirt I'm wearing" (PEAK, record mv8fml6z). The
+   BACK went out at |yaw| 60 and was acknowledged at 1.85s; it reaches the screen ~0.47s after its acknowledgement - but on
+   frames of the body as it was 1.32s earlier (the probe's median that session), so it landed on a body still facing the
+   lens: the back photo's plain front side, read as the shopper's own shirt. The turn's timing was tuned on sessions whose
+   render ran 0.83-1.07s behind the camera; that evening every session ran 1.32-1.56s (7-8 fps out), so every swap landed
+   0.5-0.8s early on the body on screen - the outbound back on the chest, the return front on the back.
+   So a swap is held for the excess over LAG_COMP_BASE_MS, at most LAG_COMP_MAX_MS: none at a normal lag, ~0.4s at 1.3s.
+   The lag is the probe's median of this session's readings; before the turn there are none (a still body gives no match),
+   so the first estimate is the previous recorded session's median (localStorage - a per-viewer convenience). TEST
+   sessions only (the probe runs nowhere else) until a real session shows it lands better; ?lag_comp=0 is the room before
+   it. A TEST record carries `lag-comp` {next, ms, lag, from}. */
+const LAG_COMP_BASE_MS = 900, LAG_COMP_MAX_MS = 600, LAG_PRIOR_KEY = "pear_render_lag_ms";
+
+/** The hold for a swap on a slow render, or null: {ms, lag, from: "live"|"prior"}. TEST sessions only. */
+function lagCompensationMs() {
+  const p = _lagProbe;
+  if (!p) return null;
+  /* The turn's swaps only - the first front lock before the reveal is not held. typeof: suites. */
+  if (typeof billingStarted === "undefined" || !billingStarted) return null;
+  try { if (new URLSearchParams(location.search).get("lag_comp") === "0") return null; } catch (_) { /* no location */ }
+  let lag = null, from = null;
+  if (p.lags.length) {
+    const t = p.lags.slice(-8).sort((a, b) => a - b);
+    lag = t[t.length >> 1]; from = "live";
+  } else {
+    try { const v = Number(localStorage.getItem(LAG_PRIOR_KEY)); if (v >= 300 && v <= 3000) { lag = v; from = "prior"; } } catch (_) { /* no storage */ }
+  }
+  if (lag === null) return null;
+  return { ms: Math.max(0, Math.min(LAG_COMP_MAX_MS, Math.round(lag - LAG_COMP_BASE_MS))), lag, from };
 }
 /* ── end flight recorder ── */
 

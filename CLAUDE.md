@@ -1584,6 +1584,18 @@ jewelry like chains." Measured before changing anything:
   qa:visual 40/40. **Worker deploy** for the prompt changes (`lib/api-version.js` synced) - until then prompts come from
   the origin (~350ms, correct).
 
+### 2.48 A slow render holds the turn's swaps - TEST sessions only (2026-10-14)
+"In the middle of the measurement the front turned into the shirt I'm wearing" (PEAK, record mv8fml6z). The BACK went out at
+|yaw| 60, acknowledged at 1.85s; a reference reaches the screen ~0.47s after its acknowledgement, on frames of the body as it
+was the render's lag earlier - 1.32s that session - so it landed on a body still facing the lens (the back photo's plain
+front side, read as the shopper's own shirt). The turn was tuned on sessions at 0.83-1.07s; that evening every session ran
+1.32-1.56s (7-8 fps out). `lagCompensationMs()` (flight recorder block) holds a turn's swap for the lag over
+`LAG_COMP_BASE_MS` (900), at most 600ms, through the existing `delayedSwap()`: none at a normal lag. The lag is the lag
+probe's live median; before the turn (a still body, no reading) the previous recorded session's median from localStorage.
+**TEST sessions only** (the probe runs nowhere else) - a shopper's session is unchanged; `?lag_comp=0` is the room before it;
+records carry `lag-comp`. `lag-comp` pins it. The same evening's lockstep / one-reference changes (5ad84d7, 1ff9553) were
+reverted on the owner's word ("the sides don't work, it only made it worse"); the records showed the cause was this lag.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
