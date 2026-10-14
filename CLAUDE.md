@@ -1509,6 +1509,40 @@ suggestion." The genuine-fit rule (height AND weight inside one row) left gaps b
   then asked). A kids-only product asks the kids chart alone. Checked on every chart over 100-230cm x 15-160kg: every
   "no match" is smaller-than-the-smallest, every size is one the product sells.
 
+### 2.46 The verdict in 0.7s, and it reaches the room - three bugs that ship together (2026-10-14)
+Found measuring the FOX shorts 1154009415 on production: the go-live button stayed busy 11-25s after the camera opened,
+on a product whose every photo was already classified. POST /api/classify-images took 18-22s, GET /api/garment-category
+answered a cache HIT in 3.4s (/api/health 0.33s).
+- **THE CACHE READ THAT TOOK 3s (`server.js`, garment_cache):** production's table lacks the v8 columns, and every read
+  and write rediscovered that one failed query at a time (§2's schema-adaptive fallback), each failed read asked twice
+  (canonical_url, then image_url), nothing remembered. Now a column a NAMED missing-column error reports is remembered
+  for `GARMENT_CACHE_ABSENT_TTL_MS` (10 min) and never selected or written again in that time (an unnamed error's guess
+  never is); the image_url retry runs only for a missing canonical_url; classify-images reads all photos' cache rows at
+  once (misses are still classified one at a time). Measured on the preview: 0.65-0.70s, identical verdicts.
+  `garment-cache-age-group` §6 counts the queries.
+- **That exposed two latent bugs - the server fix MUST NOT ship without them:**
+  1. *The widget's verdict was posted once* (`postVerdictToRoom()`, `pear-widget.js`): faster than the room document, it
+     went to an iframe still on about:blank and was dropped; the gate (?classify_pending=1) sat out 30s and the session
+     went live on the DOM-order guess - here the close-up FRONT photo as the back (record mv7xcssg: the front's crest on
+     the back view). Now the newest verdict is posted again on every "load" of the room. `ready-signal-signals` §6.
+  2. *The room lost a verdict that landed on the size screen* (`resolveClassifyGate()`): its unconditional repaint read
+     `null.type` with no garment yet - a throw inside the listener before THE EARLY VERDICT was held ("Cannot read
+     properties of null (reading 'type')" in production's console). And the verdict replayed at `enterRoom()` lands its
+     composite while the opening guess's composite builds; that build ended on an early return that skipped the only
+     repaint, so the button kept `is-pending-back` (pointer-events:none) for good. Now the release repaints only with a
+     garment (a failing repaint never escapes), and the build's end re-syncs the button and the prep overlay.
+     `pending-gate`, `eager-composite`. Reproduced and verified with the SOURCE room on the real FOX page, the room's
+     load delayed 0/3/6s (scratch harness: the visual server + /api forwarded to a preview).
+- **Measured (real sessions, the beige shorts):** production p1/p3 waited 11-15s on the button; the fixed preview p5 0s,
+  back = photo 4 (masked, primed, ack 419ms), front back at +3.6s, 9fps, no stall, lag 0.8s - front, sides (the stripe
+  and lettering), plain back, front again all correct. No Worker deploy: nothing in `lib/` changed.
+- **Seen in the same round, not fixed:** an output freeze of 3.6s through a whole turn (p3, production - the engine or the
+  downlink; the rig now records inbound frames/loss/freezes); a 300KB reference re-send acknowledged 5.7s late that held
+  the wire past the window (p2, the CHICAGO shorts - the ack watchdog of preview-oct8 covers swap writes only); the
+  front render lighter than the back on this product (cream vs tan - the colour jump at a swap, the sides plan). The
+  engine refused every session 2026-10-13 17:16Z to ~09:00Z 10-14 (1011 through the edge, every product) and has worked
+  since; the edge maps the engine's policy close (1008) to 1011, which hides the reason - a Worker change.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
