@@ -30,8 +30,12 @@ import { createHash } from "node:crypto";
    over 491,640 prompts (scratch, re-runnable): 202,850 identical, 283,990 differ ONLY by the appended clause, 4,434 only by
    a colour name - every one a warm colour (the 4,096-colour grid: 32 gain beige/dark brown/cream, 8 borderline warm
    colours move between brown/burgundy and none/dark brown, nothing else) - and 366 by a renamed colour meeting the size
-   phrase's budget. The pre-move pin was 221a5b58…. */
-const PINNED = "3d1f5304f15a0e9ed414b8ed9d8cc9969d4ad85d363069f01d213fd6dcf98f29";
+   phrase's budget. The pre-move pin was 221a5b58….
+   RE-PINNED AGAIN 2026-10-14 (CLAUDE.md §2.48, SHED IN LOCKSTEP): a clause both angles carry ships only if both keep it.
+   Over this corpus against the previous engine (scratch, re-runnable): 121,800 of 161,756 prompts identical, 9,120 lose
+   only the fit sentence, 12,296 only "Add nothing else", 18,540 both, 0 anything else; front/back pairs disagreeing about
+   those clauses 39,956 -> 0. The previous pin was 3d1f5304…. */
+const PINNED = "a7bd6b79f893c998f665f31b5398e19cac1c1847c3d613bd1fbeba2115ce6eda";
 
 let fails = 0;
 function check(label, cond, detail) {

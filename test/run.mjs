@@ -331,6 +331,13 @@
                       engine. Also pins the two isBottomsGarment() copies as identical, the
                       browser's verdict winning, the facts list agreeing on both sides, and
                       no prompt wording left in app.js.
+     prompt-lockstep
+                      "The shirt dropped and widened in the middle of the measurement"
+                      (2026-10-14): the plain-tee front shed its fit sentence where the
+                      shorter back kept "oversized ... elongated hem", so the turn changed
+                      the size in words. A clause both angles carry now ships only if both
+                      keep it: every front/back pair agrees, and against the previous
+                      shedding nothing changed but a shared clause removed.
      orient-engine
                       Layer C's DECISION - front or back, and when the reference swaps - moved
                       to lib/orient-engine.js (a Cloudflare Worker in production). Proven exact
@@ -527,6 +534,7 @@ const SUITES = [
   ["static-allowlist", "static-allowlist.test.mjs"],
   ["size-fit-pin", "size-fit-pin.test.mjs"],
   ["prompt-engine", "prompt-engine.test.mjs"],
+  ["prompt-lockstep", "prompt-lockstep.test.mjs"],
   ["orient-engine", "orient-engine.test.mjs"],
   ["orient-link", "orient-link.test.mjs"],
   ["room-latency", "room-latency.test.mjs"],
