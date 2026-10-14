@@ -231,8 +231,10 @@ console.log("\n── §6 the edge answers /size and /prompt with the SAME modul
   check("...with CORS for that origin only, never *", r1.headers.get("Access-Control-Allow-Origin") === "https://app.pear-ai.io" &&
     r1.headers.get("Cache-Control") === "no-store");
   const r2 = await call("/prompt", { body: pr });
-  check("POST /prompt answers exactly what the server's promptForRequest answers",
-    r2.status === 200 && (await r2.text()) === JSON.stringify({ prompt: PR.promptForRequest(PR.sanitizePromptRequest(JSON.parse(JSON.stringify(pr)))) }));
+  /* promptAnswerFor() since 2026-10-14 (§2.48): the wire string and the plain-knit verdict, from the one function the
+     server's /api/prompt calls too. */
+  check("POST /prompt answers exactly what the server's promptAnswerFor answers",
+    r2.status === 200 && (await r2.text()) === JSON.stringify(PR.promptAnswerFor(PR.sanitizePromptRequest(JSON.parse(JSON.stringify(pr))))));
   check("a preview origin is allowed; a foreign one, a look-alike and a missing Origin are refused",
     (await call("/size", { origin: "https://pear-git-x-pear2.vercel.app", body: ev })).status === 200 &&
     (await call("/size", { origin: "https://evil.example", body: ev })).status === 403 &&

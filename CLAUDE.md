@@ -67,6 +67,10 @@ This is not a bug — see the comment above the `[P.MED, fitSentence(...)]`
 line in `imageOnlyPrompt()` before "fixing" it by raising its priority,
 which would risk the closure lock shedding instead and reopening the
 "rendered wide open" report.
+**And since 2026-10-14 the two angles shed together (§2.48, SHED IN LOCKSTEP):**
+a clause both the front and the back carry - the fit sentence, "Add nothing
+else" - ships only if both dispatches keep it, so a turn never changes the
+size in words. Where the front sheds the size phrase, the back does too.
 
 > **RULE 0 — NEVER edit a dead clause and report the behaviour as changed.**
 > If a request is about how the garment renders (fit, drape, print placement,
@@ -1583,6 +1587,45 @@ jewelry like chains." Measured before changing anything:
   name, 366 a renamed colour meeting the size phrase's budget; `prompt-engine` re-pinned; `wide-view` (27 checks);
   qa:visual 40/40. **Worker deploy** for the prompt changes (`lib/api-version.js` synced) - until then prompts come from
   the origin (~350ms, correct).
+
+### 2.48 One garment through the turn - the size never changes with the angle; plain both sides is one reference (2026-10-14)
+"There were jumps - the shirt went down in the middle of the measurement. Keep it one shirt, not up and down while I
+measure; for every garment, at the sides too, and with the size change." The clip (FOX V-neck tee 1919148300, orange,
+sized up two) read frame by frame against its TEST record: fitted, the hem on the shorts, while the FRONT reference was on
+the wire; wider, dropped shoulders, the hem down the shorts from the BACK's acknowledgement (2.12s); fitted again after the
+FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
+- **SHED IN LOCKSTEP (`lib/prompts.js` `imageOnlyPrompt()`, Layer A).** The plain-tee front is the longest branch: at "two
+  up" with the colour named (§2.47) fitPrompt() shed its fit sentence (512 chars without, 659 with) while the shorter back
+  kept "Fit: oversized ..., generously dropped shoulders, ... elongated hem" - every turn changed the SIZE in words. The
+  flip sat on every rung where the front sheds and the back does not (a plain tee sized down: the back said "snug" /
+  "undersized"; "Add nothing else" on most rungs). A clause both angles carry now ships only if both dispatches keep it;
+  a clause one angle has (FRONT_CLOSURE_LOCK) follows its own budget. Against the previous engine: 121,800 of 161,756
+  prompts identical, 9,120 lose only the fit sentence, 12,296 only "Add nothing else", 18,540 both, 0 anything else;
+  front/back pairs that disagreed 39,956 -> 0 (`prompt-lockstep`; `prompt-engine` re-pinned; `trace:prompt` models it).
+  **The cost:** where the front already lost the size phrase (§0's limitation) the back loses it too - on a plain tee with
+  its colour named, sizing down 1-2 and up 2. Buying those rungs back is shorter fit phrasings (§0) - not done, unmeasured.
+- **ONE GARMENT, ONE REFERENCE (`app.js` `oneReferenceWillDo()`, in the preload gate, Layer B).** The photo moves the fit
+  too, and that predates the prompt flip: OASIS 2026-09-27 and the 09-29 session (with the front's lower-body sentence on
+  the back anchor - it did not help) both ran the hem down the thighs exactly while the back reference was on the wire. The
+  engine re-fits the garment to every new reference. A top plain on both sides gains nothing from its back photo, so it
+  goes as ONE reference for the whole measurement: the front-only run every product without a back photo takes (no swap,
+  the front anchor throughout, no back prime, no "back view unavailable" toast) and no re-drape (`reconditionForTopology`;
+  AI Auto stopped those 2026-10-06). Positive evidence on every count, or the swap stays: one garment, a top, a PLAIN KNIT
+  one by the engine's own construction verdict (`plainKnit` in every /prompt answer, `promptAnswerFor()` - a button, zip,
+  placket or hood would be drawn on the back); the classifier saw no graphic on the front (`front_is_plain`, new: server ->
+  widget `garment_front_is_plain` -> `item.frontIsPlain`, never a prompt fact) nor on the back (`backIsPlain`) and no front
+  lettering; neither photo measures a graphic (`blobLooksPrinted`) and both are one fabric colour (central medians within
+  `ONE_VIEW_COLOUR_MAX_L1` = 60). The reported tee's photos: front 1.87, back 2.02 (bar 2.5), colours 10 apart - one
+  reference; OASIS 42.8 / 25.8 - keeps its swap. `?one_view=0` is the swap; a TEST record carries `one-view {on, why}` and
+  `redrape-skip {one: true}`. `one-view` pins every count by name.
+- **Not changed:** a garment printed on either side still swaps - it must, to show its back; how far the engine re-fits on
+  such a photo was not measured further. The back anchors' words (§2.17: "top" and the lower-body lock were tried and
+  reverted).
+- **Deploy:** `lib/prompts.js` and the /prompt answer changed - `wrangler deploy` (cloudflare/orient) for the edge; until
+  then the room asks the origin (`lib/api-version.js` synced). An older server or widget sends no `front_is_plain`, and the
+  room keeps the swap.
+- **Measured:** not yet on a real body - the owner's next TEST session of the tee is the check (`one-view {on: true}`, no
+  `swap-*`, and one fit through the turn).
 
 ## 3. Cross-file lockstep
 

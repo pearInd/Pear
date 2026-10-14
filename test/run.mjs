@@ -338,6 +338,11 @@
                       the size in words. A clause both angles carry now ships only if both
                       keep it: every front/back pair agrees, and against the previous
                       shedding nothing changed but a shared clause removed.
+     one-view
+                      The same report, the other half: the engine re-fits the garment to every
+                      new reference, so a top plain on both sides (classifier + pixels + the
+                      engine's plain-knit verdict) goes as ONE reference - the front-only run,
+                      no re-drape. Every missing count keeps the swap, by name.
      orient-engine
                       Layer C's DECISION - front or back, and when the reference swaps - moved
                       to lib/orient-engine.js (a Cloudflare Worker in production). Proven exact
@@ -535,6 +540,7 @@ const SUITES = [
   ["size-fit-pin", "size-fit-pin.test.mjs"],
   ["prompt-engine", "prompt-engine.test.mjs"],
   ["prompt-lockstep", "prompt-lockstep.test.mjs"],
+  ["one-view", "one-view.test.mjs"],
   ["orient-engine", "orient-engine.test.mjs"],
   ["orient-link", "orient-link.test.mjs"],
   ["room-latency", "room-latency.test.mjs"],

@@ -39,7 +39,7 @@ import { makeStoreSizeChartHandler } from "./lib/store-size-charts.js";
 /* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
 import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
 /* The prompt engine - moved out of the browser 2026-09-26 (see lib/prompts.js). */
-import { promptForRequest, sanitizePromptRequest } from "./lib/prompts.js";
+import { promptAnswerFor, sanitizePromptRequest } from "./lib/prompts.js";
 /* The render engine behind our edge (2026-10-03): the token route answers with a SEALED ticket the edge
    opens (lib/rt-proxy.js) - the engine's key, its format and the model id never reach the page. */
 import { sealTicket } from "./lib/rt-proxy.js";
@@ -886,7 +886,7 @@ app.post("/api/size", sizeLimiter, (req, res) => {
 app.post("/api/prompt", promptLimiter, (req, res) => {
   res.set("Cache-Control", "no-store");
   try {
-    res.json({ prompt: promptForRequest(sanitizePromptRequest(req.body)) });
+    res.json(promptAnswerFor(sanitizePromptRequest(req.body)));
   } catch (err) {
     console.error("[prompt] build failed:", err?.message || err);
     res.status(500).json({ error: "prompt_failed" });
@@ -2762,6 +2762,14 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     back_source: views.back_source,
     backRecord: _backIdx !== -1 ? records[_backIdx] : null,
   });
+  /* THE FRONT'S VERDICT, asked the same way (2026-10-14, CLAUDE.md §2.48): has_graphic on the resolved FRONT photo's
+     record - true only on an explicit false, null when nobody looked. The room sends a garment plain on BOTH sides as
+     one reference for the whole measurement (ONE GARMENT, ONE REFERENCE in app.js), and it needs this side too: a
+     front graphic rendered over a back-facing body is the double-print bug. */
+  const _frontIdx = views.front ? uniqueUrls.findIndex((u) => sameImage(u, views.front)) : -1;
+  const _frontRec = _frontIdx !== -1 ? records[_frontIdx] : null;
+  const front_is_plain = _frontRec && _frontRec.has_graphic === false ? true
+    : _frontRec && _frontRec.has_graphic === true ? false : null;
 
   const uncertainCount = records.filter((r) => r.view === "uncertain").length;
   console.log(
@@ -2808,6 +2816,8 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
        its plain-back anchor ONLY on true - see the computation above for why null must
        not collapse to either side. */
     back_is_plain,
+    /* The same three states for the FRONT photo (see the computation above); null is not false. */
+    front_is_plain,
   });
 });
 
