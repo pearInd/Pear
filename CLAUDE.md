@@ -1596,6 +1596,22 @@ probe's live median; before the turn (a still body, no reading) the previous rec
 records carry `lag-comp`. `lag-comp` pins it. The same evening's lockstep / one-reference changes (5ad84d7, 1ff9553) were
 reverted on the owner's word ("the sides don't work, it only made it worse"); the records showed the cause was this lag.
 
+### 2.49 Measured on the real engine, 2026-10-14 night (5 sessions, ~75 credits, the owner's cap 80)
+The rig (the owner's recorded turn as the camera; `SPEED=1.8` replays it as a ~1.8s 360, the owner's live speed; `IDLE_LOOP`
+keeps the camera moving before the turn), preview `8ca4266`:
+- **PEAK, fast turn (n3):** front PEAK -> plain side -> the back print on the back -> on the way back ~0.2s of the back print
+  on the side and ~0.1s of a plain front, PEAK from ~3.3s. **CHICAGO shorts, fast (n5):** front print, side stripe, plain back,
+  front again, one length throughout. **PEAK, normal speed (n2):** clean at every angle.
+- **Why a fast turn is never transition-free:** after each swap the engine takes ~0.4s to DRAW the print (the owner's clips:
+  plain front 4.00-4.30s after a 3.27s acknowledgement; the back print first partial, whole ~0.1s later). On a ~1.8s 360 the back
+  is to the lens ~0.5s. The landing model with that drawing time (13 recorded 360s x 4 phases x the 8 measured delays, 384
+  turns a speed): plain front mean 15 / 42 / 117ms at 1x / 1.3x / 1.8x. Aiming the return earlier on fast turns ("print whole
+  by 350") cut 1.8x to 84ms but doubled front landings on the back (43 -> 80, and 25 -> 48 at 1x) - not shipped.
+- **⚠ THE WIDE VIEW CAN INVITE A HALLUCINATION (§2.47):** in this rig's room (a dark doorway at the left edge) the engine drew a
+  giant PEAK shirt over that area before the turn in 3 of 3 wide sessions (n1-n3), none with `?wide=0` (n4), none on the
+  shorts (n5, q1, q3) and none in the owner's own sessions. One control only - a decision for the owner, not yet acted on.
+- The rig's own artifact, stated: its recording is itself a past render, so on PEAK the shorts render red "CHICAGO".
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
