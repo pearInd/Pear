@@ -205,5 +205,17 @@ console.log("\n── §8 the two restores reach TEST sessions only (2026-10-11)
     /\.\.\.\(typeof traceEnabled === "function" && traceEnabled\(\) \? \{ strict: true \} : \{\}\),/.test(APP));
 }
 
+console.log("\n── §9 a dark warm colour is not charcoal - TEST sessions only (2026-10-12) ──");
+{
+  const P = await import("../lib/prompts.js");
+  const fabric = (hex, strict) => { const p = P.promptForRequest(P.sanitizePromptRequest({ kind: "single", angle: "back", delta: 0,
+    item: { name: "x", type: "shirt", __bottoms: false, colorHex: hex }, ...(strict ? { strict: true } : {}) })); const m = p.match(/Fabric: ([^.]*)\./); return m ? m[1] : null; };
+  check("§9.1 FOX's PEAK tee (#4e3b38): a TEST request names it dark brown; a shopper's still says charcoal (unchanged)",
+    fabric("#4e3b38", true) === "dark brown" && fabric("#4e3b38", false) === "charcoal", `${fabric("#4e3b38", true)} / ${fabric("#4e3b38", false)}`);
+  check("§9.2 black, navy, white, brown and a true charcoal name the same either way",
+    ["#000000", "#1b2550", "#ffffff", "#7a4b28", "#36363a", "#2b2b2b"].every((h) => fabric(h, true) === fabric(h, false) && fabric(h, true)));
+  check("§9.3 a warm dark grey a TEST request cannot place gets no word rather than a wrong one", fabric("#4a4644", true) === null);
+}
+
 console.log(fails === 0 ? "\nPrompt engine: OK" : `\nPrompt engine: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

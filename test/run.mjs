@@ -549,6 +549,7 @@ const SUITES = [
   ["full-look", "full-look.test.mjs"],
   ["ack-watchdog", "ack-watchdog.test.mjs"],
   ["hi-input", "hi-input.test.mjs"],
+  ["garment-facts", "garment-facts.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

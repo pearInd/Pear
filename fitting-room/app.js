@@ -4056,6 +4056,18 @@ window.addEventListener("message", (e) => {
      delivery of garment_composite - and the old guard discarded it, unread, before this
      line. The chip (and the model's actual reference) then stayed on the single front
      photo for the entire session, every time DOM detection happened to be right. */
+  /* THE GARMENT'S FACTS ARE KEPT EVEN WHEN ITS PHOTOS DID NOT CHANGE (2026-10-12, TEST sessions only until measured -
+     docs/plans/refit-and-sides.md S2). The classifier's message is the only delivery of the main fabric's colour, the printed
+     text and the plain-rear verdict, and the unchanged return below dropped all three whenever the room had opened on the
+     right front and back already - FOX's PEAK tee (#4e3b38) and CHICAGO shorts (#000000): every prompt of every session went
+     out with no "Fabric:" and no "Print:". The owner's clips show the colour drifting at the sides - the brown tee back as
+     black, the black shorts red (the shopper's own) - with nothing in the words to hold it. The same fields as below. */
+  if (typeof traceEnabled === "function" && traceEnabled()) {
+    if (typeof e.data.garment_color_hex === "string" && e.data.garment_color_hex) target.colorHex = e.data.garment_color_hex;
+    if (typeof e.data.garment_text_ocr === "string") target.textOcr = e.data.garment_text_ocr;
+    if (typeof e.data.garment_back_is_plain === "boolean") target.backIsPlain = e.data.garment_back_is_plain;
+    if (typeof traceOrient === "function") traceOrient("facts", { color: target.colorHex || null, ocr: typeof target.textOcr === "string" ? target.textOcr.length : null, plain: typeof target.backIsPlain === "boolean" ? target.backIsPlain : null });
+  }
   const unchanged = target.img === front && target.imgBack === back &&
     (composite === undefined || target.composite === composite);
   if (unchanged) {
