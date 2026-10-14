@@ -1612,6 +1612,21 @@ keeps the camera moving before the turn), preview `8ca4266`:
   shorts (n5, q1, q3) and none in the owner's own sessions. One control only - a decision for the owner, not yet acted on.
 - The rig's own artifact, stated: its recording is itself a past render, so on PEAK the shorts render red "CHICAGO".
 
+### 2.50 The portrait view, measured (2026-10-15, 4 sessions, the owner's 60 credits)
+`df0ee99` (THE SIDES CUT, THE HEIGHT KEPT + "turn slowly" in the guide), the rig on the owner's own V-neck 360 (the earlier
+camera clip was lost to a scratchpad cleanup):
+- **The giant shirt is gone:** 0 of 4 sessions (3 of 3 with the whole width, §2.49); head to feet in view in every one.
+- **Shirt only (PEAK, m2):** front PEAK from the reveal, plain sides, the back print on the back, PEAK again - with ~0.2s of a
+  plain front as the turn starts and ~0.3s of the back print on the chest's side on the way back (the drawing time, §2.49).
+- **Pants only (CHICAGO, m3):** front print, side stripe, plain back, front again; one length throughout - clean.
+- **Both (m4) - A BUG, NOT FIXED:** the shirt right throughout, but the shopper's OWN shorts until the first swap (2.4s); the
+  look's front composite (81KB, with the "BOTH" prompt) went out at connect and three times before the reveal, and the engine
+  dressed only the top; the shorts appeared with the back composite and stayed after the front's return. Shorts alone dress
+  from the first frame (m3). Needs its own measured fix.
+- **One session (m1) was the engine's:** a pre-reveal re-send of the same front image acknowledged after 5.4s - the print absent
+  until then - and the BACK queued behind it never acknowledged before the end (front print on the back). Acks were ~0.3s in
+  the other three. The reveal hold's re-send of an image already on the wire is the request that stalled.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
