@@ -267,6 +267,26 @@ function noteLiveContentRect(x, y, w, h) {
 function liveContentRect() {
   return _liveContentRect || { x: 0, y: 0, w: 1, h: 1 };
 }
+/* ── THE SIDES CUT, THE HEIGHT KEPT (2026-10-15) - "don't zoom in; just take off the sides, so the view is still the most
+   zoomed-out, but portrait" ──────────────────────────────────────────────────────────────────────────────────────────────
+   The night before (CLAUDE.md §2.49): with the whole 16:9 room in the engine's frame, the engine painted a giant shirt over
+   the room's empty, dark side before the turn - 3 of 3 sessions with the wide view, 0 of 1 with ?wide=0. So the camera's
+   full HEIGHT still reaches the engine (head to feet - not one row closer than the wide view), and a landscape frame keeps
+   only its centre LIVE_PORTRAIT_ASPECT: the shopper, not the room either side. A portrait camera (a phone held upright) is
+   whole. Every surface reads the one rectangle: the engine input (drawFrame), the card's shape, the continuity layer and,
+   through liveContentRect(), the recorder. ?portrait=0 keeps the whole width (2026-10-14's wide view); ?wide=0 the room
+   before both. */
+const LIVE_PORTRAIT_ASPECT = 3 / 4;
+function livePortraitView() {
+  try { return new URLSearchParams(location.search).get("portrait") !== "0"; } catch (_) { return true; }
+}
+/** The part of a vw x vh camera frame the engine and the shopper see: {sx, sy, sw, sh} in camera pixels. */
+function liveSourceRect(vw, vh) {
+  const wide = typeof liveWideView === "function" && liveWideView();
+  if (!wide || !livePortraitView() || !(vw > 0 && vh > 0) || vw / vh <= LIVE_PORTRAIT_ASPECT) return { sx: 0, sy: 0, sw: vw, sh: vh };
+  const sw = Math.round(vh * LIVE_PORTRAIT_ASPECT);
+  return { sx: Math.round((vw - sw) / 2), sy: 0, sw, sh: vh };
+}
 
 /* Mobile detection (Feature 2 / mobile download fix). Drives the SAVE PATH only:
    iOS Safari ignores <a download>, so on mobile we hand the clip to the native
@@ -4514,7 +4534,14 @@ async function startCamera(facing = cameraFacing) {
         card().dataset.orientation = cameraOrientation;
         /* WIDE VIEW: the card takes the camera's exact shape, so the render's cover-fit crops away only the bands the
            engine input added beside it - the shopper sees the whole camera (THE WHOLE CAMERA, NOT A STRIP OF IT). */
-        if (typeof liveWideView === "function" && liveWideView()) card().style.aspectRatio = `${vw} / ${vh}`;
+        if (typeof liveWideView === "function" && liveWideView()) {
+          /* ...cut to its centre (THE SIDES CUT, THE HEIGHT KEPT): the card is the rectangle the engine gets. */
+          const r = typeof liveSourceRect === "function" ? liveSourceRect(vw, vh) : { sw: vw, sh: vh };
+          card().style.aspectRatio = `${r.sw} / ${r.sh}`;
+          /* ...and a card whose height is capped (style.css: min(78vh, 640px) - a short window, the expanded room) narrows to
+             keep that shape, instead of widening past it and showing the engine input's black bands beside the shopper. */
+          if (r.sw < r.sh) card().style.maxWidth = `min(100%, calc(min(78vh, 640px) * ${(r.sw / r.sh).toFixed(4)}))`;
+        }
         console.log(`Camera orientation: ${cameraOrientation} (${vw}×${vh}) · facing: ${facing}`);
       };
       await v.play().catch(() => {});
@@ -5872,8 +5899,10 @@ function createThrottledInputStream(srcStream, {
   const drawFrame = () => {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return;
-    const scale = wide ? Math.min(width / vw, height / vh) : Math.max(width / vw, height / vh);
-    const dw = vw * scale, dh = vh * scale;
+    /* THE SIDES CUT, THE HEIGHT KEPT: under the wide view the source is the camera's centre (liveSourceRect). */
+    const src = wide && typeof liveSourceRect === "function" ? liveSourceRect(vw, vh) : { sx: 0, sy: 0, sw: vw, sh: vh };
+    const scale = wide ? Math.min(width / src.sw, height / src.sh) : Math.max(width / vw, height / vh);
+    const dw = src.sw * scale, dh = src.sh * scale;
     const dx = (width - dw) / 2, dy = (height - dh) / 2;
     if (wide) {
       /* BLACK BANDS - a letterboxed video, which the engine leaves alone. The first cut stretched the frame's own edge
@@ -5896,7 +5925,8 @@ function createThrottledInputStream(srcStream, {
        un-mirroring refactor above exists to have fixed. One call per frame to make that
        unrepresentable is a good trade. */
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(video, dx, dy, dw, dh);
+    if (wide) ctx.drawImage(video, src.sx, src.sy, src.sw, src.sh, dx, dy, dw, dh);
+    else ctx.drawImage(video, dx, dy, dw, dh);
   };
 
   const tick = () => {
@@ -9194,10 +9224,12 @@ function drawContinuityFrame(c, cam, ai) {
   if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
   const g = c.getContext("2d", { alpha: false });
   const wide = typeof liveWideView === "function" && liveWideView();
-  const scale = wide ? Math.min(W / vw, H / vh) : Math.max(W / vw, H / vh);
-  const dw = vw * scale, dh = vh * scale;
+  const src = wide && typeof liveSourceRect === "function" ? liveSourceRect(vw, vh) : { sx: 0, sy: 0, sw: vw, sh: vh };   // THE SIDES CUT
+  const scale = wide ? Math.min(W / src.sw, H / src.sh) : Math.max(W / vw, H / vh);
+  const dw = src.sw * scale, dh = src.sh * scale;
   g.setTransform(1, 0, 0, 1, 0, 0);   // reality in, like every other video surface here
-  g.drawImage(cam, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  if (wide) g.drawImage(cam, src.sx, src.sy, src.sw, src.sh, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  else g.drawImage(cam, (W - dw) / 2, (H - dh) / 2, dw, dh);
   return true;
 }
 

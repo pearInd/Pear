@@ -29,7 +29,11 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
 
 /* ── §1 the engine input ─────────────────────────────────────────────────────────────── */
 const throttleCode = extract("function createThrottledInputStream(", "\n/**\n * Open the input gate");
-function drawOnce({ vw, vh, wide }) {
+/* THE SIDES CUT, THE HEIGHT KEPT (2026-10-15) - the real liveSourceRect(), with its own knob. */
+const srcCode = extract("const LIVE_PORTRAIT_ASPECT", "\n/* Mobile detection");
+const sourceRectFor = (wide, portrait) => new Function("location", "liveWideView", srcCode + "\nreturn liveSourceRect;")(
+  { search: portrait ? "" : "?portrait=0" }, () => wide);
+function drawOnce({ vw, vh, wide, portrait = true }) {
   const draws = [], noted = [], fills = [];
   let interval = null;
   const sandbox = {
@@ -40,6 +44,7 @@ function drawOnce({ vw, vh, wide }) {
     setTimeout: () => 1, clearTimeout() {},
     MediaStream: class { constructor(t) { this.t = t; } getTracks() { return this.t; } },
     liveWideView: () => wide,
+    liveSourceRect: sourceRectFor(wide, portrait),
     noteLiveContentRect: (...a) => noted.push(a),
     document: {
       createElement: () => ({
@@ -57,14 +62,15 @@ function drawOnce({ vw, vh, wide }) {
   return new Promise((r) => setImmediate(() => { if (interval) interval(); r({ draws, noted, fills }); }));
 }
 
-console.log("── §1 THE ENGINE GETS THE WHOLE CAMERA ──");
+console.log("── §1 THE ENGINE GETS THE WHOLE CAMERA'S HEIGHT ──");
 {
-  /* The reported case: the 270x480 crop the narrow frame's 9:16 request produced (and a phone held upright). */
+  /* The reported case: the 270x480 crop the narrow frame's 9:16 request produced (and a phone held upright). Drawn from its
+     source rectangle - the whole frame, it is already narrower than 3:4: [video, sx, sy, sw, sh, dx, dy, dw, dh]. */
   const p = await drawOnce({ vw: 270, vh: 480, wide: true });
   const main = p.draws[p.draws.length - 1];
   const s = 288 / 480, dw = 270 * s, dx = (512 - dw) / 2;
-  check("a portrait camera is CONTAINED: its full height, centred", main.length === 5 && near(main[1], dx) && near(main[2], 0) &&
-    near(main[3], dw) && near(main[4], 288), JSON.stringify(main));
+  check("a portrait camera is CONTAINED whole: its full height, centred", main.length === 9 && main[1] === 0 && main[3] === 270 &&
+    main[4] === 480 && near(main[5], dx) && near(main[6], 0) && near(main[7], dw) && near(main[8], 288), JSON.stringify(main));
   check("...beside two BLACK bands - stretched edge columns were read as fabric (q2: giant shorts in the band)",
     p.draws.length === 1 && p.fills.length === 3 && p.fills[0][1] === "#000" && p.fills[1][0] === 0 && p.fills[1][2] >= Math.floor(dx) &&
     near(p.fills[2][0], Math.floor(dx + dw)), JSON.stringify(p.fills));
@@ -72,13 +78,19 @@ console.log("── §1 THE ENGINE GETS THE WHOLE CAMERA ──");
     near(p.noted[0][0], dx / 512) && near(p.noted[0][2], dw / 512) && p.noted[0][1] === 0 && p.noted[0][3] === 1,
     JSON.stringify(p.noted));
 
+  /* THE SIDES CUT, THE HEIGHT KEPT: a landscape camera keeps its full height and its centre 3:4 - 216 of the 512 columns. */
   const q = await drawOnce({ vw: 640, vh: 480, wide: true });
-  check("a 4:3 webcam is contained too - 384 of the 512 columns", q.draws.length === 1 && near(q.draws[0][3], 384),
-    JSON.stringify(q.draws[0]));
-
+  check("a 4:3 webcam keeps its full height and its centre 3:4 (360 of 640 columns -> 216 of the engine's 512)",
+    q.draws.length === 1 && q.draws[0][1] === 140 && q.draws[0][3] === 360 && q.draws[0][4] === 480 && near(q.draws[0][7], 216) &&
+    near(q.draws[0][8], 288), JSON.stringify(q.draws[0]));
   const w = await drawOnce({ vw: 1280, vh: 720, wide: true });
-  check("a 16:9 camera reaches the engine EXACTLY as before: one full-frame draw, no bands", w.draws.length === 1 && w.fills.length === 0 &&
-    near(w.draws[0][1], 0) && near(w.draws[0][3], 512) && near(w.draws[0][4], 288), JSON.stringify(w.draws));
+  check("a 16:9 camera: the full height - not one row closer - and the centre 3:4, the room either side black (the giant shirt, §2.49)",
+    w.draws.length === 1 && w.draws[0][1] === 370 && w.draws[0][2] === 0 && w.draws[0][3] === 540 && w.draws[0][4] === 720 &&
+    near(w.draws[0][7], 216) && near(w.draws[0][8], 288) && w.fills.length === 3 && near(w.noted[0][2], 216 / 512) && w.noted[0][3] === 1,
+    JSON.stringify({ d: w.draws[0].slice(1), f: w.fills, n: w.noted }));
+  const wp = await drawOnce({ vw: 1280, vh: 720, wide: true, portrait: false });
+  check("?portrait=0 is the whole 16:9 width of 2026-10-14: one full-frame draw, no bands", wp.draws.length === 1 && wp.fills.length === 0 &&
+    wp.draws[0][3] === 1280 && near(wp.draws[0][7], 512) && near(wp.draws[0][8], 288), JSON.stringify(wp.draws));
 
   const old = await drawOnce({ vw: 270, vh: 480, wide: false });
   const oscale = Math.max(512 / 270, 288 / 480);
@@ -125,8 +137,8 @@ console.log("\n── §2 THE CAMERA REQUEST: a phone is a touch device, never a
 
 console.log("\n── §3 THE CARD AND THE CLIP TAKE THAT RECTANGLE ──");
 {
-  check("the card takes the camera's exact shape under the wide view (so the render's cover-fit crops only the bands)",
-    /if \(typeof liveWideView === "function" && liveWideView\(\)\) card\(\)\.style\.aspectRatio = `\$\{vw\} \/ \$\{vh\}`;/.test(APP));
+  check("the card takes the engine's rectangle's exact shape under the wide view (so the render's cover-fit crops only the bands)",
+    /if \(typeof liveWideView === "function" && liveWideView\(\)\) \{[\s\S]{0,200}?const r = typeof liveSourceRect === "function" \? liveSourceRect\(vw, vh\) : \{ sw: vw, sh: vh \};\s*\n\s*card\(\)\.style\.aspectRatio = `\$\{r\.sw\} \/ \$\{r\.sh\}`;/.test(APP));
   const rec = extract("function startRecording()", "/** Halt the canvas paint loop");
   check("the clip records the camera's rectangle of the render, at even dimensions",
     /const cr = typeof liveContentRect === "function" \? liveContentRect\(\)/.test(rec) &&
@@ -135,8 +147,9 @@ console.log("\n── §3 THE CARD AND THE CLIP TAKE THAT RECTANGLE ──");
     /ctx\.drawImage\(recordHoldSrc, hr\.x \* HW, hr\.y \* HH, hr\.w \* HW, hr\.h \* HH, 0, 0, recordCanvas\.width, recordCanvas\.height\);/.test(rec));
   const cont = extract("function drawContinuityFrame", "function startStreamContinuity()");
   check("the camera layer is fitted with the throttle's own switch, so it lands on the render's body",
-    /wide \? Math\.min\(W \/ vw, H \/ vh\) : Math\.max\(W \/ vw, H \/ vh\)/.test(cont) &&
-    /wide \? Math\.min\(width \/ vw, height \/ vh\) : Math\.max\(width \/ vw, height \/ vh\)/.test(throttleCode));
+    /wide \? Math\.min\(W \/ src\.sw, H \/ src\.sh\) : Math\.max\(W \/ vw, H \/ vh\)/.test(cont) &&
+    /g\.drawImage\(cam, src\.sx, src\.sy, src\.sw, src\.sh,/.test(cont) &&
+    /wide \? Math\.min\(width \/ src\.sw, height \/ src\.sh\) : Math\.max\(width \/ vw, height \/ vh\)/.test(throttleCode));
 }
 
 console.log("\n── §4 THE FABRIC'S OWN COLOUR, measured from the rear photo ──");

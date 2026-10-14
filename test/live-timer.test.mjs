@@ -253,9 +253,11 @@ console.log("\n── §7 it never touches the session ──");
 console.log("\n── §8 the guide, the slider, the stage and the verified moment ──");
 {
   const guide = HTML.slice(HTML.indexOf('id="camGuide"'), HTML.indexOf('id="camGuideGo"'));
-  check("the guide has three steps, the full-body one first - and no \"turn slowly\"",
-    (guide.match(/<li class="cam-guide__step/g) || []).length === 3 && /cam-guide__step--key[^>]*style="--i:0"/.test(guide) &&
-    !/camGuideStep4|הסתובבו לאט/.test(HTML) && !/camGuideStep4|הסתובבו לאט/.test(I18N));
+  /* "Turn slowly" was left out on 2026-09-29 and added on the owner's word on 2026-10-15 (CLAUDE.md §2.49: a print takes
+     ~0.4s to draw after each swap, so a fast 360 always shows a moment of plain fabric) - LAST, the full-body step stays first. */
+  check("the guide has four steps, the full-body one first and \"turn slowly\" last",
+    (guide.match(/<li class="cam-guide__step/g) || []).length === 4 && /cam-guide__step--key[^>]*style="--i:0"/.test(guide) &&
+    /style="--i:3"[\s\S]*data-i18n="camGuideStep4Title"/.test(guide) && /camGuideStep4:/.test(I18N));
   check("the timer is a draggable glass slider over off / 3 / 5 / 10",
     /id="timerTrack"/.test(HTML) && /cam-timer__pill/.test(HTML) && ["0", "3", "5", "10"].every((v) => HTML.includes(`data-timer="${v}"`)) &&
     /slider\.addEventListener\("pointermove"/.test(BLOCK) && /LIVE_TIMER_RUBBER_BAND/.test(BLOCK));
