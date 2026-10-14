@@ -1624,8 +1624,20 @@ FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
 - **Deploy:** `lib/prompts.js` and the /prompt answer changed - `wrangler deploy` (cloudflare/orient) for the edge; until
   then the room asks the origin (`lib/api-version.js` synced). An older server or widget sends no `front_is_plain`, and the
   room keeps the swap.
-- **Measured:** not yet on a real body - the owner's next TEST session of the tee is the check (`one-view {on: true}`, no
-  `swap-*`, and one fit through the turn).
+- **⚠ PRODUCTION'S CACHE CANNOT CARRY THE VERDICTS YET.** The preview's /api/classify-images on a FOX tee never seen
+  before answered `primary_color_hex`, `front_text_ocr` and `front_is_plain`; asked again three seconds later (a cache
+  hit) every one of them came back null, and the reported tee answers `back_is_plain: null, front_is_plain: null` - the
+  `garment_cache` table has no v12 columns (`text_ocr`, `has_graphic`, `primary_color_hex`, `classifier_version`), so a
+  repeat visit loses the classifier's colour, print text and plain-rear verdict as well (and `front_text_ocr` arrives as
+  "" for "nobody looked"). The fix is the owner's: run `archive/supabase_setup_v12.sql` in Supabase - rows with a null
+  `classifier_version` then count as stale and are re-classified on their next visit. Until then ONE GARMENT, ONE
+  REFERENCE abstains (`front-unproven`) on every cached product and the swap stays. **Pixels alone are not enough** -
+  the probe over FOX's catalogue: 0 of 80 printed tees read plain on both photos, but the lowest two scored 2.61 and 2.77
+  against the 2.5 bar (16 of 40 plain basics pass); so no pixel-only fallback.
+- **Checked end to end without the engine** (the source room on the real FOX page, the mock engine, the preview's
+  classifier): as served, `one-view {on: false, why: "front-unproven"}` and the swaps as before; with the two verdicts
+  supplied, `one-view {on: true, why: "plain-both"}`, `watch {dual: false}`, no prime and no swap through the whole 360.
+- **Measured on a body:** not yet - the owner's next TEST session of the tee (`ctx.size` now names the size rung).
 
 ## 3. Cross-file lockstep
 
