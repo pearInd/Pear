@@ -30,7 +30,7 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
 /* ── §1 the engine input ─────────────────────────────────────────────────────────────── */
 const throttleCode = extract("function createThrottledInputStream(", "\n/**\n * Open the input gate");
 function drawOnce({ vw, vh, wide }) {
-  const draws = [], noted = [];
+  const draws = [], noted = [], fills = [];
   let interval = null;
   const sandbox = {
     LIVE_INFERENCE_FPS: 10, LIVE_W: 512, LIVE_H: 288,
@@ -46,14 +46,15 @@ function drawOnce({ vw, vh, wide }) {
         muted: false, playsInline: false, autoplay: false, srcObject: null,
         videoWidth: vw, videoHeight: vh, width: 0, height: 0,
         play: () => Promise.resolve(), pause() {},
-        getContext: () => ({ save() {}, restore() {}, setTransform() {}, drawImage: (...a) => draws.push(a) }),
+        getContext: () => ({ save() {}, restore() {}, setTransform() {}, drawImage: (...a) => draws.push(a),
+          set fillStyle(v) { fills.push(["style", v]); }, fillRect: (...a) => fills.push(a) }),
         captureStream: () => ({ getVideoTracks: () => [{ contentHint: "", requestFrame() {}, stop() {} }] }),
       }),
     },
   };
   const fn = new Function(...Object.keys(sandbox), throttleCode + "\nreturn createThrottledInputStream;")(...Object.values(sandbox));
   fn({ getVideoTracks: () => [{ applyConstraints: () => Promise.resolve() }], getTracks: () => [] }, { gated: false });
-  return new Promise((r) => setImmediate(() => { if (interval) interval(); r({ draws, noted }); }));
+  return new Promise((r) => setImmediate(() => { if (interval) interval(); r({ draws, noted, fills }); }));
 }
 
 console.log("── §1 THE ENGINE GETS THE WHOLE CAMERA ──");
@@ -64,19 +65,19 @@ console.log("── §1 THE ENGINE GETS THE WHOLE CAMERA ──");
   const s = 288 / 480, dw = 270 * s, dx = (512 - dw) / 2;
   check("a portrait camera is CONTAINED: its full height, centred", main.length === 5 && near(main[1], dx) && near(main[2], 0) &&
     near(main[3], dw) && near(main[4], 288), JSON.stringify(main));
-  check("...beside two bands drawn from its own first and last columns, stretched outward (no person duplicated)",
-    p.draws.length === 3 && p.draws[0][1] === 0 && p.draws[0][3] === 1 && p.draws[1][1] === 269 && p.draws[1][3] === 1,
-    JSON.stringify(p.draws.slice(0, 2)));
+  check("...beside two BLACK bands - stretched edge columns were read as fabric (q2: giant shorts in the band)",
+    p.draws.length === 1 && p.fills.length === 3 && p.fills[0][1] === "#000" && p.fills[1][0] === 0 && p.fills[1][2] >= Math.floor(dx) &&
+    near(p.fills[2][0], Math.floor(dx + dw)), JSON.stringify(p.fills));
   check("...and the rectangle it fills is published, as fractions of the engine frame", p.noted.length === 1 &&
     near(p.noted[0][0], dx / 512) && near(p.noted[0][2], dw / 512) && p.noted[0][1] === 0 && p.noted[0][3] === 1,
     JSON.stringify(p.noted));
 
   const q = await drawOnce({ vw: 640, vh: 480, wide: true });
-  check("a 4:3 webcam is contained too - 384 of the 512 columns", q.draws.length === 3 && near(q.draws[2][3], 384),
-    JSON.stringify(q.draws[2]));
+  check("a 4:3 webcam is contained too - 384 of the 512 columns", q.draws.length === 1 && near(q.draws[0][3], 384),
+    JSON.stringify(q.draws[0]));
 
   const w = await drawOnce({ vw: 1280, vh: 720, wide: true });
-  check("a 16:9 camera reaches the engine EXACTLY as before: one full-frame draw, no bands", w.draws.length === 1 &&
+  check("a 16:9 camera reaches the engine EXACTLY as before: one full-frame draw, no bands", w.draws.length === 1 && w.fills.length === 0 &&
     near(w.draws[0][1], 0) && near(w.draws[0][3], 512) && near(w.draws[0][4], 288), JSON.stringify(w.draws));
 
   const old = await drawOnce({ vw: 270, vh: 480, wide: false });

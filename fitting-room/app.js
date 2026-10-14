@@ -246,9 +246,9 @@ const LIVE_W = 512, LIVE_H = 288;
         only the torso dressed);
      3. the card then cover-cropped the 16:9 render into a portrait box (42% of its width).
    Now: a phone (a coarse pointer with touch, not a narrow window) asks for its sensor's full
-   4:3 field in the orientation it is held, a desktop for the 16:9 it always had; the WHOLE
-   camera frame is fitted into the engine's 16:9 input (contained - the bands either side are
-   the frame's own edge columns stretched, never shown); the card takes the camera's exact
+   4:3 field in the orientation it is held, a desktop for the width alone; the WHOLE camera
+   frame is fitted into the engine's 16:9 input (contained - black bands either side, never
+   shown; stretched edge columns were read as fabric, see drawFrame); the card takes the camera's exact
    shape, so the cover-fit that shows the render crops exactly those bands away; the recorder
    saves that same rectangle. A 16:9 camera is unchanged at the engine - same frame, same pixels.
    ?wide=0 is the room before this. liveContentRect() is where the camera sits in the engine's
@@ -5866,9 +5866,8 @@ function createThrottledInputStream(srcStream, {
          which was never flipped at source and is unaffected.
      If you re-add a flip here, all of the above have to come back with it. */
   /* WIDE VIEW (THE WHOLE CAMERA, NOT A STRIP OF IT, by LIVE_W): the camera frame is CONTAINED, not cover-cropped - a
-     portrait or 4:3 camera reaches the engine whole, beside bands of its own edge columns stretched outward (the room
-     around the shopper continued, no person duplicated, never shown: the card crops them). A 16:9 camera is the same
-     frame either way. Resolved once per stream; typeof: the suites run this standalone, as the room before it. */
+     portrait or 4:3 camera reaches the engine whole, beside black bands (never shown: the card crops them). A 16:9 camera
+     is the same frame either way. Resolved once per stream; typeof: the suites run this standalone, as the room before it. */
   const wide = typeof liveWideView === "function" && liveWideView();
   const drawFrame = () => {
     const vw = video.videoWidth, vh = video.videoHeight;
@@ -5877,14 +5876,14 @@ function createThrottledInputStream(srcStream, {
     const dw = vw * scale, dh = vh * scale;
     const dx = (width - dw) / 2, dy = (height - dh) / 2;
     if (wide) {
-      if (dx >= 1) {   // pillarbox: the first and last source columns, stretched across each band
+      /* BLACK BANDS - a letterboxed video, which the engine leaves alone. The first cut stretched the frame's own edge
+         columns into them: vertical streaks the engine read as fabric, and with a pinstripe reference it painted giant
+         shorts across the band and into the shopper's view for 1.4s (real session q2, 2026-10-14). */
+      if (dx >= 1 || dy >= 1) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.drawImage(video, 0, 0, 1, vh, 0, 0, Math.ceil(dx), height);
-        ctx.drawImage(video, vw - 1, 0, 1, vh, Math.floor(dx + dw), 0, Math.ceil(dx) + 1, height);
-      } else if (dy >= 1) {   // letterbox (a camera wider than 16:9): the first and last rows
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.drawImage(video, 0, 0, vw, 1, 0, 0, width, Math.ceil(dy));
-        ctx.drawImage(video, 0, vh - 1, vw, 1, 0, Math.floor(dy + dh), width, Math.ceil(dy) + 1);
+        ctx.fillStyle = "#000";
+        if (dx >= 1) { ctx.fillRect(0, 0, Math.ceil(dx), height); ctx.fillRect(Math.floor(dx + dw), 0, Math.ceil(dx) + 1, height); }
+        else { ctx.fillRect(0, 0, width, Math.ceil(dy)); ctx.fillRect(0, Math.floor(dy + dh), width, Math.ceil(dy) + 1); }
       }
       if (typeof noteLiveContentRect === "function") noteLiveContentRect(dx / width, dy / height, dw / width, dh / height);
     }

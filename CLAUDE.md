@@ -1552,8 +1552,9 @@ jewelry like chains." Measured before changing anything:
   cover-fitted that into the engine's 16:9 input - a strip of ~32% of its height (the owner's PEAK clips: the face cut off);
   the card cover-cropped the render again. Now a phone is a touch device with a coarse pointer and asks for its full 4:3
   sensor (3:4 upright, 4:3 on its side); a desktop asks for the width alone, so a webcam keeps its shape (16:9 is the
-  512x288 it always was); the whole frame is CONTAINED in the engine input, the bands beside it its own edge columns
-  stretched (never shown); the card takes the camera's exact shape (`style.aspectRatio`), so the render's cover-fit crops
+  512x288 it always was); the whole frame is CONTAINED in the engine input beside BLACK bands (never shown - the first cut
+  stretched the frame's edge columns into them, and the engine read the streaks as fabric: with a pinstripe reference it
+  painted giant shorts across the band and into view for 1.4s, real session q2); the card takes the camera's exact shape (`style.aspectRatio`), so the render's cover-fit crops
   only the bands; the clip records that rectangle (`liveContentRect()`, even dimensions, the frozen tail too); the
   continuity layer is fitted with the same switch. A 16:9 camera reaches the engine unchanged. After: the same room/camera
   -> 512x384, card 437x328, all four corners of the camera on screen. The cost: a portrait or 4:3 camera's body gets fewer
