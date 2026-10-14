@@ -17184,6 +17184,9 @@ async function goLive() {
       exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP ? PEAR_EXP : undefined,
       /* What the rear reference's mask did before go-live (maskReferenceBand) - numbers and reasons only. */
       ref: typeof _refMaskLog !== "undefined" && _refMaskLog.length ? _refMaskLog.slice(-3) : undefined,
+      /* The size chosen against the recommended one - the fit sentence's rung (§2.48: the 2026-10-14 clip could only be
+         read as "two up" from its frames). */
+      size: typeof getSizeDelta === "function" ? getSizeDelta() : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the
