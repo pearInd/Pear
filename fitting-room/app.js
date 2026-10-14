@@ -236,6 +236,38 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of
    pixels, so this lowers visual quality + pipeline cost, not the token count itself. */
 const LIVE_W = 512, LIVE_H = 288;
 
+/* ── THE WHOLE CAMERA, NOT A STRIP OF IT (2026-10-14) - "the camera is too close, zoom out" ──
+   Three crops stacked between the camera and the shopper's eye:
+     1. buildVideoConstraints() called any window under 769px wide a PHONE - and the widget's
+        room is a ~480px-wide frame on a desktop page - so it asked a landscape webcam for 9:16,
+        and Chrome cropped it (measured: a 640x480 camera delivered 270x480, 42% of its width);
+     2. drawFrame() COVER-fitted that portrait frame into the engine's 16:9 input: a horizontal
+        strip of ~32% of its height reached the engine (the owner's PEAK clips: the face cut off,
+        only the torso dressed);
+     3. the card then cover-cropped the 16:9 render into a portrait box (42% of its width).
+   Now: a phone (a coarse pointer with touch, not a narrow window) asks for its sensor's full
+   4:3 field in the orientation it is held, a desktop for the 16:9 it always had; the WHOLE
+   camera frame is fitted into the engine's 16:9 input (contained - the bands either side are
+   the frame's own edge columns stretched, never shown); the card takes the camera's exact
+   shape, so the cover-fit that shows the render crops exactly those bands away; the recorder
+   saves that same rectangle. A 16:9 camera is unchanged at the engine - same frame, same pixels.
+   ?wide=0 is the room before this. liveContentRect() is where the camera sits in the engine's
+   frame (fractions; all of it with ?wide=0 or before the first frame). */
+function liveWideView() {
+  try { return new URLSearchParams(location.search).get("wide") !== "0"; } catch (_) { return false; }
+}
+let _liveContentRect = null;
+/** Called by the input stream's drawFrame() with the rectangle the camera fills - fractions of the engine frame. */
+function noteLiveContentRect(x, y, w, h) {
+  const r = _liveContentRect;
+  if (r && Math.abs(r.x - x) < 1e-3 && Math.abs(r.y - y) < 1e-3 && Math.abs(r.w - w) < 1e-3 && Math.abs(r.h - h) < 1e-3) return;
+  _liveContentRect = { x, y, w, h };
+}
+/** Where the camera sits in the engine's frame (fractions), the whole frame when nothing was noted. */
+function liveContentRect() {
+  return _liveContentRect || { x: 0, y: 0, w: 1, h: 1 };
+}
+
 /* Mobile detection (Feature 2 / mobile download fix). Drives the SAVE PATH only:
    iOS Safari ignores <a download>, so on mobile we hand the clip to the native
    share sheet ("Save Video" → gallery) instead of trusting the anchor.
@@ -4032,6 +4064,14 @@ window.addEventListener("message", (e) => {
      delivery of garment_composite - and the old guard discarded it, unread, before this
      line. The chip (and the model's actual reference) then stayed on the single front
      photo for the entire session, every time DOM detection happened to be right. */
+  /* THE GARMENT'S FACTS ARE KEPT EVEN WHEN ITS PHOTOS DID NOT CHANGE (2026-10-14, every session - measured TEST-only on the
+     sides branch since 2026-10-12). The classifier's message is the only delivery of the main fabric's colour, the printed
+     text and the plain-rear verdict, and the unchanged return below dropped all three whenever the room had opened on the
+     right front and back already - FOX's PEAK tee (#4e3b38) and CHICAGO shorts (#000000) went out with no "Fabric:" and no
+     "Print:" in every prompt, and the owner's clips show a brown tee rendered near-black. The same fields as below. */
+  if (typeof e.data.garment_color_hex === "string" && e.data.garment_color_hex) target.colorHex = e.data.garment_color_hex;
+  if (typeof e.data.garment_text_ocr === "string") target.textOcr = e.data.garment_text_ocr;
+  if (typeof e.data.garment_back_is_plain === "boolean") target.backIsPlain = e.data.garment_back_is_plain;
   const unchanged = target.img === front && target.imgBack === back &&
     (composite === undefined || target.composite === composite);
   if (unchanged) {
@@ -4413,19 +4453,29 @@ function hidePearLoader() {
    - Desktop: keep the compact landscape hint (512×288) - desktop webcams are landscape.
    `aspectRatio` is an *ideal* (best-effort); whatever the browser actually returns is then
    measured in loadedmetadata and the stage adapts. createThrottledInputStream() still
-   downscales to LIVE_W×LIVE_H before Decart, so the billed input is never affected. */
+   downscales to LIVE_W×LIVE_H before Decart, so the billed input is never affected.
+   WIDE VIEW (THE WHOLE CAMERA, NOT A STRIP OF IT, by LIVE_W): a phone is a touch device with a
+   coarse pointer - never a narrow window, which on a desktop page is the widget's ~480px frame
+   (it asked the webcam for 9:16 and got a crop) - and it asks for the full 4:3 sensor (3:4 held
+   upright), where 9:16 cropped a quarter of its width; a desktop asks for the width alone, so the webcam keeps its shape.
+   ?wide=0 is the width test, 9:16 and 512x288. */
 function buildVideoConstraints(facing) {
-  const isPhone  = window.matchMedia("(max-width: 768px)").matches;
+  const wide = typeof liveWideView === "function" && liveWideView();
+  let touch = false;
+  try { touch = navigator.maxTouchPoints > 0 && window.matchMedia("(pointer: coarse)").matches; } catch (_) {}
+  const isPhone  = wide ? touch : window.matchMedia("(max-width: 768px)").matches;
   const portrait = window.matchMedia("(orientation: portrait)").matches;
   const video = {
     facingMode: facing,
     frameRate: { ideal: LIVE_FPS, max: LIVE_FPS },
   };
   if (isPhone) {
-    video.aspectRatio = { ideal: portrait ? 9 / 16 : 16 / 9 };
+    video.aspectRatio = { ideal: wide ? (portrait ? 3 / 4 : 4 / 3) : (portrait ? 9 / 16 : 16 / 9) };
   } else {
     video.width  = { ideal: LIVE_W };
-    video.height = { ideal: LIVE_H };
+    /* WIDE VIEW: the width alone, so the webcam keeps its own shape - a 16:9 camera is the 512x288 it always was, a 4:3
+       one arrives whole (a height asked with it made Chrome crop a 640x480 camera to 512x288, its top and bottom gone). */
+    if (!wide) video.height = { ideal: LIVE_H };
   }
   return video;
 }
@@ -4462,6 +4512,9 @@ async function startCamera(facing = cameraFacing) {
         if (!vw || !vh) return;
         cameraOrientation = vw < vh ? "portrait" : "landscape";
         card().dataset.orientation = cameraOrientation;
+        /* WIDE VIEW: the card takes the camera's exact shape, so the render's cover-fit crops away only the bands the
+           engine input added beside it - the shopper sees the whole camera (THE WHOLE CAMERA, NOT A STRIP OF IT). */
+        if (typeof liveWideView === "function" && liveWideView()) card().style.aspectRatio = `${vw} / ${vh}`;
         console.log(`Camera orientation: ${cameraOrientation} (${vw}×${vh}) · facing: ${facing}`);
       };
       await v.play().catch(() => {});
@@ -5812,12 +5865,29 @@ function createThrottledInputStream(srcStream, {
        · The lower-body guard and the orientation watcher's 96px sampler read #webcam,
          which was never flipped at source and is unaffected.
      If you re-add a flip here, all of the above have to come back with it. */
+  /* WIDE VIEW (THE WHOLE CAMERA, NOT A STRIP OF IT, by LIVE_W): the camera frame is CONTAINED, not cover-cropped - a
+     portrait or 4:3 camera reaches the engine whole, beside bands of its own edge columns stretched outward (the room
+     around the shopper continued, no person duplicated, never shown: the card crops them). A 16:9 camera is the same
+     frame either way. Resolved once per stream; typeof: the suites run this standalone, as the room before it. */
+  const wide = typeof liveWideView === "function" && liveWideView();
   const drawFrame = () => {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return;
-    const scale = Math.max(width / vw, height / vh);
+    const scale = wide ? Math.min(width / vw, height / vh) : Math.max(width / vw, height / vh);
     const dw = vw * scale, dh = vh * scale;
     const dx = (width - dw) / 2, dy = (height - dh) / 2;
+    if (wide) {
+      if (dx >= 1) {   // pillarbox: the first and last source columns, stretched across each band
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(video, 0, 0, 1, vh, 0, 0, Math.ceil(dx), height);
+        ctx.drawImage(video, vw - 1, 0, 1, vh, Math.floor(dx + dw), 0, Math.ceil(dx) + 1, height);
+      } else if (dy >= 1) {   // letterbox (a camera wider than 16:9): the first and last rows
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(video, 0, 0, vw, 1, 0, 0, width, Math.ceil(dy));
+        ctx.drawImage(video, 0, vh - 1, vw, 1, 0, Math.floor(dy + dh), width, Math.ceil(dy) + 1);
+      }
+      if (typeof noteLiveContentRect === "function") noteLiveContentRect(dx / width, dy / height, dw / width, dh / height);
+    }
     /* IDENTITY, ASSERTED RATHER THAN ASSUMED. This loop applies no transform of its own,
        so the reset looks redundant - and it is, today, which is exactly why it is cheap
        enough to keep. This canvas is the ONE surface whose contents become the payload
@@ -7593,6 +7663,57 @@ function referenceBackBand(url) {
   return job;
 }
 
+/* ── THE FABRIC'S OWN COLOUR, MEASURED FROM ITS REAR PHOTO (2026-10-14) - "the colours come out faded" ──
+   The prompt names a garment's colour ("Fabric: dark brown." - identityLockSentence, lib/prompts.js) only when the
+   classifier sent one, and for a cached product it often sends none: the FOX beige shorts 1154009415 went out with
+   "Strictly preserve original pattern and color" and no colour at all. Where the classifier gave nothing, the room
+   measures the main fabric itself, on the one photo it already holds a garment band for - the rear reference this mask
+   paints (the back is the largest plain area of most garments). Two flank patches either side of where a print sits
+   (a top: the lower back, between the arms; a bottom: the seat, either leg), the per-channel median, and an abstain
+   unless most of the patch agrees with it (a print or a seam under it) - a wrong colour named is worse than none. The
+   classifier's colour always wins (promptFactsOf). ?fabric_measure=0 turns it off. */
+const _refFabricColors = new Map();   // canonical rear-photo URL -> "#rrggbb"
+function noteReferenceFabricColor(url, ctx, W, H, band, region) {
+  try { if (new URLSearchParams(location.search).get("fabric_measure") === "0") return null; } catch (_) { /* no location */ }
+  if (!ctx || !band || !(W > 0) || !(H > 0)) return null;
+  const x0 = typeof band.x0 === "number" ? band.x0 : 0.2, x1 = typeof band.x1 === "number" ? band.x1 : 0.8;
+  const gw = (x1 - x0) * W, gh = (band.y1 - band.y0) * H;
+  if (!(gw > 24 && gh > 24)) return null;
+  const top = region === "top";
+  const rows = top ? [0.55, 0.85] : [0.2, 0.55];
+  const cols = top ? [[0.2, 0.32], [0.68, 0.8]] : [[0.18, 0.38], [0.62, 0.82]];
+  const px = [];
+  for (const [c0, c1] of cols) {
+    const sx = Math.round(x0 * W + c0 * gw), sy = Math.round(band.y0 * H + rows[0] * gh);
+    const sw = Math.max(1, Math.round((c1 - c0) * gw)), sh = Math.max(1, Math.round((rows[1] - rows[0]) * gh));
+    const d = ctx.getImageData(sx, sy, sw, sh).data;
+    const step = Math.max(1, Math.floor(Math.sqrt((sw * sh) / 1500)));   // ~1.5k samples a patch
+    for (let y = 0; y < sh; y += step) for (let x = 0; x < sw; x += step) {
+      const i = (y * sw + x) * 4;
+      if (d[i + 3] < 200) continue;
+      px.push([d[i], d[i + 1], d[i + 2]]);
+    }
+  }
+  if (px.length < 200) return null;
+  const med = [0, 1, 2].map((k) => { const v = px.map((p) => p[k]).sort((a, z) => a - z); return v[v.length >> 1]; });
+  const agree = px.filter((p) => Math.abs(p[0] - med[0]) + Math.abs(p[1] - med[1]) + Math.abs(p[2] - med[2]) <= 60).length / px.length;
+  if (agree < 0.6) {
+    console.log(`[PEAR] fabric colour: abstained (${Math.round(agree * 100)}% of the patch agrees) -`, abbrevImg(url));
+    return null;
+  }
+  const hex = "#" + med.map((v) => v.toString(16).padStart(2, "0")).join("");
+  _refFabricColors.set((typeof canonicalImageUrl === "function" && canonicalImageUrl(url)) || url, hex);
+  console.log(`[PEAR] fabric colour measured from the rear photo: ${hex} (${Math.round(agree * 100)}% agree) -`, abbrevImg(url));
+  return hex;
+}
+/** The fabric colour measured for this item's rear photo, or null. */
+function measuredFabricColorOf(item) {
+  if (!item) return null;
+  const back = typeof distinctBackOf === "function" ? distinctBackOf(item) : null;
+  if (!back) return null;
+  return _refFabricColors.get((typeof canonicalImageUrl === "function" && canonicalImageUrl(back)) || back) || null;
+}
+
 /** The rows to paint on an image `h` tall - [0, top) and [bottom, h) - or null when there is
     nothing worth painting. Pure. */
 function refMaskRows(band, h) {
@@ -7621,6 +7742,10 @@ async function maskReferenceBand(blob, url, band) {
       : Object.assign(document.createElement("canvas"), { width: W, height: H });
     const ctx = off.getContext("2d", { alpha: png, willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0);
+    /* Measured before anything is painted (THE FABRIC'S OWN COLOUR). typeof: suites run this standalone. */
+    if (typeof noteReferenceFabricColor === "function" && typeof referenceBackHint === "function") {
+      try { const h = referenceBackHint(url); noteReferenceFabricColor(url, ctx, W, H, band, h && h.region); } catch (_) { /* a measurement, never a failure */ }
+    }
     /* The backdrop just inside the painted side of the band's edge, at the photo's own left and right
        margins - where a studio photo has nothing but backdrop - and, when the garment's width is
        known, right beside it too (a studio light leaves the backdrop lighter there; edge colours
@@ -9060,7 +9185,8 @@ function continuityEl() {
   return c;
 }
 
-/* The camera, cover-cropped to #aiVideo's aspect - the same centre crop drawFrame() sends. */
+/* The camera, fitted to #aiVideo's aspect exactly as drawFrame() sends it - cover-cropped, or contained under the WIDE
+   VIEW (THE WHOLE CAMERA, NOT A STRIP OF IT, by LIVE_W) - so the layer lands on the render's own body. */
 function drawContinuityFrame(c, cam, ai) {
   const vw = cam.videoWidth, vh = cam.videoHeight;
   if (!vw || !vh) return false;
@@ -9068,7 +9194,8 @@ function drawContinuityFrame(c, cam, ai) {
   const W = Math.min(LIVE_CONTINUITY_MAX_W, aw), H = Math.round(W * ah / aw);
   if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
   const g = c.getContext("2d", { alpha: false });
-  const scale = Math.max(W / vw, H / vh);
+  const wide = typeof liveWideView === "function" && liveWideView();
+  const scale = wide ? Math.min(W / vw, H / vh) : Math.max(W / vw, H / vh);
   const dw = vw * scale, dh = vh * scale;
   g.setTransform(1, 0, 0, 1, 0, 0);   // reality in, like every other video surface here
   g.drawImage(cam, (W - dw) / 2, (H - dh) / 2, dw, dh);
@@ -12570,6 +12697,8 @@ function promptFactsOf(item) {
   if (!item) return f;
   for (const k of PROMPT_FACT_STRINGS) if (typeof item[k] === "string") f[k] = item[k];
   for (const k of PROMPT_FACT_BOOLS) if (typeof item[k] === "boolean") f[k] = item[k];
+  /* The classifier's colour wins; without one, the colour the room measured on the rear photo (THE FABRIC'S OWN COLOUR). */
+  if (!f.colorHex && typeof measuredFabricColorOf === "function") { const m = measuredFabricColorOf(item); if (m) f.colorHex = m; }
   f.__bottoms = isBottomsGarment(item);
   return f;
 }
@@ -19237,10 +19366,24 @@ function startRecording() {
          the selfie flip in - flipping again would mirror the frozen tail of the clip
          against the live portion that precedes it. The two branches differ on purpose:
          one draws an already-oriented canvas, the other draws raw decoded video. */
-      try { ctx.drawImage(recordHoldSrc, 0, 0, recordCanvas.width, recordCanvas.height); beginRecorder(); } catch (_) {}
+      /* The same camera rectangle as the live branch below (THE CLIP IS WHAT THE CARD SHOWED); centred, so the
+         flip baked into the captured frame does not move it. */
+      try {
+        const hr = typeof liveContentRect === "function" ? liveContentRect() : { x: 0, y: 0, w: 1, h: 1 };
+        const HW = recordHoldSrc.width, HH = recordHoldSrc.height;
+        ctx.drawImage(recordHoldSrc, hr.x * HW, hr.y * HH, hr.w * HW, hr.h * HH, 0, 0, recordCanvas.width, recordCanvas.height);
+        beginRecorder();
+      } catch (_) {}
     } else {
-      const w = video.videoWidth, h = video.videoHeight;
-      if (w && h) {
+      /* ── THE CLIP IS WHAT THE CARD SHOWED (2026-10-14, THE WHOLE CAMERA, NOT A STRIP OF IT by LIVE_W) ──
+         Under the wide view the engine's frame carries the camera in a rectangle with bands beside it, and the card
+         crops the bands away; the clip records that rectangle - liveContentRect(), the whole frame otherwise - at even
+         dimensions (an H.264 encoder wants them). */
+      const vw0 = video.videoWidth, vh0 = video.videoHeight;
+      const cr = typeof liveContentRect === "function" ? liveContentRect() : { x: 0, y: 0, w: 1, h: 1 };
+      const sx = cr.x * vw0, sy = cr.y * vh0;
+      const w = Math.max(2, Math.round(cr.w * vw0) & ~1), h = Math.max(2, Math.round(cr.h * vh0) & ~1);
+      if (vw0 && vh0) {
         if (recordCanvas.width !== w || recordCanvas.height !== h) {
           recordCanvas.width = w; recordCanvas.height = h;
         }
@@ -19276,7 +19419,7 @@ function startRecording() {
                matrix, so this frame cannot inherit anything from the previous one even if
                a restore were ever missed. Absolute by construction. */
             ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.drawImage(video, 0, 0, w, h);
+            ctx.drawImage(video, sx, sy, cr.w * vw0, cr.h * vh0, 0, 0, w, h);
             /* ── THE CLIP RECORDS WHAT THE SHOPPER SAW ─────────────────────────────────
                While LIVE CONTINUITY bridges a Decart stall, #aiVideo is one repeated frame
                and the screen shows the live camera over it. Drawing only #aiVideo baked
@@ -19288,7 +19431,8 @@ function startRecording() {
             if (typeof liveContinuityAlpha === "number" && liveContinuityAlpha > 0 &&
                 _continuityCanvas && _continuityCanvas.width) {
               ctx.globalAlpha = liveContinuityAlpha;
-              ctx.drawImage(_continuityCanvas, 0, 0, w, h);
+              const CW = _continuityCanvas.width, CH = _continuityCanvas.height;
+              ctx.drawImage(_continuityCanvas, cr.x * CW, cr.y * CH, cr.w * CW, cr.h * CH, 0, 0, w, h);
             }
           } finally { ctx.restore(); }
           beginRecorder();

@@ -284,8 +284,11 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
   };
   const p = new Function(...Object.keys(sb),
     pcode + "\nreturn { imageOnlyPrompt };")(...Object.values(sb));
-  const top = p.imageOnlyPrompt({ garmentType: "upper_body" });
-  const bot = p.imageOnlyPrompt({ garmentType: "lower_body" });
+  /* ADD NOTHING ELSE (2026-10-14, the P.LOW operator closing every branch with room) is not part of the bounds below. */
+  const ADD = (SRC.match(/const ADD_NOTHING_ELSE = "([^"]+)";/) || [])[1];
+  const untail = (s) => (ADD && s.endsWith(" " + ADD) ? s.slice(0, -(ADD.length + 1)) : s);
+  const top = untail(p.imageOnlyPrompt({ garmentType: "upper_body" }));
+  const bot = untail(p.imageOnlyPrompt({ garmentType: "lower_body" }));
 
   /* ── THE DIRECTIVE IS NOW TOPS-ONLY, and this is a REGRESSION IN THIS FEATURE ──
      A later change collapsed the bottoms branch to a bare reference lock, after a

@@ -801,7 +801,8 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     square === built &&
     /^Drape and fit the EXACT static top from the reference image onto the live subject's CURRENT body contour/.test(square) &&
     /Strictly preserve the original top texture, pattern, and color\./.test(square) &&
-    /fully fastened, sitting flat and closed across the chest as shown\.$/.test(square));
+    /* ...then the closure lock, then ADD NOTHING ELSE (2026-10-14), the P.LOW operator closing every branch with room */
+    /fully fastened, sitting flat and closed across the chest as shown\. Add nothing else to the subject\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

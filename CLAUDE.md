@@ -1543,6 +1543,40 @@ answered a cache HIT in 3.4s (/api/health 0.33s).
   engine refused every session 2026-10-13 17:16Z to ~09:00Z 10-14 (1011 through the edge, every product) and has worked
   since; the edge maps the engine's policy close (1008) to 1011, which hides the reason - a Worker change.
 
+### 2.47 The whole camera; the garment's colour named; nothing added (2026-10-14, branch `polish/view-color`)
+"The camera is too close - zoom out, show as much as possible; colours not faded, exactly like the photo; no unrelated
+jewelry like chains." Measured before changing anything:
+- **THE WHOLE CAMERA, NOT A STRIP OF IT (`liveWideView()`, by `LIVE_W`; `?wide=0` is the room before it).** Three crops
+  stacked: `buildVideoConstraints()` called any window under 769px a phone, so the widget's ~480px room frame on a DESKTOP
+  page asked the webcam for 9:16 and Chrome cropped it (the source room on the FOX page: 640x480 -> 270x480); `drawFrame()`
+  cover-fitted that into the engine's 16:9 input - a strip of ~32% of its height (the owner's PEAK clips: the face cut off);
+  the card cover-cropped the render again. Now a phone is a touch device with a coarse pointer and asks for its full 4:3
+  sensor (3:4 upright, 4:3 on its side); a desktop asks for the width alone, so a webcam keeps its shape (16:9 is the
+  512x288 it always was); the whole frame is CONTAINED in the engine input, the bands beside it its own edge columns
+  stretched (never shown); the card takes the camera's exact shape (`style.aspectRatio`), so the render's cover-fit crops
+  only the bands; the clip records that rectangle (`liveContentRect()`, even dimensions, the frozen tail too); the
+  continuity layer is fitted with the same switch. A 16:9 camera reaches the engine unchanged. After: the same room/camera
+  -> 512x384, card 437x328, all four corners of the camera on screen. The cost: a portrait or 4:3 camera's body gets fewer
+  engine pixels than the strip did - the whole body instead of a torso.
+- **Colours: the engine does not fade.** On the background the render's saturation/contrast equal the camera's (0.28 vs
+  0.26, 0.214 vs 0.212); the garment takes the room's light (the beige shorts' fabric rendered L66 b20 against the photo's
+  L87 b10 in a warm-lit room), and a global grade moved it FURTHER from the photo (dE 23.1 -> 24.9) - none added. What was
+  wrong is that the prompt rarely named the colour: (1) the classifier's colour/print/plain-rear were dropped when the
+  photos did not change (kept now, every session - THE GARMENT'S FACTS ARE KEPT, the sides fix); (2) `colorNameFromHex()`
+  could never name beige or cream (held to chroma 25; the palette's own beige has 56) and named the PEAK tee #4e3b38
+  "charcoal" - now warm names for warm colours only (beige <= 70, cream <= 45, a dark warm colour is "dark brown"), every
+  non-warm colour exactly as before (4,096-colour grid: 40 change, all warm); (3) a product with no classifier colour got
+  none - the room now measures it on the rear photo the mask already holds a band for (`noteReferenceFabricColor()`: the
+  flanks beside where a print sits, the median, abstain under 60% agreement; the classifier's colour wins; `?fabric_measure=0`).
+- **No added jewelry - and the word "jewelry" is NOT the fix.** No reference the owner measured carries any; the render
+  invents it. `summoning-tokens` records why a noun cannot be the fix (no negative prompt in the SDK: "never ... tuxedo,
+  bowtie" streamed back a tuxedo). `ADD_NOTHING_ELSE` ("Add nothing else to the subject.") is an operator over the subject
+  the anchors already name, at P.LOW (shed first - it never evicts the fit sentence). Unproven until measured.
+- **Proven:** 491,640 prompts old vs new - 202,850 identical, 283,990 only the appended clause, 4,434 only a (warm) colour
+  name, 366 a renamed colour meeting the size phrase's budget; `prompt-engine` re-pinned; `wide-view` (27 checks);
+  qa:visual 40/40. **Worker deploy** for the prompt changes (`lib/api-version.js` synced) - until then prompts come from
+  the origin (~350ms, correct).
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

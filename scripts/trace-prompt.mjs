@@ -124,7 +124,7 @@ const { value: PROMPT_MAX_CHARS, source: PROMPT_MAX_CHARS_SOURCE, kind: PROMPT_M
 const NEEDED = [
   "STRICT_REFERENCE_LOCK", "PLAIN_TEE_ANCHOR", "FRONT_CLOSURE_LOCK",
   "CATEGORY_ANCHOR", "BACK_CATEGORY_ANCHOR", "PLAIN_BACK_ANCHOR", "LOOK_ANCHOR",
-  "VOLUME_PERSISTENCE", "CLOSED_BACK_HEM",
+  "VOLUME_PERSISTENCE", "CLOSED_BACK_HEM", "ADD_NOTHING_ELSE",
 ];
 
 const scope = {};
@@ -239,6 +239,8 @@ if (colorSrc && printSrc && colorNameSrc && colorNamesBlock) {
        instead of quietly disabling the row. */
     const deps = ["FABRIC_COLOR_MAX_DIST", "FABRIC_COLOR_MIN_MARGIN",
                   "FABRIC_NEUTRAL_CHROMA_MAX", "FABRIC_NEUTRAL_NAMES",
+                  "FABRIC_DARK_BROWN", "FABRIC_DARK_MAX", "FABRIC_DARK_MIN", "FABRIC_DARK_REL_CHROMA_MIN", "FABRIC_WARM_NAMES",
+                  "FABRIC_NEUTRAL_CHROMA_CEILING",
                   "IDENTITY_LOCK_MAX_CHARS", "PRINT_TEXT_MAX_CHARS"];
     const decls = deps.map((n) => {
       const b = constBlock(n);
@@ -322,7 +324,8 @@ const branches = [
     parts: [[P.CORE, scope.LOOK_ANCHOR, "LOOK_ANCHOR"],
             [P.HIGH, scope.STRICT_REFERENCE_LOCK, "STRICT_REFERENCE_LOCK"],
             [P.HIGH, scope.VOLUME_PERSISTENCE, "VOLUME_PERSISTENCE"],
-            [P.MED,  scope.CLOSED_BACK_HEM, "CLOSED_BACK_HEM"]] },
+            [P.MED,  scope.CLOSED_BACK_HEM, "CLOSED_BACK_HEM"],
+            [P.LOW,  scope.ADD_NOTHING_ELSE, "ADD_NOTHING_ELSE"]] },
 ];
 
 /* Render every branch across the whole size ladder. `rows` is the per-delta detail;
@@ -344,6 +347,7 @@ for (const b of branches) {
     const parts = b.fit
       ? [...b.parts,
          [P.MED, fitSentence(b.fit, d), "fitSentence"],
+         [P.LOW, scope.ADD_NOTHING_ELSE, "ADD_NOTHING_ELSE"],   // imageOnlyPrompt()'s last part (ADD NOTHING ELSE)
          ]
       : b.parts;
     const r = fitPromptTrace(parts);

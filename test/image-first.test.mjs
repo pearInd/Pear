@@ -69,6 +69,10 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
 
+/* ADD NOTHING ELSE (2026-10-14): the one P.LOW clause imageOnlyPrompt() appends last on every branch with room - an
+   operator over the subject, naming no object (summoning-tokens). Read from the engine, never restated here. */
+const ADD = (SRC.match(/const ADD_NOTHING_ELSE = "([^"]+)";/) || [])[1];
+const T = (spec) => spec + " " + ADD;
 /* The real builder, executed. */
 const code = SRC.slice(SRC.indexOf("const P = Object.freeze({ CORE"),
                        SRC.indexOf("/* Full-Look composite clause"));
@@ -244,17 +248,17 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      a diffusion model, and these are the strings whose exact form was specified from
      outside this file. */
   check("the TOPS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC, JSON.stringify(api.imageOnlyPrompt(TOP)));
+    api.imageOnlyPrompt(TOP) === T(TOPS_FRONT_SPEC), JSON.stringify(api.imageOnlyPrompt(TOP)));
   check("...and its anchor is still the front anchor, unaltered, with the clause appended whole",
     api.imageOnlyPrompt(TOP).startsWith(TOPS_SPEC + " ") &&
-    api.imageOnlyPrompt(TOP).endsWith(CLOSURE_SPEC),
+    api.imageOnlyPrompt(TOP).endsWith(T(CLOSURE_SPEC)),
     "the clause must ride BESIDE the anchor, never be woven into it");
   check("no negative token rides with it - the tuxedo shipped through a positive prompt",
     !/\b(open|unbuttoned|undone|parted|exposed|never|avoid|don't|do not)\b/i.test(CLOSURE_SPEC),
     CLOSURE_SPEC);
   /* THE THIRD AXIS, held to every rule the other two are held to. */
   check("a plain knit tee matches its own specified wording byte for byte",
-    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC, JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
+    api.imageOnlyPrompt(PLAIN_TEE) === T(PLAIN_TEE_SPEC), JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
   check("...and the closure clause is NOT spent on it - the reported cause, removed",
     !api.imageOnlyPrompt(PLAIN_TEE).includes(CLOSURE_SPEC) &&
     !/\b(button|buttons|zip|placket|collar|pocket)\b/i.test(api.imageOnlyPrompt(PLAIN_TEE)),
@@ -269,7 +273,7 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     PLAIN_TEE_SPEC.length < TOPS_FRONT_SPEC.length,
     `tee=${PLAIN_TEE_SPEC.length} default=${TOPS_FRONT_SPEC.length}`);
   check("the BOTTOMS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
+    api.imageOnlyPrompt(JEANS) === T(BOTTOMS_SPEC), JSON.stringify(api.imageOnlyPrompt(JEANS)));
   /* ONE SHAPE, SAME ORDER. The old pair could be normalised into one string because they
      differed by two substitutions; these two are worded per region (a waistline is not a
      belly, a leg profile is not a silhouette), so the invariant that actually holds is
@@ -505,7 +509,7 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
       ? (back ? BACK_BOTTOMS_SPEC : BOTTOMS_SPEC)
       : (back ? BACK_TOPS_SPEC : TOPS_FRONT_SPEC));
     check(`${name}: byte-identical to its category anchor`,
-      api.buildCompositePrompt(item, angle, prof) === expected,
+      api.buildCompositePrompt(item, angle, prof) === T(expected),
       api.buildCompositePrompt(item, angle, prof));
   }
   /* THE AXES, asserted once: category and angle move the prompt, and NOTHING else does.
@@ -515,15 +519,15 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
     new Set([TOPS_FRONT_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC]).size === 4);
   check("angle SELECTS: front and back differ, and each is its own frozen anchor",
     api.buildCompositePrompt(TOP, "front", false) !== api.buildCompositePrompt(TOP, "back", false) &&
-    api.buildCompositePrompt(TOP, "back", false) === BACK_TOPS_SPEC);
+    api.buildCompositePrompt(TOP, "back", false) === T(BACK_TOPS_SPEC));
   check("pose is still NOT an axis - edge-on resolves to the same anchor as square-on",
     api.buildCompositePrompt(TOP, "front", false) === api.buildCompositePrompt(TOP, "front", true) &&
     api.buildCompositePrompt(TOP, "back", false) === api.buildCompositePrompt(TOP, "back", true) &&
     api.buildCompositePrompt(JEANS, "back", false) === api.buildCompositePrompt(JEANS, "back", true));
   check("an unrecognised angle falls to FRONT, never to a silent back-render",
-    api.buildCompositePrompt(TOP, undefined, false) === TOPS_FRONT_SPEC &&
-    api.buildCompositePrompt(TOP, "sideways", false) === TOPS_FRONT_SPEC &&
-    api.buildCompositePrompt(TOP, "BACK", false) === TOPS_FRONT_SPEC);
+    api.buildCompositePrompt(TOP, undefined, false) === T(TOPS_FRONT_SPEC) &&
+    api.buildCompositePrompt(TOP, "sideways", false) === T(TOPS_FRONT_SPEC) &&
+    api.buildCompositePrompt(TOP, "BACK", false) === T(TOPS_FRONT_SPEC));
 
   /* Structural, across the builders this sandbox cannot execute. The four together are
      every path that can reach rtClient.set() with a prompt. */
@@ -582,14 +586,14 @@ console.log("\n── §2a THE FIT SENTENCE RIDES BESIDE THE ANCHOR, NEVER INTO 
     code + "\nreturn { imageOnlyPrompt };")(...Object.values(fitSandbox));
 
   check("it rides AFTER the anchor (and closure, where one ships), as its own sentence",
-    fitApi.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC + " Fit: TEST_FIT_MARKER.",
+    fitApi.imageOnlyPrompt(TOP) === T(TOPS_FRONT_SPEC + " Fit: TEST_FIT_MARKER."),
     fitApi.imageOnlyPrompt(TOP));
   check("...same on a plain tee, which has no closure clause to ride after",
-    fitApi.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC + " Fit: TEST_FIT_MARKER.",
+    fitApi.imageOnlyPrompt(PLAIN_TEE) === T(PLAIN_TEE_SPEC + " Fit: TEST_FIT_MARKER."),
     fitApi.imageOnlyPrompt(PLAIN_TEE));
   check("...same on bottoms, and on the back anchors",
-    fitApi.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC + " Fit: TEST_FIT_MARKER." &&
-    fitApi.imageOnlyPrompt(TOP, "back") === BACK_TOPS_SPEC + " Fit: TEST_FIT_MARKER.",
+    fitApi.imageOnlyPrompt(JEANS) === T(BOTTOMS_SPEC + " Fit: TEST_FIT_MARKER.") &&
+    fitApi.imageOnlyPrompt(TOP, "back") === T(BACK_TOPS_SPEC + " Fit: TEST_FIT_MARKER."),
     `${fitApi.imageOnlyPrompt(JEANS)}\n        ${fitApi.imageOnlyPrompt(TOP, "back")}`);
   check("a size-neutral choice (delta 0, the common case) still costs only a short phrase",
     !fitApi.imageOnlyPrompt(TOP).includes("undersized") &&

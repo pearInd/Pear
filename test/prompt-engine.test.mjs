@@ -25,7 +25,13 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-const PINNED = "221a5b5835f450b0c12fe8d3037456af0ea1b62b1155c26476e97b24519d912c";
+/* RE-PINNED 2026-10-14, deliberately (CLAUDE.md §2.47): ADD NOTHING ELSE (a P.LOW operator closing every branch with room)
+   and the warm colour names (beige/cream reachable, a dark warm colour is dark brown). Proven against the previous engine
+   over 491,640 prompts (scratch, re-runnable): 202,850 identical, 283,990 differ ONLY by the appended clause, 4,434 only by
+   a colour name - every one a warm colour (the 4,096-colour grid: 32 gain beige/dark brown/cream, 8 borderline warm
+   colours move between brown/burgundy and none/dark brown, nothing else) - and 366 by a renamed colour meeting the size
+   phrase's budget. The pre-move pin was 221a5b58…. */
+const PINNED = "3d1f5304f15a0e9ed414b8ed9d8cc9969d4ad85d363069f01d213fd6dcf98f29";
 
 let fails = 0;
 function check(label, cond, detail) {

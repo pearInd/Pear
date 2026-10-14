@@ -186,9 +186,10 @@ console.log("\n── §5 WIRING ──");
   const rec = extract("function startRecording()", "/** Halt the canvas paint loop");
   const liveBranch = rec.slice(rec.indexOf("} else {", rec.indexOf("if (recordHold && recordHoldSrc)")));
   check("the recorder blends the camera layer at exactly liveContinuityAlpha",
-    /ctx\.globalAlpha = liveContinuityAlpha;\s*\n\s*ctx\.drawImage\(_continuityCanvas, 0, 0, w, h\);/.test(liveBranch));
+    /* the same camera rectangle as #aiVideo's (THE CLIP IS WHAT THE CARD SHOWED, 2026-10-14) */
+    /ctx\.globalAlpha = liveContinuityAlpha;\s*\n\s*const CW = _continuityCanvas\.width, CH = _continuityCanvas\.height;\s*\n\s*ctx\.drawImage\(_continuityCanvas, cr\.x \* CW, cr\.y \* CH, cr\.w \* CW, cr\.h \* CH, 0, 0, w, h\);/.test(liveBranch));
   check("...after #aiVideo, inside the save/restore that resets globalAlpha",
-    liveBranch.indexOf("ctx.drawImage(video, 0, 0, w, h)") < liveBranch.indexOf("ctx.drawImage(_continuityCanvas") &&
+    liveBranch.indexOf("ctx.drawImage(video, sx, sy,") > -1 && liveBranch.indexOf("ctx.drawImage(video, sx, sy,") < liveBranch.indexOf("ctx.drawImage(_continuityCanvas") &&
       liveBranch.indexOf("ctx.drawImage(_continuityCanvas") < liveBranch.indexOf("} finally { ctx.restore(); }"));
   check("...and not in the frozen-hold branch",
     !/_continuityCanvas/.test(rec.slice(rec.indexOf("if (recordHold && recordHoldSrc)"), rec.indexOf("} else {", rec.indexOf("if (recordHold && recordHoldSrc)")))));
