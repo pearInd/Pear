@@ -372,12 +372,8 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   /* SEVEN since 2026-10-01: primeBackReference() sends the back once inside the hidden reveal hold
      (back-prime.test.mjs). Its prompt is wirePrompt(item, "back", "primeBack") - the service's answer,
      clamped server-side exactly like applyGarment()'s - and it goes through sendCondition() like the rest. */
-  /* EIGHT since 2026-10-15: lookStartCycle() (A FULL LOOK'S BOTTOM, FROM THE FIRST FRAME) sends a look's back composite
-     once inside the reveal hold - its prompt is wireLookPrompt("lookCycle"), the service's look answer, clamped like
-     applyLook()'s - through sendCondition() like the rest. */
   check(`all ${sends} rtClient send sites draw from a guarded prompt`,
-    sends === 8 && /prompt = await wirePrompt\(item, "back", "primeBack", \{ inProfile: false \}\);[\s\S]{0,600}sendCondition\("primeBack", \(\) => rtClient\.set\(\{ image: blob, prompt, enhance: false \}\)\)/.test(CODE) &&
-    /const prompt = await wireLookPrompt\("lookCycle"\);[\s\S]{0,400}sendCondition\("lookCycle", \(\) => rtClient\.set\(\{ image: blob, prompt, enhance: false \}\)\)/.test(CODE),
+    sends === 7 && /prompt = await wirePrompt\(item, "back", "primeBack", \{ inProfile: false \}\);[\s\S]{0,600}sendCondition\("primeBack", \(\) => rtClient\.set\(\{ image: blob, prompt, enhance: false \}\)\)/.test(CODE),
     `${sends} send sites found - if this changed, verify the new one is clamped`);
   /* ── AND EVERY ONE OF THEM GOES THROUGH THE WIRE MUTEX ──────────────────────
      Asserted by PROXIMITY rather than by counting sendCondition() calls, because the two

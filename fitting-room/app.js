@@ -16204,53 +16204,6 @@ function primeAtConnect(gen) {
   }).catch((e) => { console.warn("[PEAR] back prime at connect failed:", e?.message || e); return false; });
 }
 
-/* ── A FULL LOOK'S BOTTOM, FROM THE FIRST FRAME (2026-10-15) ───────────────────────────────────────────────────────
-   "The shorts appear after the time - make it work consistently, all the time" (real session m4, PEAK + CHICAGO): the
-   shirt was right from the reveal, the shopper's OWN shorts stayed for the first 2.4s, and the CHICAGO shorts appeared
-   with the turn's BACK composite and stayed through the front's return. Its socket log: the look's front composite (both
-   garments, with the "BOTH" prompt) went out at connect and three times more before the reveal; the connect's back prime
-   (and its front) went out BEFORE the engine started generating (generation_started after both acks), so from the first
-   generated frame the engine had one image, the same one, and dressed only the top. What dressed the bottom was a
-   back->front change WHILE it was generating. Shorts alone dress from the first frame (m3).
-   So for a full look the reveal hold's one re-assert - main's re-send of the image already on the wire, ~1s into the
-   hold, still hidden - becomes that change: the back composite (the Blob the turn sends) and then the front again. The
-   settle hold waits on the front's acknowledgement like any upload, so the reveal is on the front. A single garment
-   keeps main's re-assert exactly (a back->front switch there revealed a sleeveless front once - §2.25). Once per
-   session; ?look_cycle=0 is the re-send as before. A TEST record carries `look-cycle` {phase, ms}. */
-let _lookStartCycleGen = -1;
-/** Start the cycle for session `gen`; false when it does not apply (and the caller re-sends as before). */
-function lookStartCycle(gen) {
-  try { if (new URLSearchParams(location.search).get("look_cycle") === "0") return false; } catch (_) { /* on */ }
-  if (_lookStartCycleGen === gen) return false;
-  const look = typeof resolveLook === "function" ? resolveLook() : null;
-  if (!look || currentAngle !== AUTO_ANGLE || !rtClient || !isLive()) return false;
-  if (typeof lookHalfFor !== "function" || typeof stitchLookBlob !== "function" || typeof wireLookPrompt !== "function") return false;
-  const bt = lookHalfFor(look.top, "back"), bb = lookHalfFor(look.bottom, "back");
-  if (!bt || !bb || (bt === lookHalfFor(look.top, "front") && bb === lookHalfFor(look.bottom, "front"))) return false;
-  _lookStartCycleGen = gen;
-  (async () => {
-    const t0 = Date.now();
-    try {
-      const blob = await stitchLookBlob(bt, bb);
-      const prompt = await wireLookPrompt("lookCycle");
-      if (!blob || !prompt || gen !== sessionGen || !rtClient || !isLive()) return;
-      if (typeof traceOrient === "function") traceOrient("look-cycle", { phase: "back" });
-      const sent = await sendCondition("lookCycle", () => rtClient.set({ image: blob, prompt, enhance: false }));
-      if (!sent || gen !== sessionGen || !isLive()) return;
-      noteImageUploadAcked("lookCycle");
-      lastSentImageRef = null;
-      rtImageOnWire = false;
-      lastSentPrompt = null;
-      await applyActive();
-      console.log(`[PEAR] full look: back->front inside the reveal hold (${Date.now() - t0}ms) - the bottom dressed from the first frame`);
-      if (typeof traceOrient === "function") traceOrient("look-cycle", { phase: "front", ms: Date.now() - t0 });
-    } catch (e) {
-      console.warn("[PEAR] full look start cycle failed - the turn re-conditions as before:", e?.message || e);
-    }
-  })();
-  return true;
-}
-
 function armFirstFrameBilling(video, gen) {
   if (!video || billingStarted || gen !== sessionGen) return;
   let done = false;
@@ -16517,9 +16470,7 @@ function armFirstFrameBilling(video, gen) {
          decline it, and a re-assert marked sent but never sent is the one-shot lost for good. */
       if (!renderSettling()) {
         reasserted = true;
-        /* A full look's re-assert is a back->front cycle (A FULL LOOK'S BOTTOM, FROM THE FIRST FRAME); a single garment's is
-           main's re-send, unchanged. typeof: this function runs standalone in suites. */
-        if (!(typeof lookStartCycle === "function" && !wireBusy() && lookStartCycle(gen))) redispatchColdStart(gen, NaN, "cold-start re-assert");
+        redispatchColdStart(gen, NaN, "cold-start re-assert");
       }
     }
     const unconditioned = (probe.ready && probe.passthrough) || noReference || withinMinHold;
