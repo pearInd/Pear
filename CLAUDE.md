@@ -1627,6 +1627,14 @@ camera clip was lost to a scratchpad cleanup):
   until then - and the BACK queued behind it never acknowledged before the end (front print on the back). Acks were ~0.3s in
   the other three. The reveal hold's re-send of an image already on the wire is the request that stalled.
 
+### 2.51 Tried and reverted: a back->front cycle in a full look's reveal hold (2026-10-15)
+For m4's late shorts (§2.50) the reveal hold's re-assert became, for a full look, the look's back composite then its front
+(98fd0f9, the change that had dressed the shorts during m4's turn). Real session l1 (PEAK + CHICAGO): the cycle went out
+hidden at -2.8s/-1.7s and the shopper was revealed in a plain dark top WITHOUT its print and their own shorts - worse than m4
+(PEAK from the reveal) - and both only took when the body turned. Reverted (baf8242). Read with m4: the engine re-renders a
+region on a new image mainly while the body MOVES; a re-upload on a still shopper leaves a plain garment. Do not retry a hidden
+pre-reveal re-upload for this without a different mechanism.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
