@@ -13544,6 +13544,14 @@ function injectSizeSelector() {
      showed (adult buttons drawn over a kids-only item). Left removed, not disabled. */
   if (hasSizeCategoryMismatch()) return;
 
+  /* THE MARKETING-SITE DEMO HAS NO PICKER (2026-10-15, owner's call). The demo
+     (`?pear_demo=1`, opened only by the platform site) recommends the size from the
+     shopper's own measurements; a manual ladder there is noise. Read from the URL, not
+     DEMO_MODE: that const is declared further down, and this block is sliced standalone
+     by kids-product-sizes / stock-fallback (CLAUDE.md §2.6/§2.7). Store embeds keep it. */
+  if (typeof location !== "undefined" &&
+      new URLSearchParams(location.search).get("pear_demo") === "1") return;
+
   if (!$("pearSizeSelectorStyles")) {
     const s = document.createElement("style");
     s.id = "pearSizeSelectorStyles";
