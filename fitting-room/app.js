@@ -16272,6 +16272,24 @@ function primeAtConnect(gen) {
   }).catch((e) => { console.warn("[PEAR] back prime at connect failed:", e?.message || e); return false; });
 }
 
+/* THE SAME PICTURE, OTHER BYTES (2026-10-15) - the reveal hold's nudge on a primed session. Decoded and re-encoded, so the
+   engine receives the front it already renders, pixel for pixel, as a file it has not seen: every logged image the engine
+   had not been sent before was acknowledged in 0.26-1.8s once generating (0 stalls in ~40), while a byte-identical repeat
+   was held 5.4-5.7s in 4 of ~27 (m1, p2, p4, g2). null on any failure - the caller then re-asserts the image as before. */
+async function freshImageCopy(blob) {
+  try {
+    if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas === "undefined") return null;
+    const bmp = await createImageBitmap(blob);
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const g = c.getContext("2d");
+    if (!g) return null;
+    g.drawImage(bmp, 0, 0);
+    if (typeof bmp.close === "function") bmp.close();
+    const out = await c.convertToBlob({ type: "image/jpeg", quality: 0.9 });
+    return out && out.size > 0 ? out : null;
+  } catch (_) { return null; }
+}
+
 function armFirstFrameBilling(video, gen) {
   if (!video || billingStarted || gen !== sessionGen) return;
   let done = false;
@@ -16538,21 +16556,27 @@ function armFirstFrameBilling(video, gen) {
          decline it, and a re-assert marked sent but never sent is the one-shot lost for good. */
       if (!renderSettling()) {
         reasserted = true;
-        /* THE NUDGE WITHOUT THE IMAGE (2026-10-15). The re-assert draws the print: without it (g1) the front stayed a plain
-           tee until the return. But it is a repeat of the image the engine already holds, sent once it is generating, and
-           the engine sometimes holds that acknowledgement 5.4-5.7s (m1, p2, p4, g2) - the turn's BACK then waits behind it
-           and lands on the chest (g2: big front letters across the back, then the back panel on the chest at 4.3-4.9s).
-           On a session whose back prime was acknowledged the nudge goes out PROMPT-ONLY - the same wire prompt, no image.
-           ?reassert=image sends the image as before; a session without a prime, or with no wire prompt, re-asserts as before. */
+        /* THE NUDGE, A FRESH COPY (2026-10-15). The re-assert is what draws the print: without it (g1), and with the wire
+           prompt alone in its place (g3), the front stayed a plain tee until the return re-sent the front. But it repeats
+           the image the engine holds, byte for byte, once it is generating, and the engine sometimes holds that
+           acknowledgement 5.4-5.7s (m1, p2, p4, g2) - the turn's BACK then waits behind it and lands on the chest (g2).
+           On a session whose back prime was acknowledged the nudge is freshImageCopy() of the front on the wire: the same
+           picture under new bytes, with the same wire prompt. Any failure re-asserts the image as before; ?reassert=image
+           forces that. A session without a prime re-asserts as before. */
         const primedSession = typeof _primedBackAckedGen !== "undefined" && _primedBackAckedGen === gen;
         let reassertMode = null;
         try { reassertMode = new URLSearchParams(location.search).get("reassert"); } catch (_) { reassertMode = null; }
         const nudgePrompt = typeof lastSentPrompt === "string" && lastSentPrompt ? lastSentPrompt : null;
-        if (primedSession && reassertMode !== "image" && nudgePrompt && typeof rtClient !== "undefined" && rtClient &&
-            typeof sendCondition === "function") {
-          if (typeof traceOrient === "function") traceOrient("reassert-prompt", { at: sinceQualified });
-          sendCondition("coldStartPrompt", () => rtClient.setPrompt(nudgePrompt, { enhance: false }), { skipIfBusy: true })
-            .catch((e) => console.warn("[PEAR] cold-start prompt nudge failed:", e?.message || e));
+        const wireBlob = typeof Blob !== "undefined" && typeof lastSentImageRef !== "undefined" && lastSentImageRef instanceof Blob
+          ? lastSentImageRef : null;
+        if (primedSession && reassertMode !== "image" && nudgePrompt && wireBlob && typeof freshImageCopy === "function" &&
+            typeof rtClient !== "undefined" && rtClient && typeof sendCondition === "function") {
+          freshImageCopy(wireBlob).then((copy) => {
+            if (!copy || gen !== sessionGen || !rtClient) { redispatchColdStart(gen, NaN, "cold-start re-assert"); return; }
+            if (typeof traceOrient === "function") traceOrient("reassert-fresh", { at: sinceQualified, kb: Math.round(copy.size / 1024) });
+            return sendCondition("coldStartFresh", () => rtClient.set({ image: copy, prompt: nudgePrompt, enhance: false }))
+              .then((sent) => { if (sent && typeof noteImageUploadAcked === "function") noteImageUploadAcked("coldStartFresh"); });
+          }).catch((e) => console.warn("[PEAR] cold-start fresh copy failed:", e?.message || e));
         } else {
           redispatchColdStart(gen, NaN, "cold-start re-assert");
         }
