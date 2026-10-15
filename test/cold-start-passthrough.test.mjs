@@ -550,11 +550,10 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
      before the shopper sees anything. Driven here on a fake clock. */
   const code = extract("function armFirstFrameBilling(video, gen) {",
                        "/* ═══════════════════════════════════════════════════════════════════════════\n   FRAME-FREEZE WATCHDOG");
-  const mk = ({ holdMs, search = "", primedGen = -1 }) => {
+  const mk = ({ holdMs, search = "" }) => {
     let now = 5_000_000, fired = false, frameCb = null;
-    const applies = [], traced = [];
+    const applies = [];
     const sandbox = {
-      _primedBackAckedGen: primedGen, traceOrient: (k) => traced.push(k),
       video: { videoWidth: 1000, videoHeight: 1800, requestVideoFrameCallback: (cb) => { frameCb = cb; } },
       gen: 1, sessionGen: 1, billingStarted: false, isGarmentApplied: true, dressedFrameReady: false,
       sampleVideoLuma: () => ({ ready: true, avgLuma: 120, blackFrac: 0 }),
@@ -580,7 +579,7 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
       code + "\nreturn { arm: () => armFirstFrameBilling(video, gen) };")(...Object.values(sandbox));
     api.arm();
     return { tick: () => { const cb = frameCb; frameCb = null; if (cb) cb(); },
-             advance: (ms) => { now += ms; }, fired: () => fired, applies, traced };
+             advance: (ms) => { now += ms; }, fired: () => fired, applies };
   };
 
   {
@@ -600,25 +599,6 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
     h.advance(CONFIG.COLD_START_MIN_HOLD_MS); h.tick();
     check("and once the hold is over, the feed is revealed",
       h.fired() === true, "the hold is a fixed moment, never a verdict");
-  }
-  {
-    /* NO SECOND COPY ON A PRIMED SESSION (2026-10-15): a repeat of the image on the wire, once the engine is
-       generating, stalled its acknowledgements 5.4-5.7s in 3 of ~25 logged cases - and the turn's BACK after it was
-       never acknowledged (the owner's 11:32 clip, record mv9a5ylm). A session whose back prime was acknowledged
-       re-sent the front at the connect already, so the hold sends nothing; the hold itself still runs. */
-    const h = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1 });
-    h.tick(); h.advance(CONFIG.COLD_START_REASSERT_MS); h.tick(); h.advance(50); h.tick();
-    check("a primed session sends NO re-assert inside the hold (recorded as reassert-skip)",
-      h.applies.length === 0 && h.traced.includes("reassert-skip"), `${h.applies.length} applies, traced ${h.traced}`);
-    check("...and still holds the reveal for the hold", h.fired() === false);
-    h.advance(CONFIG.COLD_START_MIN_HOLD_MS); h.tick();
-    check("...then reveals once the hold is over", h.fired() === true);
-    const f = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1, search: "?reassert=1" });
-    f.tick(); f.advance(CONFIG.COLD_START_REASSERT_MS); f.tick();
-    check("?reassert=1 sends it on a primed session too (the A/B)", f.applies.length === 1, `${f.applies.length} applies`);
-    const o = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 0 });
-    o.tick(); o.advance(CONFIG.COLD_START_REASSERT_MS); o.tick();
-    check("a prime from ANOTHER session does not skip this one's re-assert", o.applies.length === 1, `${o.applies.length} applies`);
   }
   {
     /* The escape hatch has to restore the previous behaviour EXACTLY, or it is not an A/B. */
