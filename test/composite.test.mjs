@@ -372,8 +372,11 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   /* SEVEN since 2026-10-01: primeBackReference() sends the back once inside the hidden reveal hold
      (back-prime.test.mjs). Its prompt is wirePrompt(item, "back", "primeBack") - the service's answer,
      clamped server-side exactly like applyGarment()'s - and it goes through sendCondition() like the rest. */
+  /* EIGHT since 2026-10-15: the reveal hold's cold-start nudge on a primed session is prompt-only - and its prompt is
+     lastSentPrompt, the wire prompt already on the engine (a guarded service answer), sent only when it is a non-empty string. */
   check(`all ${sends} rtClient send sites draw from a guarded prompt`,
-    sends === 7 && /prompt = await wirePrompt\(item, "back", "primeBack", \{ inProfile: false \}\);[\s\S]{0,600}sendCondition\("primeBack", \(\) => rtClient\.set\(\{ image: blob, prompt, enhance: false \}\)\)/.test(CODE),
+    sends === 8 && /prompt = await wirePrompt\(item, "back", "primeBack", \{ inProfile: false \}\);[\s\S]{0,600}sendCondition\("primeBack", \(\) => rtClient\.set\(\{ image: blob, prompt, enhance: false \}\)\)/.test(CODE) &&
+    /const nudgePrompt = typeof lastSentPrompt === "string" && lastSentPrompt \? lastSentPrompt : null;[\s\S]{0,400}sendCondition\("coldStartPrompt", \(\) => rtClient\.setPrompt\(nudgePrompt, \{ enhance: false \}\)/.test(CODE),
     `${sends} send sites found - if this changed, verify the new one is clamped`);
   /* ── AND EVERY ONE OF THEM GOES THROUGH THE WIRE MUTEX ──────────────────────
      Asserted by PROXIMITY rather than by counting sendCondition() calls, because the two
