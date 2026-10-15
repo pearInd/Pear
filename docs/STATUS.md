@@ -20,7 +20,7 @@ _Last updated: 2026-10-11 · REVERTED IN PRODUCTION at the owner's request ("it 
 | garment_cache rows missing `age_group` | code done — full backfill **deferred by choice** (demo products only for now) | main `ef1d28d` |
 | `DECART_ALLOWED_ORIGINS` / token origin | done (Vercel env set + redeployed 2026-10-02); the preview-origin fix is on main with the merge | main |
 | Back-image orientation (front/back on a turn) | in progress — the back gate (§2.28) ends "back print on the chest", but on the PEAK tee the engine is too slow for a normal turn and the back print does not appear (4 real sessions 2026-10-04); neither a smaller image nor pre-uploading speeds the engine; the cause is the engine's region (Michigan, US since ~09-30); **raising it with the vendor is yours** | main |
-| Hebrew/English i18n | done (core) | main |
+| Hebrew/English i18n | done (core); 2026-10-15: Screen 1's "item selected" banner follows the EN/עב toggle (was Hebrew-only) - branch `claude/item-banner-language-e3ft7f`, waiting on your approval | main + branch |
 | Security hardening + client-code hiding | done on main with the merge (engines server-side, minified/cloaked build, the render engine behind our edge - CLAUDE.md §2.11-§2.24); **the GitHub repo is still public** and **key rotation pending on you** | main |
 | Render engine account | the Decart key was replaced by you 2026-10-04 (Vercel Production + Preview); the old account had run out of credits ("Insufficient credits", now shown to a shopper as "unavailable right now" within ~1.5s) | Vercel env |
 | Landing / brand video | done | main `e8d2c7f` |
