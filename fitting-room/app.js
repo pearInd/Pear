@@ -18565,6 +18565,9 @@ async function nativePresenceFallback(video, category) {
  * @param {boolean} isBottoms - drives which landmarks are required
  * @returns {Promise<"present"|"timeout"|"skipped">}
  */
+/* The shoulder line's distance below the frame's top edge, in torso heights, a top's gate waits for - see THE WHOLE HEAD
+   IN THE FRAME. 0.5: the 18:11 framing read 0.42, every framing whose front/back worked 0.60 or more. */
+const GATE_HEAD_ROOM = 0.5;
 async function awaitBodyPresence(isBottoms) {
   if (!POSE_GATE_ENABLED) return "skipped";
   const video = $("webcam");
@@ -18585,6 +18588,7 @@ async function awaitBodyPresence(isBottoms) {
   ]);
   const gate = makePresenceGate();
   let shownOverlay = false;
+  let headRoomTraced = false;
 
   try {
     while (Date.now() - startedAt < POSE_GATE_TIMEOUT_MS) {
@@ -18593,6 +18597,20 @@ async function awaitBodyPresence(isBottoms) {
         try {
           const poseResult = detectPoseFrame(detector, video);
           verdict = presenceFromPoseResult(poseResult, category);
+          /* THE WHOLE HEAD IN THE FRAME BEFORE A TOP GOES LIVE (2026-10-15). The owner's 18:11 session stood with the head
+             touching the frame's top edge (the shoulder line 0.42 torso heights below it): the pose model read the body
+             mirrored on the way back to the lens (BACK at 3.0-3.25s while facing it), the shoulder baseline re-learned from a
+             back-view reading, and FRONT never went out - the back print on the chest to the end. Measured through the
+             room's lite model: that framing 0.42; three sessions whose front/back worked 0.60, 0.82, 1.10. So a top waits
+             for GATE_HEAD_ROOM; the step-back overlay shows meanwhile and the gate's own timeout still proceeds (§2.5). */
+          if (verdict === true && category === "top" && typeof poseTorsoWidths === "function") {
+            const w = poseTorsoWidths(poseResult, 1);
+            const room = w && w.th > 0 && typeof w.top === "number" ? w.top / w.th : null;
+            if (room !== null && room < GATE_HEAD_ROOM) {
+              verdict = false;
+              if (typeof traceOrient === "function" && !headRoomTraced) { headRoomTraced = true; traceOrient("gate-headroom", { room: Math.round(room * 100) / 100 }); }
+            }
+          }
           /* The shopper stands square-on here, before the fitting: the torso-only turn and THE YAW
              GUARD learn their square-on widths from these readings, so both are ready from the
              fitting's first second (the live pose loop only starts at the reveal). Learning only -

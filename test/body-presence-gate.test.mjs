@@ -505,5 +505,32 @@ console.log("\n── §8 MID-SESSION ABSENCE NEEDS A RUN OF MISSES - a pose dip
     !/\bpose|\bpresence|landmark|_torsoYaw/i.test(cont.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));
 }
 
+console.log("\n── THE WHOLE HEAD IN THE FRAME before a top goes live (2026-10-15) ──");
+{
+  /* The four framings, as the room's lite model (tasks-vision 0.10.14) read their first frames: shoulders and hips (y), x
+     symmetric about the centre. 18:11 is the owner's session that read the body mirrored on the way back and never sent
+     FRONT; the other three are sessions whose front/back worked. */
+  const widthsSrc = extract("function poseTorsoWidths(", "\n/** One reading into the state.");
+  const room = (shY, hipY) => {
+    const L = []; for (let i = 0; i < 33; i++) L.push({ x: 0.5, y: 0.5, visibility: 1 });
+    L[11] = { x: 0.6, y: shY, visibility: 1 }; L[12] = { x: 0.4, y: shY, visibility: 1 };
+    L[23] = { x: 0.56, y: hipY, visibility: 1 }; L[24] = { x: 0.44, y: hipY, visibility: 1 };
+    const fn = new Function("POSE_LANDMARK", "torsoReadable", "primaryPoseIndex", widthsSrc + "\nreturn poseTorsoWidths;")(
+      { LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12, LEFT_HIP: 23, RIGHT_HIP: 24 }, () => true, () => 0);
+    const w = fn({ landmarks: [L] }, 1);
+    return w.top / w.th;
+  };
+  const bar = Number((SRC.match(/const GATE_HEAD_ROOM = ([0-9.]+);/) || [])[1]);
+  const cases = { "18:11 (mirrored, no FRONT)": room(0.2, 0.675), "16:44": room(0.25, 0.665), "16:55": room(0.305, 0.675), "rig vneck": room(0.345, 0.66) };
+  check("the 18:11 framing is held for the head room", cases["18:11 (mirrored, no FRONT)"] < bar, JSON.stringify(cases));
+  check("...and the three framings whose front/back worked go live", ["16:44", "16:55", "rig vneck"].every((k) => cases[k] >= bar), JSON.stringify(cases));
+  const gate = extract("async function awaitBodyPresence(", "\n/* ── The overlay leaves on the verdict");
+  check("tops only, inside the pre-session gate - the mid-session watcher (a back view hides the face) never asks for it",
+    /if \(verdict === true && category === "top" && typeof poseTorsoWidths === "function"\) \{/.test(gate) &&
+    !/GATE_HEAD_ROOM/.test(SRC.slice(SRC.indexOf("/* ── The overlay leaves on the verdict"))));
+  check("...and the gate's own timeout still proceeds (never blocks a session, §2.5)",
+    /presence gate: timed out after \$\{POSE_GATE_TIMEOUT_MS\}ms - proceeding anyway/.test(gate) && /return "timeout";/.test(gate));
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

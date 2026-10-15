@@ -1639,6 +1639,18 @@ FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
   supplied, `one-view {on: true, why: "plain-both"}`, `watch {dual: false}`, no prime and no swap through the whole 360.
 - **Measured on a body:** not yet - the owner's next TEST session of the tee (`ctx.size` now names the size rung).
 
+### 2.51 A top goes live only with the whole head in the frame (2026-10-15, the owner's 18:11 session)
+The back print stayed on the chest to the end and FRONT was never sent. The record (mv9oevza): the shopper stood with the head
+touching the frame's top edge; the pose model read the body MIRRORED on the way back (BACK, order -1, at 3.0-3.25s while facing
+the lens), the shoulder baseline re-learned at the back (0.39) so every square-on reading after it was rejected as degenerate
+(shR 2.1-27), the last fresh order said -1 and the votes for FRONT never formed a streak before the window ended. Through the
+room's lite model (tasks-vision 0.10.14, first frames): the shoulder line sat 0.42 torso heights below the top edge in that
+session, 0.60 / 0.82 / 1.10 in three whose front/back worked. `awaitBodyPresence()` now holds a TOP until `GATE_HEAD_ROOM`
+(0.5) - the step-back overlay ("please step back to show the full body") meanwhile, and its own 12s timeout still proceeds
+(§2.5). Pre-session only: the mid-session watcher never asks (a back view hides the face). TEST records carry `gate-headroom`.
+`body-presence-gate` pins the four framings. Not measured on the render engine (no credits left) - the decision was measured on
+the model; the next owner session is the check. Still open: the baseline re-learning from a back-view reading.
+
 ### 2.50 Back on d7cde9a's tree, two measured changes re-applied (2026-10-15 afternoon)
 The owner asked for d7cde9a's version (6ce01e5). Its 16:55 clip: the shirt rendered far too big - the wide view's giant-shirt
 hallucination (3 of 3 wide sessions on 10-14, 0 of 4 portrait). Re-applied on top: df0ee99 (the sides cut, the height kept -
