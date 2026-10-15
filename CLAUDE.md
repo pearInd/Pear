@@ -1649,6 +1649,19 @@ front. The new prompt rode every set_image (+80 chars). The engine was slow that
 The FIRST TEST of a full look on this clip with no own garment showing at the start. Shirt-only and shorts-only prompts
 are byte-identical (trace:prompt).
 
+### 2.53 No second copy of the front once the engine is generating - the turn's back was lost behind it (2026-10-15)
+The owner's 11:32 clip (PEAK alone, record mv9a5ylm): big "PEAK" letters across the back - the BACK went out at +1.68s and
+was never acknowledged (swap-fail at the window's end), so every return was dropped as `applying` and the front stayed on.
+The signalling logs of 19 rig sessions say why: a repeat of the image already on the wire, sent AFTER `generation_started`,
+had its acknowledgement held 5.4-5.7s in 3 of ~25 cases (m1, p2, p4), and the next image - the turn's back - was then not
+acknowledged in the window; a new image after generation stalled 0 of ~35 times, a repeat before it 0 of 19. 8 of 48 TEST
+records lost the turn's back this way (b3, b5, m1, p2, s8, v-…8s9z, mv9a5ylm; p4 the front). The repeat is the reveal
+hold's unconditional cold-start re-assert (§2.25: "main's re-assert"). **A session whose back prime was acknowledged
+(`_primedBackAckedGen`) skips it** - its front was already re-sent at the connect, before generation. The hold still runs;
+the conditional re-dispatches (passthrough, no reference, wrong garment) are unchanged; a single view or an unprimed session
+re-asserts as before. `?reassert=1` restores it; TEST records carry `reassert-skip`. Not yet measured live: a stall came
+about one session in six, so a few clean sessions are the check, and the sign is no repeat after `generation_started`.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

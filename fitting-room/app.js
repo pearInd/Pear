@@ -16143,6 +16143,9 @@ const MODEL_READY_STABLE_MS     = 300;   // ...spanning at least this many ms
    applyLook() sends on the turn - with the look's wire prompt (angle-free, the same string). A look whose halves have
    no back of their own has a back composite that IS the front one: nothing to prime. */
 let _primedBackGen = -1;
+/* The session whose back prime was ACKNOWLEDGED - read by the reveal gate (armFirstFrameBilling): a primed session's
+   front has already been re-sent at the connect, so the hold's own re-assert is skipped there (see "NO SECOND COPY"). */
+let _primedBackAckedGen = -1;
 async function primeBackReference(gen) {
   if (_primedBackGen === gen) return false;
   _primedBackGen = gen;
@@ -16183,6 +16186,7 @@ async function primeBackReference(gen) {
   lastSentPrompt = null;
   console.log(`[PEAR] back reference primed before the reveal (${Date.now() - t0}ms) - the turn's swap is now a repeat`);
   if (typeof traceOrient === "function") traceOrient("prime-acked", { ms: Date.now() - t0 });
+  _primedBackAckedGen = gen;
   return true;
 }
 
@@ -16470,7 +16474,26 @@ function armFirstFrameBilling(video, gen) {
          decline it, and a re-assert marked sent but never sent is the one-shot lost for good. */
       if (!renderSettling()) {
         reasserted = true;
-        redispatchColdStart(gen, NaN, "cold-start re-assert");
+        /* NO SECOND COPY ON A PRIMED SESSION (2026-10-15). The engine sometimes holds the acknowledgement of a
+           re-send of the image it already has, once it is generating, for 5.4-5.7s - and the next image after it,
+           the BACK on the turn, is then never acknowledged in the window: the back view renders the front (the
+           owner's 11:32 clip: "PEAK" letters across the back, record mv9a5ylm). Every recorded signalling log
+           (19 sessions): a repeat after generation started 3 of ~25 stalled (m1 5409ms, p2 5675, p4 5435), a new
+           image 0 of ~35, a repeat BEFORE generation 0 of 19; and 8 of 48 records lost the turn's back exactly so.
+           This re-assert is that repeat, by construction. A session whose back prime was acknowledged has already
+           re-sent the front at the connect (primeAtConnect), before generation - so here it is skipped. The hold
+           still runs, and the conditional re-dispatches below (passthrough, no reference, wrong garment) still
+           fire on what they see. ?reassert=1 sends it as before. */
+        const primedSession = typeof _primedBackAckedGen !== "undefined" && _primedBackAckedGen === gen;
+        let forceReassert = false;
+        try { forceReassert = new URLSearchParams(location.search).get("reassert") === "1"; } catch (_) { forceReassert = false; }
+        if (primedSession && !forceReassert) {
+          if (typeof traceOrient === "function") traceOrient("reassert-skip", { at: sinceQualified });
+          console.log("[PEAR] cold-start re-assert skipped - the front was re-sent at the connect, before generation" +
+            " (a repeat once generating can stall the engine's acknowledgements and lose the turn's back)");
+        } else {
+          redispatchColdStart(gen, NaN, "cold-start re-assert");
+        }
       }
     }
     const unconditioned = (probe.ready && probe.passthrough) || noReference || withinMinHold;
