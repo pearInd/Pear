@@ -274,6 +274,8 @@ const I18N = {
   // resultLabelApprox is LIVE again since 2026-10-13: lib/sizing.js's THE SUGGESTED SIZE
   // offers the nearest row when none fits exactly (verdict.approx) - applySizeVerdict().
   resultLabelApprox:        { he: "אין מידה מדויקת עבורך. מידה מוצעת:", en: "No exact size for you. Suggested size:" },
+  // Screen 1's "item selected" banner (app.js init(), focusCalcHint) - {name} is the garment.
+  focusCalcHint:            { he: "נבחר הפריט <strong>{name}</strong> - מלא מידות כדי להמשיך למדידה הוירטואלית.", en: "Selected item: <strong>{name}</strong> - enter your measurements to continue to the virtual fitting." },
   // Shown when height+weight genuinely fit NEITHER chart - see calculateSize()'s
   // "fits neither" branch.
   resultLabelNoMatch:       { he: "לא נמצאה מידה מתאימה:", en: "No matching size found:" },
