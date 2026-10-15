@@ -1639,6 +1639,26 @@ FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
   supplied, `one-view {on: true, why: "plain-both"}`, `watch {dual: false}`, no prime and no swap through the whole 360.
 - **Measured on a body:** not yet - the owner's next TEST session of the tee (`ctx.size` now names the size rung).
 
+### 2.50 Back on d7cde9a's tree, two measured changes re-applied (2026-10-15 afternoon)
+The owner asked for d7cde9a's version (6ce01e5). Its 16:55 clip: the shirt rendered far too big - the wide view's giant-shirt
+hallucination (3 of 3 wide sessions on 10-14, 0 of 4 portrait). Re-applied on top: df0ee99 (the sides cut, the height kept -
+a portrait view at the widest zoom; "turn slowly" in the guide) and bc7ea00 (§2.49 - no second copy of the front once
+generating). Not re-applied: the TEST-only lag compensation, the full look's prompt. The PEAK prompt carries ADD_NOTHING_ELSE
+and the fit sentence on both angles in this tree too (checked) - the necklace the owner saw is the engine's, not a shed clause.
+
+### 2.49 No second copy of the front once the engine is generating - the turn's back was lost behind it (2026-10-15)
+The owner's 11:32 clip (PEAK alone, record mv9a5ylm): big "PEAK" letters across the back - the BACK went out at +1.68s and
+was never acknowledged (swap-fail at the window's end), so every return was dropped as `applying` and the front stayed on.
+The signalling logs of 19 rig sessions say why: a repeat of the image already on the wire, sent AFTER `generation_started`,
+had its acknowledgement held 5.4-5.7s in 3 of ~25 cases (m1, p2, p4), and the next image - the turn's back - was then not
+acknowledged in the window; a new image after generation stalled 0 of ~35 times, a repeat before it 0 of 19. 8 of 48 TEST
+records lost the turn's back this way (b3, b5, m1, p2, s8, v-…8s9z, mv9a5ylm; p4 the front). The repeat is the reveal
+hold's unconditional cold-start re-assert (§2.25: "main's re-assert"). **A session whose back prime was acknowledged
+(`_primedBackAckedGen`) skips it** - its front was already re-sent at the connect, before generation. The hold still runs;
+the conditional re-dispatches (passthrough, no reference, wrong garment) are unchanged; a single view or an unprimed session
+re-asserts as before. `?reassert=1` restores it; TEST records carry `reassert-skip`. Not yet measured live: a stall came
+about one session in six, so a few clean sessions are the check, and the sign is no repeat after `generation_started`.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
