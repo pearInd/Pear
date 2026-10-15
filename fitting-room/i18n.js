@@ -196,21 +196,16 @@ const I18N = {
      SELF-TIMER" in app.js. Step 1 is the one that matters most: the render is only as
      complete as the body it can see. */
   camGuideTitle:             { he: "לפני שמתחילים", en: "Before you start" },
-  camGuideSub:               { he: "ארבעה צעדים קטנים לתוצאה הכי מדויקת", en: "Four quick steps to the most accurate result" },
+  camGuideSub:               { he: "שלושה צעדים קטנים לתוצאה הכי מדויקת", en: "Three quick steps to the most accurate result" },
   camGuideStep1Title:        { he: "כל הגוף בפריים", en: "Your whole body in frame" },
-  camGuideStep1:             { he: "התרחקו עד שרואים אתכם מהראש ועד כפות הרגליים, ועמדו במרכז התמונה. אם חלק מהגוף לא בתמונה, התוצאה לא תהיה מלאה ומדויקת.",
-                               en: "Step back until you're visible from head to feet, and stand in the middle of the frame. If part of your body is out of frame, the result won't be complete or accurate." },
+  camGuideStep1:             { he: "התרחקו עד שרואים אתכם מהראש ועד כפות הרגליים. אם חלק מהגוף לא בתמונה, התוצאה לא תהיה מלאה ומדויקת.",
+                               en: "Step back until you're visible from head to feet. If part of your body is out of frame, the result won't be complete or accurate." },
   camGuideStep2Title:        { he: "מכשיר יציב ואור מלפנים", en: "A steady device, light in front" },
   camGuideStep2:             { he: "הניחו את המכשיר במקום יציב, ועמדו כשהאור מולכם ולא מאחוריכם.",
                                en: "Set the device down somewhere steady and face the light, with none behind you." },
   camGuideStep3Title:        { he: "טיימר להתמקמות", en: "A timer to get in place" },
   camGuideStep3:             { he: "צריכים זמן להתרחק? לחצו על הטיימר בפינת המצלמה ובחרו 3, 5 או 10 שניות.",
                                en: "Need time to step back? Tap the timer in the camera corner and pick 3, 5 or 10 seconds." },
-  /* 2026-10-15, the owner's word: after each front/back swap the render takes ~0.4s to draw a print (CLAUDE.md §2.49), so a
-     fast 360 always shows a moment of plain fabric or the back print on the side; a ~4s turn keeps up. */
-  camGuideStep4Title:        { he: "מסתובבים לאט", en: "Turn slowly" },
-  camGuideStep4:             { he: "כשהמדידה מתחילה, הסתובבו לאט וברצף - סיבוב שלם בערך 4 שניות - כדי שהבגד יספיק להתחלף מקדימה לאחור.",
-                               en: "When the fitting starts, turn slowly and steadily - about 4 seconds for a full turn - so the garment keeps up from front to back." },
   camGuideGo:                { he: "הבנתי, פתחו מצלמה", en: "Got it, open the camera" },
   timerAria:                 { he: "טיימר לפני המדידה", en: "Timer before the fitting" },
   timerMenuTitle:            { he: "טיימר", en: "Timer" },

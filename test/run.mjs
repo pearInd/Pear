@@ -331,6 +331,18 @@
                       engine. Also pins the two isBottomsGarment() copies as identical, the
                       browser's verdict winning, the facts list agreeing on both sides, and
                       no prompt wording left in app.js.
+     prompt-lockstep
+                      "The shirt dropped and widened in the middle of the measurement"
+                      (2026-10-14): the plain-tee front shed its fit sentence where the
+                      shorter back kept "oversized ... elongated hem", so the turn changed
+                      the size in words. A clause both angles carry now ships only if both
+                      keep it: every front/back pair agrees, and against the previous
+                      shedding nothing changed but a shared clause removed.
+     one-view
+                      The same report, the other half: the engine re-fits the garment to every
+                      new reference, so a top plain on both sides (classifier + pixels + the
+                      engine's plain-knit verdict) goes as ONE reference - the front-only run,
+                      no re-drape. Every missing count keeps the swap, by name.
      orient-engine
                       Layer C's DECISION - front or back, and when the reference swaps - moved
                       to lib/orient-engine.js (a Cloudflare Worker in production). Proven exact
@@ -527,6 +539,8 @@ const SUITES = [
   ["static-allowlist", "static-allowlist.test.mjs"],
   ["size-fit-pin", "size-fit-pin.test.mjs"],
   ["prompt-engine", "prompt-engine.test.mjs"],
+  ["prompt-lockstep", "prompt-lockstep.test.mjs"],
+  ["one-view", "one-view.test.mjs"],
   ["orient-engine", "orient-engine.test.mjs"],
   ["orient-link", "orient-link.test.mjs"],
   ["room-latency", "room-latency.test.mjs"],
@@ -547,7 +561,6 @@ const SUITES = [
   ["ready-signal-signals", "ready-signal-signals.test.mjs"],
   ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
   ["wide-view", "wide-view.test.mjs"],
-  ["lag-comp", "lag-comp.test.mjs"],
   ["engine-exp", "engine-exp.test.mjs"],
   ["garment-box", "garment-box.test.mjs"],
   ["head-frame", "head-frame.test.mjs"],

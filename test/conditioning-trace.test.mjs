@@ -173,7 +173,7 @@ console.log("\n── §3 THE ANGLE REACHES THE PROMPT ──");
 
 console.log("\n── §4 SELECTING, NOT APPENDING ──");
 {
-  const resolver = lift("function imageOnlyPrompt(item, angle = \"front\")");
+  const resolver = lift("function imageOnlyPrompt(item, angle = \"front\", partsOnly = false)");
   /* The angle still SELECTS, and it now selects between THREE frozen sets rather than two:
      a blank rear takes PLAIN_BACK_ANCHOR instead of BACK_CATEGORY_ANCHOR, because the
      latter's "Precisely lock the rear print, logos" is an instruction to invent graphics on

@@ -475,10 +475,10 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
   }
   check("§3e.5 both knob lists carry lead_project", E.ORIENT_KNOB_KEYS.includes("lead_project") && /const ORIENT_KNOB_KEYS = \[[^\]]*"lead_project"/.test(APP));
   check("§3e.6 the room honours a delay only with the swap flow; a newer swap supersedes it; stop() clears it",
-    /const comp = typeof lagCompensationMs === "function" \? lagCompensationMs\(\) : null;\s*\n\s*if \(comp && comp\.ms > 0 && typeof traceOrient === "function"\) traceOrient\("lag-comp", [^\n]*\);\s*\n\s*const delay = Math\.max\(Number\(a\.delay\) \|\| 0, comp && comp\.ms > 0 \? comp\.ms : 0\);\s*\n\s*const sw = SWAP_FLOW && delay > 0 \? delayedSwap\(\{ \.\.\.a, delay, lagComp: !!\(comp && comp\.ms > 0\) \}\) : maybeSwap\(a\.next, a\.predictive === true\);/.test(APP) &&
-    /if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n(?:\s*\/\*[^\n]*\*\/\s*\n)?\s*const comp = /.test(APP) &&
+    /const sw = SWAP_FLOW && a\.delay > 0 \? delayedSwap\(a\) : maybeSwap\(a\.next, a\.predictive === true\);/.test(APP) &&
+    /if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const sw = /.test(APP) &&
     /clearInterval\(timer\);\s*\n\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}/.test(APP) &&
-    /Math\.max\(0, Math\.min\(a\.lagComp \? 600 : 400, Number\(a\.delay\) \|\| 0\)\)/.test(APP));   // 600 only for a lag compensation (lag-comp)
+    /Math\.max\(0, Math\.min\(400, Number\(a\.delay\) \|\| 0\)\)/.test(APP));
 }
 
 console.log("\n── §3f THE LANDING, MEASURED ON THE CLIPS - nine of the user's sessions, each against its own clip (2026-10-07, 07:31 added 10-08) ──");

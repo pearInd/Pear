@@ -39,7 +39,7 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
     } : {}),
   };
   const names = Object.keys(env);
-  const api = new Function(...names, `${SRC}\nreturn { primeBackReference, primeAtConnect, state: () => ({ lastSentImageRef, lastSentPrompt, rtImageOnWire, primedAckedGen: _primedBackAckedGen }) };`)(...names.map((k) => env[k]));
+  const api = new Function(...names, `${SRC}\nreturn { primeBackReference, primeAtConnect, state: () => ({ lastSentImageRef, lastSentPrompt, rtImageOnWire }) };`)(...names.map((k) => env[k]));
   return { api, sent, acked, blobs, env, stitched };
 }
 
@@ -53,8 +53,6 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
   check("§3 ...and the no-op refs are cleared, so the re-assert re-uploads the FRONT",
     w.api.state().lastSentImageRef === null && w.api.state().lastSentPrompt === null);
   check("§4 once per session: a second call for the same session sends nothing", (await w.api.primeBackReference(3)) === false && w.sent.length === 1);
-  check("§4b an acknowledged prime marks its session - the reveal hold then skips its re-assert (2026-10-15)",
-    w.api.state().primedAckedGen === 3);
 }
 {
   const cases = [
@@ -83,11 +81,7 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
   check("§5d at connect, a look: the back composite once, then the look re-applied with the no-op refs cleared",
     lkcOk === true && lkc.sent.length === 1 && lkc.env.applied.length === 1 && lkc.env.applied[0].ref === null);
   const busy = world({ busySkip: true });
-  check("§6 a wire that declines the write sends nothing and claims nothing", (await busy.api.primeBackReference(3)) === false && busy.acked.length === 0 &&
-    busy.api.state().primedAckedGen === -1);
-  const off = world({ search: "?prime_back=0" });
-  check("§6b no prime (?prime_back=0, a single view, no back) marks nothing - the re-assert stays",
-    (await off.api.primeBackReference(3)) === false && off.api.state().primedAckedGen === -1);
+  check("§6 a wire that declines the write sends nothing and claims nothing", (await busy.api.primeBackReference(3)) === false && busy.acked.length === 0);
 }
 {
   /* MOVED TO THE CONNECT (2026-10-04): the reveal hold's re-assert is main's again, and the back goes out right

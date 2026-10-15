@@ -288,7 +288,7 @@ function fitPromptTrace(parts, max = PROMPT_MAX_CHARS) {
   }
   const clamped = out.length > max;
   if (clamped) out = out.slice(0, max).trim();
-  return { wire: out, shed, clamped };
+  return { wire: out, shed, clamped, kept: keep.map(([, t]) => norm(t)) };
 }
 
 /* Each branch is the part list imageOnlyPrompt() assembles for it, as
@@ -343,15 +343,33 @@ for (const b of branches) {
     if (lock) b.parts = [b.parts[0], [P.CORE, lock, "identityLock"], ...b.parts.slice(1)];
   }
   b.base = norm(b.parts.map(([, t]) => t).filter(Boolean).join(" "));
+}
+const branchParts = (b, d) => (b.fit
+  ? [...b.parts,
+     [P.MED, fitSentence(b.fit, d), "fitSentence"],
+     [P.LOW, scope.ADD_NOTHING_ELSE, "ADD_NOTHING_ELSE"],   // imageOnlyPrompt()'s last part (ADD NOTHING ELSE)
+     ]
+  : b.parts);
+/* SHED IN LOCKSTEP (imageOnlyPrompt): a clause both angles carry ships only if the other angle's dispatch keeps it too.
+   A branch's partners are the reachable branches of the same region on the other angle; a trace has no single product,
+   so a clause is dropped here when ANY partner sheds it - the worst pairing, the one to budget against. Recorded in
+   `shed` as "<clause> (lockstep)". */
+const angleOf = (b) => (/\bback\b/.test(b.id) ? "back" : "front");
+for (const b of branches) {
+  const partners = b.fit ? branches.filter((o) => o.fit === b.fit && !o.synthetic && angleOf(o) !== angleOf(b)) : [];
   b.rows = (b.fit ? DELTAS : [0]).map((d) => {
-    const parts = b.fit
-      ? [...b.parts,
-         [P.MED, fitSentence(b.fit, d), "fitSentence"],
-         [P.LOW, scope.ADD_NOTHING_ELSE, "ADD_NOTHING_ELSE"],   // imageOnlyPrompt()'s last part (ADD NOTHING ELSE)
-         ]
-      : b.parts;
-    const r = fitPromptTrace(parts);
-    return { delta: d, label: b.fit ? deltaLabel(d) : "n/a", ...r, len: r.wire.length };
+    let parts = branchParts(b, d);
+    const lockstep = [];
+    for (const o of partners) {
+      const op = branchParts(o, d), kept = new Set(fitPromptTrace(op).kept), has = new Set(op.map(([, t]) => norm(t)));
+      parts = parts.filter(([p, t, name]) => {
+        const drop = p !== P.CORE && norm(t) && has.has(norm(t)) && !kept.has(norm(t));
+        if (drop && !lockstep.includes(`${name} (lockstep)`)) lockstep.push(`${name} (lockstep)`);
+        return !drop;
+      });
+    }
+    const { kept: _kept, ...r } = fitPromptTrace(parts);
+    return { delta: d, label: b.fit ? deltaLabel(d) : "n/a", ...r, shed: [...r.shed, ...lockstep], len: r.wire.length };
   });
   /* The headline string is the DEFAULT dispatch: the shopper who never touches the
      size picker. Deliberately not the worst case - the worst case is in the table. */
@@ -464,6 +482,10 @@ for (const b of branches) {
   if (b.rows.length > 1) {
     const anyShed = b.rows.some((r) => r.shed.length);
     console.log(`  ── size ladder (fitSentence @ P.MED) ${anyShed ? "──  ⚠ sheds on some rungs" : "──  all rungs fit"}`);
+    if (b.rows.some((r) => r.shed.some((s) => /\(lockstep\)/.test(s)))) {
+      console.log("     (lockstep) = shed because the other angle's dispatch sheds it, against that angle's WORST" +
+        " reachable branch for this trace item - a garment with a shorter partner keeps more");
+    }
     for (const r of b.rows) {
       const mark = r.shed.length ? `✖ SHED ${r.shed.join(",")}` : "✓";
       if (r.shed.length) shedding++;

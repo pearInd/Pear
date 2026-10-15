@@ -177,7 +177,7 @@ console.log("\n── §4 the decision is absent from the browser, and the tick 
     tick.indexOf("_poseInferNow()") < tick.indexOf("await classify()"));
   /* THE TICK WAITS FOR THE READING (2026-10-09): a fifth await, ahead of the sample, in POSE_SYNC's place (pose-follow). */
   check("the swap is the only awaited action, and only without the swap flow (main's ?swap_flow=0)", (tick.match(/await /g) || []).length === 5 &&
-    /a\.do === "swap"\) \{\s*\n(?:\s*\/\*[^\n]*\*\/\s*\n)?\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n(?:\s*\/\*[^\n]*\*\/\s*\n)?\s*const comp = typeof lagCompensationMs === "function" \? lagCompensationMs\(\) : null;\s*\n\s*if \(comp && comp\.ms > 0 && typeof traceOrient === "function"\) traceOrient\("lag-comp", [^\n]*\);\s*\n\s*const delay = Math\.max\(Number\(a\.delay\) \|\| 0, comp && comp\.ms > 0 \? comp\.ms : 0\);\s*\n\s*const sw = SWAP_FLOW && delay > 0 \? delayedSwap\(\{ \.\.\.a, delay, lagComp: !!\(comp && comp\.ms > 0\) \}\) : maybeSwap\(a\.next, a\.predictive === true\);\s*\n\s*if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw;\s*\n\s*\}/.test(tick),
+    /a\.do === "swap"\) \{\s*\n(?:\s*\/\*[^\n]*\*\/\s*\n)?\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const sw = SWAP_FLOW && a\.delay > 0 \? delayedSwap\(a\) : maybeSwap\(a\.next, a\.predictive === true\);\s*\n\s*if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw;\s*\n\s*\}/.test(tick),
     (tick.match(/[^\n]*await [^\n]*/g) || []).join(" | "));
 }
 
@@ -231,8 +231,10 @@ console.log("\n── §6 the edge answers /size and /prompt with the SAME modul
   check("...with CORS for that origin only, never *", r1.headers.get("Access-Control-Allow-Origin") === "https://app.pear-ai.io" &&
     r1.headers.get("Cache-Control") === "no-store");
   const r2 = await call("/prompt", { body: pr });
-  check("POST /prompt answers exactly what the server's promptForRequest answers",
-    r2.status === 200 && (await r2.text()) === JSON.stringify({ prompt: PR.promptForRequest(PR.sanitizePromptRequest(JSON.parse(JSON.stringify(pr)))) }));
+  /* promptAnswerFor() since 2026-10-14 (§2.48): the wire string and the plain-knit verdict, from the one function the
+     server's /api/prompt calls too. */
+  check("POST /prompt answers exactly what the server's promptAnswerFor answers",
+    r2.status === 200 && (await r2.text()) === JSON.stringify(PR.promptAnswerFor(PR.sanitizePromptRequest(JSON.parse(JSON.stringify(pr))))));
   check("a preview origin is allowed; a foreign one, a look-alike and a missing Origin are refused",
     (await call("/size", { origin: "https://pear-git-x-pear2.vercel.app", body: ev })).status === 200 &&
     (await call("/size", { origin: "https://evil.example", body: ev })).status === 403 &&

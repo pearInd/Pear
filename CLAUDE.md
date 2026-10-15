@@ -67,6 +67,10 @@ This is not a bug — see the comment above the `[P.MED, fitSentence(...)]`
 line in `imageOnlyPrompt()` before "fixing" it by raising its priority,
 which would risk the closure lock shedding instead and reopening the
 "rendered wide open" report.
+**And since 2026-10-14 the two angles shed together (§2.48, SHED IN LOCKSTEP):**
+a clause both the front and the back carry - the fit sentence, "Add nothing
+else" - ships only if both dispatches keep it, so a turn never changes the
+size in words. Where the front sheds the size phrase, the back does too.
 
 > **RULE 0 — NEVER edit a dead clause and report the behaviour as changed.**
 > If a request is about how the garment renders (fit, drape, print placement,
@@ -1584,83 +1588,56 @@ jewelry like chains." Measured before changing anything:
   qa:visual 40/40. **Worker deploy** for the prompt changes (`lib/api-version.js` synced) - until then prompts come from
   the origin (~350ms, correct).
 
-### 2.48 A slow render holds the turn's swaps - TEST sessions only (2026-10-14)
-"In the middle of the measurement the front turned into the shirt I'm wearing" (PEAK, record mv8fml6z). The BACK went out at
-|yaw| 60, acknowledged at 1.85s; a reference reaches the screen ~0.47s after its acknowledgement, on frames of the body as it
-was the render's lag earlier - 1.32s that session - so it landed on a body still facing the lens (the back photo's plain
-front side, read as the shopper's own shirt). The turn was tuned on sessions at 0.83-1.07s; that evening every session ran
-1.32-1.56s (7-8 fps out). `lagCompensationMs()` (flight recorder block) holds a turn's swap for the lag over
-`LAG_COMP_BASE_MS` (900), at most 600ms, through the existing `delayedSwap()`: none at a normal lag. The lag is the lag
-probe's live median; before the turn (a still body, no reading) the previous recorded session's median from localStorage.
-**TEST sessions only** (the probe runs nowhere else) - a shopper's session is unchanged; `?lag_comp=0` is the room before it;
-records carry `lag-comp`. `lag-comp` pins it. The same evening's lockstep / one-reference changes (5ad84d7, 1ff9553) were
-reverted on the owner's word ("the sides don't work, it only made it worse"); the records showed the cause was this lag.
-
-### 2.49 Measured on the real engine, 2026-10-14 night (5 sessions, ~75 credits, the owner's cap 80)
-The rig (the owner's recorded turn as the camera; `SPEED=1.8` replays it as a ~1.8s 360, the owner's live speed; `IDLE_LOOP`
-keeps the camera moving before the turn), preview `8ca4266`:
-- **PEAK, fast turn (n3):** front PEAK -> plain side -> the back print on the back -> on the way back ~0.2s of the back print
-  on the side and ~0.1s of a plain front, PEAK from ~3.3s. **CHICAGO shorts, fast (n5):** front print, side stripe, plain back,
-  front again, one length throughout. **PEAK, normal speed (n2):** clean at every angle.
-- **Why a fast turn is never transition-free:** after each swap the engine takes ~0.4s to DRAW the print (the owner's clips:
-  plain front 4.00-4.30s after a 3.27s acknowledgement; the back print first partial, whole ~0.1s later). On a ~1.8s 360 the back
-  is to the lens ~0.5s. The landing model with that drawing time (13 recorded 360s x 4 phases x the 8 measured delays, 384
-  turns a speed): plain front mean 15 / 42 / 117ms at 1x / 1.3x / 1.8x. Aiming the return earlier on fast turns ("print whole
-  by 350") cut 1.8x to 84ms but doubled front landings on the back (43 -> 80, and 25 -> 48 at 1x) - not shipped.
-- **⚠ THE WIDE VIEW CAN INVITE A HALLUCINATION (§2.47):** in this rig's room (a dark doorway at the left edge) the engine drew a
-  giant PEAK shirt over that area before the turn in 3 of 3 wide sessions (n1-n3), none with `?wide=0` (n4), none on the
-  shorts (n5, q1, q3) and none in the owner's own sessions. One control only - a decision for the owner, not yet acted on.
-- The rig's own artifact, stated: its recording is itself a past render, so on PEAK the shorts render red "CHICAGO".
-
-### 2.50 The portrait view, measured (2026-10-15, 4 sessions, the owner's 60 credits)
-`df0ee99` (THE SIDES CUT, THE HEIGHT KEPT + "turn slowly" in the guide), the rig on the owner's own V-neck 360 (the earlier
-camera clip was lost to a scratchpad cleanup):
-- **The giant shirt is gone:** 0 of 4 sessions (3 of 3 with the whole width, §2.49); head to feet in view in every one.
-- **Shirt only (PEAK, m2):** front PEAK from the reveal, plain sides, the back print on the back, PEAK again - with ~0.2s of a
-  plain front as the turn starts and ~0.3s of the back print on the chest's side on the way back (the drawing time, §2.49).
-- **Pants only (CHICAGO, m3):** front print, side stripe, plain back, front again; one length throughout - clean.
-- **Both (m4) - A BUG, NOT FIXED:** the shirt right throughout, but the shopper's OWN shorts until the first swap (2.4s); the
-  look's front composite (81KB, with the "BOTH" prompt) went out at connect and three times before the reveal, and the engine
-  dressed only the top; the shorts appeared with the back composite and stayed after the front's return. Shorts alone dress
-  from the first frame (m3). Needs its own measured fix.
-- **One session (m1) was the engine's:** a pre-reveal re-send of the same front image acknowledged after 5.4s - the print absent
-  until then - and the BACK queued behind it never acknowledged before the end (front print on the back). Acks were ~0.3s in
-  the other three. The reveal hold's re-send of an image already on the wire is the request that stalled.
-
-### 2.51 Tried and reverted: a back->front cycle in a full look's reveal hold (2026-10-15)
-For m4's late shorts (§2.50) the reveal hold's re-assert became, for a full look, the look's back composite then its front
-(98fd0f9, the change that had dressed the shorts during m4's turn). Real session l1 (PEAK + CHICAGO): the cycle went out
-hidden at -2.8s/-1.7s and the shopper was revealed in a plain dark top WITHOUT its print and their own shorts - worse than m4
-(PEAK from the reveal) - and both only took when the body turned. Reverted (baf8242). Read with m4: the engine re-renders a
-region on a new image mainly while the body MOVES; a re-upload on a still shopper leaves a plain garment. Do not retry a hidden
-pre-reveal re-upload for this without a different mechanism.
-
-### 2.52 The full look's prompt names the bottom on the body (2026-10-15, Layer A - measured, kept)
-m4 and m3 sent the same wire shape (floor, primed back, front, prompt, generation start) on the same clip; the shorts alone
-(m3) rendered from frame 0, the full look (m4) rendered its top from frame 0 and the shopper's own shorts until the turn. So
-the difference is what the engine was given, and the look prompt named the lower garment once, abstractly, with three of its
-five sentences about the torso. `LOOK_ANCHOR`'s second sentence now says the bottom replaces the shopper's own pants or
-shorts "on the CURRENT lower body in this frame" - the single bottoms anchor's wording. 566 -> 646 of 650, nothing sheds;
-`prompt-engine` re-pinned (the look case only), `lib/api-version.js` re-synced. **Needs a `wrangler deploy`**: until then the
-deployed Worker's fingerprint differs and the room asks the origin for /prompt and /size (slower, never wrong - §2.15).
-**Measured (l2, record mv99bvhe, the m4 clip and products):** PEAK and CHICAGO both from frame 0 (m4: the shorts from
-2.5s); the back with its print and the shorts' back 3.1-3.9s, the front back on the chest at 4.7s, no back print on the
-front. The new prompt rode every set_image (+80 chars). The engine was slow that session (lag median 1.24s vs m4's 0.83).
-The FIRST TEST of a full look on this clip with no own garment showing at the start. Shirt-only and shorts-only prompts
-are byte-identical (trace:prompt).
-
-### 2.53 No second copy of the front once the engine is generating - the turn's back was lost behind it (2026-10-15)
-The owner's 11:32 clip (PEAK alone, record mv9a5ylm): big "PEAK" letters across the back - the BACK went out at +1.68s and
-was never acknowledged (swap-fail at the window's end), so every return was dropped as `applying` and the front stayed on.
-The signalling logs of 19 rig sessions say why: a repeat of the image already on the wire, sent AFTER `generation_started`,
-had its acknowledgement held 5.4-5.7s in 3 of ~25 cases (m1, p2, p4), and the next image - the turn's back - was then not
-acknowledged in the window; a new image after generation stalled 0 of ~35 times, a repeat before it 0 of 19. 8 of 48 TEST
-records lost the turn's back this way (b3, b5, m1, p2, s8, v-…8s9z, mv9a5ylm; p4 the front). The repeat is the reveal
-hold's unconditional cold-start re-assert (§2.25: "main's re-assert"). **A session whose back prime was acknowledged
-(`_primedBackAckedGen`) skips it** - its front was already re-sent at the connect, before generation. The hold still runs;
-the conditional re-dispatches (passthrough, no reference, wrong garment) are unchanged; a single view or an unprimed session
-re-asserts as before. `?reassert=1` restores it; TEST records carry `reassert-skip`. Not yet measured live: a stall came
-about one session in six, so a few clean sessions are the check, and the sign is no repeat after `generation_started`.
+### 2.48 One garment through the turn - the size never changes with the angle; plain both sides is one reference (2026-10-14)
+"There were jumps - the shirt went down in the middle of the measurement. Keep it one shirt, not up and down while I
+measure; for every garment, at the sides too, and with the size change." The clip (FOX V-neck tee 1919148300, orange,
+sized up two) read frame by frame against its TEST record: fitted, the hem on the shorts, while the FRONT reference was on
+the wire; wider, dropped shoulders, the hem down the shorts from the BACK's acknowledgement (2.12s); fitted again after the
+FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
+- **SHED IN LOCKSTEP (`lib/prompts.js` `imageOnlyPrompt()`, Layer A).** The plain-tee front is the longest branch: at "two
+  up" with the colour named (§2.47) fitPrompt() shed its fit sentence (512 chars without, 659 with) while the shorter back
+  kept "Fit: oversized ..., generously dropped shoulders, ... elongated hem" - every turn changed the SIZE in words. The
+  flip sat on every rung where the front sheds and the back does not (a plain tee sized down: the back said "snug" /
+  "undersized"; "Add nothing else" on most rungs). A clause both angles carry now ships only if both dispatches keep it;
+  a clause one angle has (FRONT_CLOSURE_LOCK) follows its own budget. Against the previous engine: 121,800 of 161,756
+  prompts identical, 9,120 lose only the fit sentence, 12,296 only "Add nothing else", 18,540 both, 0 anything else;
+  front/back pairs that disagreed 39,956 -> 0 (`prompt-lockstep`; `prompt-engine` re-pinned; `trace:prompt` models it).
+  **The cost:** where the front already lost the size phrase (§0's limitation) the back loses it too - on a plain tee with
+  its colour named, sizing down 1-2 and up 2. Buying those rungs back is shorter fit phrasings (§0) - not done, unmeasured.
+- **ONE GARMENT, ONE REFERENCE (`app.js` `oneReferenceWillDo()`, in the preload gate, Layer B).** The photo moves the fit
+  too, and that predates the prompt flip: OASIS 2026-09-27 and the 09-29 session (with the front's lower-body sentence on
+  the back anchor - it did not help) both ran the hem down the thighs exactly while the back reference was on the wire. The
+  engine re-fits the garment to every new reference. A top plain on both sides gains nothing from its back photo, so it
+  goes as ONE reference for the whole measurement: the front-only run every product without a back photo takes (no swap,
+  the front anchor throughout, no back prime, no "back view unavailable" toast) and no re-drape (`reconditionForTopology`;
+  AI Auto stopped those 2026-10-06). Positive evidence on every count, or the swap stays: one garment, a top, a PLAIN KNIT
+  one by the engine's own construction verdict (`plainKnit` in every /prompt answer, `promptAnswerFor()` - a button, zip,
+  placket or hood would be drawn on the back); the classifier saw no graphic on the front (`front_is_plain`, new: server ->
+  widget `garment_front_is_plain` -> `item.frontIsPlain`, never a prompt fact) nor on the back (`backIsPlain`) and no front
+  lettering; neither photo measures a graphic (`blobLooksPrinted`) and both are one fabric colour (central medians within
+  `ONE_VIEW_COLOUR_MAX_L1` = 60). The reported tee's photos: front 1.87, back 2.02 (bar 2.5), colours 10 apart - one
+  reference; OASIS 42.8 / 25.8 - keeps its swap. `?one_view=0` is the swap; a TEST record carries `one-view {on, why}` and
+  `redrape-skip {one: true}`. `one-view` pins every count by name.
+- **Not changed:** a garment printed on either side still swaps - it must, to show its back; how far the engine re-fits on
+  such a photo was not measured further. The back anchors' words (§2.17: "top" and the lower-body lock were tried and
+  reverted).
+- **Deploy:** `lib/prompts.js` and the /prompt answer changed - `wrangler deploy` (cloudflare/orient) for the edge; until
+  then the room asks the origin (`lib/api-version.js` synced). An older server or widget sends no `front_is_plain`, and the
+  room keeps the swap.
+- **⚠ PRODUCTION'S CACHE CANNOT CARRY THE VERDICTS YET.** The preview's /api/classify-images on a FOX tee never seen
+  before answered `primary_color_hex`, `front_text_ocr` and `front_is_plain`; asked again three seconds later (a cache
+  hit) every one of them came back null, and the reported tee answers `back_is_plain: null, front_is_plain: null` - the
+  `garment_cache` table has no v12 columns (`text_ocr`, `has_graphic`, `primary_color_hex`, `classifier_version`), so a
+  repeat visit loses the classifier's colour, print text and plain-rear verdict as well (and `front_text_ocr` arrives as
+  "" for "nobody looked"). The fix is the owner's: run `archive/supabase_setup_v12.sql` in Supabase - rows with a null
+  `classifier_version` then count as stale and are re-classified on their next visit. Until then ONE GARMENT, ONE
+  REFERENCE abstains (`front-unproven`) on every cached product and the swap stays. **Pixels alone are not enough** -
+  the probe over FOX's catalogue: 0 of 80 printed tees read plain on both photos, but the lowest two scored 2.61 and 2.77
+  against the 2.5 bar (16 of 40 plain basics pass); so no pixel-only fallback.
+- **Checked end to end without the engine** (the source room on the real FOX page, the mock engine, the preview's
+  classifier): as served, `one-view {on: false, why: "front-unproven"}` and the swaps as before; with the two verdicts
+  supplied, `one-view {on: true, why: "plain-both"}`, `watch {dual: false}`, no prime and no swap through the whole 360.
+- **Measured on a body:** not yet - the owner's next TEST session of the tee (`ctx.size` now names the size rung).
 
 ## 3. Cross-file lockstep
 
