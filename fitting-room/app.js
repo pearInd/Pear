@@ -16207,6 +16207,9 @@ const MODEL_READY_STABLE_MS     = 300;   // ...spanning at least this many ms
    applyLook() sends on the turn - with the look's wire prompt (angle-free, the same string). A look whose halves have
    no back of their own has a back composite that IS the front one: nothing to prime. */
 let _primedBackGen = -1;
+/* The session whose back prime was ACKNOWLEDGED - read by the reveal gate (armFirstFrameBilling): on such a session the
+   hold's re-assert is a PROMPT-ONLY nudge, not a second copy of the image (see "THE NUDGE WITHOUT THE IMAGE"). */
+let _primedBackAckedGen = -1;
 async function primeBackReference(gen) {
   if (_primedBackGen === gen) return false;
   _primedBackGen = gen;
@@ -16247,6 +16250,7 @@ async function primeBackReference(gen) {
   lastSentPrompt = null;
   console.log(`[PEAR] back reference primed before the reveal (${Date.now() - t0}ms) - the turn's swap is now a repeat`);
   if (typeof traceOrient === "function") traceOrient("prime-acked", { ms: Date.now() - t0 });
+  _primedBackAckedGen = gen;
   return true;
 }
 
@@ -16534,7 +16538,24 @@ function armFirstFrameBilling(video, gen) {
          decline it, and a re-assert marked sent but never sent is the one-shot lost for good. */
       if (!renderSettling()) {
         reasserted = true;
-        redispatchColdStart(gen, NaN, "cold-start re-assert");
+        /* THE NUDGE WITHOUT THE IMAGE (2026-10-15). The re-assert draws the print: without it (g1) the front stayed a plain
+           tee until the return. But it is a repeat of the image the engine already holds, sent once it is generating, and
+           the engine sometimes holds that acknowledgement 5.4-5.7s (m1, p2, p4, g2) - the turn's BACK then waits behind it
+           and lands on the chest (g2: big front letters across the back, then the back panel on the chest at 4.3-4.9s).
+           On a session whose back prime was acknowledged the nudge goes out PROMPT-ONLY - the same wire prompt, no image.
+           ?reassert=image sends the image as before; a session without a prime, or with no wire prompt, re-asserts as before. */
+        const primedSession = typeof _primedBackAckedGen !== "undefined" && _primedBackAckedGen === gen;
+        let reassertMode = null;
+        try { reassertMode = new URLSearchParams(location.search).get("reassert"); } catch (_) { reassertMode = null; }
+        const nudgePrompt = typeof lastSentPrompt === "string" && lastSentPrompt ? lastSentPrompt : null;
+        if (primedSession && reassertMode !== "image" && nudgePrompt && typeof rtClient !== "undefined" && rtClient &&
+            typeof sendCondition === "function") {
+          if (typeof traceOrient === "function") traceOrient("reassert-prompt", { at: sinceQualified });
+          sendCondition("coldStartPrompt", () => rtClient.setPrompt(nudgePrompt, { enhance: false }), { skipIfBusy: true })
+            .catch((e) => console.warn("[PEAR] cold-start prompt nudge failed:", e?.message || e));
+        } else {
+          redispatchColdStart(gen, NaN, "cold-start re-assert");
+        }
       }
     }
     const unconditioned = (probe.ready && probe.passthrough) || noReference || withinMinHold;

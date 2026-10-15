@@ -550,10 +550,13 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
      before the shopper sees anything. Driven here on a fake clock. */
   const code = extract("function armFirstFrameBilling(video, gen) {",
                        "/* ═══════════════════════════════════════════════════════════════════════════\n   FRAME-FREEZE WATCHDOG");
-  const mk = ({ holdMs, search = "" }) => {
+  const mk = ({ holdMs, search = "", primedGen = -1, wirePrompt = "P" }) => {
     let now = 5_000_000, fired = false, frameCb = null;
-    const applies = [];
+    const applies = [], prompts = [], traced = [];
     const sandbox = {
+      _primedBackAckedGen: primedGen, traceOrient: (k) => traced.push(k),
+      rtClient: { setPrompt: (t, o) => { prompts.push({ t, o }); return Promise.resolve(); } },
+      sendCondition: (label, send) => Promise.resolve(send()).then(() => true),
       video: { videoWidth: 1000, videoHeight: 1800, requestVideoFrameCallback: (cb) => { frameCb = cb; } },
       gen: 1, sessionGen: 1, billingStarted: false, isGarmentApplied: true, dressedFrameReady: false,
       sampleVideoLuma: () => ({ ready: true, avgLuma: 120, blackFrac: 0 }),
@@ -570,7 +573,7 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
       MODEL_READY_STABLE_FRAMES: 1, MODEL_READY_STABLE_MS: 0,
       isLive: () => true, wireBusy: () => false,
       applyActive: () => { applies.push(now); return Promise.resolve(); },
-      lastSentImageRef: "REF", rtImageOnWire: true, lastSentPrompt: "P",
+      lastSentImageRef: "REF", rtImageOnWire: true, lastSentPrompt: wirePrompt,
       startBillingWindow: () => { fired = true; },
       watchPostFireLuma: () => {}, requestAnimationFrame: (cb) => { frameCb = cb; return 1; },
       console: { log() {}, warn() {} }, window: {}, Date: { now: () => now },
@@ -579,7 +582,7 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
       code + "\nreturn { arm: () => armFirstFrameBilling(video, gen) };")(...Object.values(sandbox));
     api.arm();
     return { tick: () => { const cb = frameCb; frameCb = null; if (cb) cb(); },
-             advance: (ms) => { now += ms; }, fired: () => fired, applies };
+             advance: (ms) => { now += ms; }, fired: () => fired, applies, prompts, traced };
   };
 
   {
@@ -599,6 +602,26 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
     h.advance(CONFIG.COLD_START_MIN_HOLD_MS); h.tick();
     check("and once the hold is over, the feed is revealed",
       h.fired() === true, "the hold is a fixed moment, never a verdict");
+  }
+  {
+    /* THE NUDGE WITHOUT THE IMAGE (2026-10-15): on a session whose back prime was acknowledged the hold's re-assert is
+       the wire prompt alone - a repeat of the image once the engine generates can stall its acks 5.4-5.7s (g2). */
+    const h = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1 });
+    h.tick(); h.advance(CONFIG.COLD_START_REASSERT_MS); h.tick(); h.advance(50); h.tick();
+    check("a primed session nudges with the wire prompt only - one setPrompt, no image re-send",
+      h.applies.length === 0 && h.prompts.length === 1 && h.prompts[0].t === "P" && h.prompts[0].o.enhance === false &&
+      h.traced.includes("reassert-prompt"), JSON.stringify({ applies: h.applies.length, prompts: h.prompts }));
+    h.advance(CONFIG.COLD_START_MIN_HOLD_MS); h.tick();
+    check("...and still reveals once the hold is over", h.fired() === true);
+    const img = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1, search: "?reassert=image" });
+    img.tick(); img.advance(CONFIG.COLD_START_REASSERT_MS); img.tick();
+    check("?reassert=image re-sends the image as before", img.applies.length === 1 && img.prompts.length === 0);
+    const other = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 0 });
+    other.tick(); other.advance(CONFIG.COLD_START_REASSERT_MS); other.tick();
+    check("an unprimed session (or another session's prime) re-sends the image as before", other.applies.length === 1 && other.prompts.length === 0);
+    const noP = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1, wirePrompt: null });
+    noP.tick(); noP.advance(CONFIG.COLD_START_REASSERT_MS); noP.tick();
+    check("no wire prompt to nudge with: the image re-assert as before", noP.applies.length === 1 && noP.prompts.length === 0);
   }
   {
     /* The escape hatch has to restore the previous behaviour EXACTLY, or it is not an A/B. */
