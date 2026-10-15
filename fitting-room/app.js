@@ -7518,7 +7518,14 @@ const PEAR_EXP = (() => {
     return v === "small" || v === "ref" || v === "small-ref" || v === "notel" ? v : "";
   } catch (_) { return ""; }
 })();
-const EXP_SMALL = PEAR_EXP === "small" || PEAR_EXP === "small-ref";
+/* THE SMALL REFERENCE IS EVERY SESSION'S (2026-10-15, g5-g7). A reference sent once the engine is generating shares the uplink
+   with the camera, and on a weak one it was the whole delay: with ~500 kbps available (g5, g6 - 1,700 in the sessions that
+   worked) a 1000px reference (~100 KB on the wire) was acknowledged in 2.5-6s or never - the turn's BACK queued behind it,
+   the front's print across the back, then the back on the chest. g7, the same weak uplink (485 kbps) with the reference
+   downscaled to EXP_SMALL_W: the nudge 1.05s, the BACK 349ms, the FRONT 411ms, PEAK from the first frame, the print as
+   sharp. Every session sends it now; ?ref_full=1 sends the full photo (an A/B). */
+const REF_FULL_SIZE = (() => { try { return new URLSearchParams(location.search).get("ref_full") === "1"; } catch (_) { return false; } })();
+const EXP_SMALL = !REF_FULL_SIZE || PEAR_EXP === "small" || PEAR_EXP === "small-ref";
 const EXP_REF = PEAR_EXP === "ref" || PEAR_EXP === "small-ref";
 const EXP_NOTEL = PEAR_EXP === "notel";
 const EXP_SMALL_W = 640;
@@ -7601,7 +7608,7 @@ function garmentBlobCached(url) {
       if (normalized && bandJob && typeof maskReferenceBand === "function") {
         normalized = await maskReferenceBand(normalized, url, await bandJob);
       }
-      /* THE ENGINE-SPEED EXPERIMENT's "small" mode (TEST sessions only). typeof-guarded: suites run this standalone. */
+      /* THE SMALL REFERENCE (every session since 2026-10-15 - see EXP_SMALL). typeof-guarded: suites run this standalone. */
       const blob = typeof EXP_SMALL !== "undefined" && EXP_SMALL && typeof expDownscale === "function" ? await expDownscale(normalized) : normalized;
       /* Encoded NOW, while nothing is waiting on it, so a swap that sends this Blob later does no
          encoding at all - see preEncodeReference(). Fire-and-forget; a failure costs nothing. */

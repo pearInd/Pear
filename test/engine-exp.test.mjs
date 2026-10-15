@@ -35,10 +35,14 @@ console.log("\n── §1 only a TEST session ──");
 {
   const mode = (search, test) => new Function("location", "traceEnabled", EXP + "\nreturn [PEAR_EXP, EXP_SMALL, EXP_REF, EXP_NOTEL];")(
     { search }, () => test);
+  /* EXP_SMALL is every session's since 2026-10-15 (THE SMALL REFERENCE - g5-g7): the second slot reads true without a mode. */
   check("§1.1 a TEST session reads the mode", JSON.stringify(mode("?pear_exp=small-ref", true)) === JSON.stringify(["small-ref", true, true, false]) &&
-    JSON.stringify(mode("?pear_exp=notel", true)) === JSON.stringify(["notel", false, false, true]));
-  check("§1.2 a shopper's session runs none of it, whatever the URL says", JSON.stringify(mode("?pear_exp=ref", false)) === JSON.stringify(["", false, false, false]) &&
-    JSON.stringify(mode("?pear_exp=notel", false)) === JSON.stringify(["", false, false, false]));
+    JSON.stringify(mode("?pear_exp=notel", true)) === JSON.stringify(["notel", true, false, true]));
+  check("§1.2 a shopper's session runs none of the EXPERIMENTS, whatever the URL says (the small reference is everyone's)",
+    JSON.stringify(mode("?pear_exp=ref", false)) === JSON.stringify(["", true, false, false]) &&
+    JSON.stringify(mode("?pear_exp=notel", false)) === JSON.stringify(["", true, false, false]));
+  check("§1.5 the small reference is every session's, and ?ref_full=1 sends the full photo (TEST or not)",
+    mode("", false)[1] === true && mode("?ref_full=1", false)[1] === false && mode("?ref_full=1&pear_exp=small", true)[1] === true);
   check("§1.3 an unknown mode is no mode", mode("?pear_exp=fast", true)[0] === "");
   check("§1.4 ...and the TEST record carries it", /exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP \? PEAR_EXP : undefined,/.test(APP));
 }

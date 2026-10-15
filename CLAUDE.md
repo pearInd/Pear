@@ -1639,6 +1639,14 @@ FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
   supplied, `one-view {on: true, why: "plain-both"}`, `watch {dual: false}`, no prime and no swap through the whole 360.
 - **Measured on a body:** not yet - the owner's next TEST session of the tee (`ctx.size` now names the size rung).
 
+### 2.53 The reference is sent small - a weak uplink was the stall (2026-10-15, g5-g7)
+The "stall" behind every lost back was the UPLINK: images sent before generation (no camera video yet) were always fast;
+after it, a ~100 KB reference shares the uplink with the camera. The sessions that worked had ~1,700 kbps available; g5 and
+g6 ~510 - the nudge 2.5-6s, the turn's BACK never acknowledged. g7 on the same weak uplink (485 kbps) with the TEST-only
+"small" mode (`expDownscale`, 640px wide, JPEG 0.9 - 77/64 KB on the wire instead of 105/96): nudge 1.05s, BACK 349ms, FRONT
+411ms, PEAK from the first frame, the print as sharp. `EXP_SMALL` is now every session's (`garmentBlobCached`); `?ref_full=1`
+sends the full photo. `engine-exp` §1.5. The "ref" mode (ids instead of bytes) stays a TEST experiment.
+
 ### 2.52 The cold-start nudge is waited out under the loading screen (2026-10-15, g5)
 g5 (the fresh copy, §2.49): the copy's acknowledgement was held 6.0s - so the stall is not the bytes; it is the first image
 the engine gets once generating, whatever it is (m1, p2, p4, g2, g5). Without that image the print never draws (g1, g3). The
