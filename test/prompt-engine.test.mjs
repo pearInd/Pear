@@ -31,7 +31,11 @@ import { createHash } from "node:crypto";
    a colour name - every one a warm colour (the 4,096-colour grid: 32 gain beige/dark brown/cream, 8 borderline warm
    colours move between brown/burgundy and none/dark brown, nothing else) - and 366 by a renamed colour meeting the size
    phrase's budget. The pre-move pin was 221a5b58…. */
-const PINNED = "3d1f5304f15a0e9ed414b8ed9d8cc9969d4ad85d363069f01d213fd6dcf98f29";
+/* RE-PINNED 2026-10-15, deliberately (CLAUDE.md §2.52): the full look's anchor names the bottom on the body - one
+   sentence in LOOK_ANCHOR, 566 -> 646 of 650, nothing shed. LOOK_ANCHOR is read by lookAnchorPrompt() alone, so the
+   one look case in this corpus is the only line that moved (trace:prompt --json: the full-look entries only). The
+   previous pin was 3d1f5304…. */
+const PINNED = "a752cb44c828021455f13b349b8522d6ac195bf382220e412ba0e46d90da1257";
 
 let fails = 0;
 function check(label, cond, detail) {

@@ -1635,6 +1635,16 @@ hidden at -2.8s/-1.7s and the shopper was revealed in a plain dark top WITHOUT i
 region on a new image mainly while the body MOVES; a re-upload on a still shopper leaves a plain garment. Do not retry a hidden
 pre-reveal re-upload for this without a different mechanism.
 
+### 2.52 The full look's prompt names the bottom on the body (2026-10-15, Layer A - measuring)
+m4 and m3 sent the same wire shape (floor, primed back, front, prompt, generation start) on the same clip; the shorts alone
+(m3) rendered from frame 0, the full look (m4) rendered its top from frame 0 and the shopper's own shorts until the turn. So
+the difference is what the engine was given, and the look prompt named the lower garment once, abstractly, with three of its
+five sentences about the torso. `LOOK_ANCHOR`'s second sentence now says the bottom replaces the shopper's own pants or
+shorts "on the CURRENT lower body in this frame" - the single bottoms anchor's wording. 566 -> 646 of 650, nothing sheds;
+`prompt-engine` re-pinned (the look case only), `lib/api-version.js` re-synced. **Needs a `wrangler deploy`**: until then the
+deployed Worker's fingerprint differs and the room asks the origin for /prompt and /size (slower, never wrong - §2.15).
+Measured in one real session against m4 before it is kept; revert if the start is not better.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
