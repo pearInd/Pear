@@ -11142,8 +11142,15 @@ function orientLinkUrl() {
   try { return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/orient"; } catch (_) { return null; }
 }
 
+/* THE BACK GOES OUT NEAR THE SIDE (2026-10-15, g8). A swap lands on about the body angle it was sent at (the engine's own
+   finding, THE FOLD HANDSHAKE) - and with the small reference (§2.53) acknowledged in ~0.4s that is closer than ever. The
+   early turn fires on the first reading past 40 degrees, and the readings come every ~250ms: m2, n2, g4, g7 happened to read
+   64-88 and the back landed at the side; g8 read 43 and the mountain print sat on a chest still three-quarters to the lens
+   (2.12-2.48s). So the room asks the engine for 60 (its ceiling) on both early-turn paths; a URL value still wins
+   (?early_turn=40&early_turn_slow=40 is the engine's own default). */
+const ORIENT_KNOB_DEFAULTS = { early_turn: "60", early_turn_slow: "60" };
 function orientKnobs() {
-  const out = {};
+  const out = { ...ORIENT_KNOB_DEFAULTS };
   try {
     const q = new URLSearchParams(location.search);
     for (const k of ORIENT_KNOB_KEYS) { const v = q.get(k); if (v !== null) out[k] = v; }

@@ -1639,6 +1639,15 @@ FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
   supplied, `one-view {on: true, why: "plain-both"}`, `watch {dual: false}`, no prime and no swap through the whole 360.
 - **Measured on a body:** not yet - the owner's next TEST session of the tee (`ctx.size` now names the size rung).
 
+### 2.54 The back goes out near the side - the room asks the engine for 60 (2026-10-15, g8/g9; not yet proven)
+g8 (small references, a good uplink - the back acknowledged in 427ms): the early turn fired on the first reading past 40 - it
+read 43 - and the swap landed, as THE FOLD HANDSHAKE measured, on about the angle it was sent at: the mountain print on a
+chest still three-quarters to the lens at 2.12-2.48s. m2/n2/g4/g7 read 64-88 at the send and landed at the side. The room
+now sends `early_turn=60&early_turn_slow=60` (`ORIENT_KNOB_DEFAULTS`; the engine's ceiling) unless the URL names them - no
+Worker deploy, the engine's defaults untouched. g9 ran with it but read 34 then 88, so it never exercised the change; it showed
+a late RETURN instead (FRONT held one reading past the side by the projection - the back panel on a 3/4 chest at 4.22-4.36s),
+still open. `orient-link` pins the defaults.
+
 ### 2.53 The reference is sent small - a weak uplink was the stall (2026-10-15, g5-g7)
 The "stall" behind every lost back was the UPLINK: images sent before generation (no camera video yet) were always fast;
 after it, a ~100 KB reference shares the uplink with the camera. The sessions that worked had ~1,700 kbps available; g5 and
