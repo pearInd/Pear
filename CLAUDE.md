@@ -1639,6 +1639,20 @@ FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
   supplied, `one-view {on: true, why: "plain-both"}`, `watch {dual: false}`, no prime and no swap through the whole 360.
 - **Measured on a body:** not yet - the owner's next TEST session of the tee (`ctx.size` now names the size rung).
 
+### 2.55 A slow engine is left before the shopper sees it; the full look's prompt again (2026-10-15, evening)
+Every session with a full network record, by how long the first image the engine took once generating (the cold-start
+nudge) waited for its acknowledgement: 0.29-1.08s - the turn's BACK landed (m2, m4, g4, g7, l2 ...); 1.9s or more - the
+BACK was late or never acknowledged (m1, p2, p4, g2, g5, g6, the owner's 19:47 with the small reference). Not the bytes (a
+fresh copy, g5), not the size (§2.53), not a wait (g6 turned 3s after the nudge's ack and still lost it): a slow engine
+stays slow for the session. `reconnectForSlowEngine()` - past `SLOW_ENGINE_ACK_MS` (1.5s) with the nudge unacknowledged, once
+per go-live, under the loading screen: the cold-start recovery's own reconnect (connectRealtime force), the floor marked
+applied, the back primed, a first-frame guard of its own; the new session's gate holds and nudges as any. `reveal-settle`
+§10. Whether a fresh session lands on a faster engine is NOT yet measured - the next slow session's record shows
+`slow-engine` / `slow-engine-reconnected` and the new nudge's ack.
+Re-applied: the full look's LOOK_ANCHOR sentence (4644901, §2.52 of the bc7ea00 line - l2: the shorts from frame 0), lost when
+the tree went back to d7cde9a; prompt-engine re-pinned (look case only), api-version re-synced (the Worker needs a deploy to
+answer /prompt and /size again; until then the origin answers).
+
 ### 2.54 The back goes out near the side - the room asks the engine for 60 (2026-10-15, g8/g9; not yet proven)
 g8 (small references, a good uplink - the back acknowledged in 427ms): the early turn fired on the first reading past 40 - it
 read 43 - and the swap landed, as THE FOLD HANDSHAKE measured, on about the angle it was sent at: the mountain print on a

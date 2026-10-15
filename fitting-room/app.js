@@ -16347,7 +16347,7 @@ function armFirstFrameBilling(video, gen) {
   let firstQualifyingAt = null;
   let reasserted = false;
   /* THE NUDGE IS WAITED OUT UNDER THE LOADING SCREEN (2026-10-15) - see NUDGE_HOLD_MAX_MS. */
-  let nudgeSentAt = null, nudgeAckedAt = null, nudgeExpiryLogged = false;
+  let nudgeSentAt = null, nudgeAckedAt = null, nudgeExpiryLogged = false, slowEngineAsked = false;
   const trackNudge = (p) => {
     if (!p || typeof p.then !== "function") return;
     nudgeSentAt = Date.now();
@@ -16650,6 +16650,17 @@ function armFirstFrameBilling(video, gen) {
        (wireGarmentId vs selectedGarmentId). A mismatch - a garment tapped while its
        predecessor's upload was in flight - holds and re-dispatches the selection, through the
        same bounded redispatchColdStart(). Both yield to REVEAL_SETTLE_MAX_MS. */
+    /* A SLOW ENGINE IS LEFT BEFORE THE SHOPPER SEES IT (2026-10-15). The nudge is the first image this engine takes once it
+       is generating, and how long it takes answers for the whole session: acknowledged in 0.29-1.08s, the turn's BACK landed
+       (m2, m4, g4, g7, l2, ...); in 1.9s or more, the BACK was late or never acknowledged at all - not the bytes (a fresh
+       copy, g5), not the size (the small reference, the owner's 19:47) and not a wait (g6 waited 3s after it). So past
+       SLOW_ENGINE_ACK_MS the room opens a fresh session once (reconnectForSlowEngine), under the loading screen. */
+    if (!slowEngineAsked && nudgeSentAt !== null && nudgeAckedAt === null &&
+        Date.now() - nudgeSentAt >= (typeof SLOW_ENGINE_ACK_MS === "number" ? SLOW_ENGINE_ACK_MS : 1500) &&
+        typeof reconnectForSlowEngine === "function") {
+      slowEngineAsked = true;
+      reconnectForSlowEngine(gen, Date.now() - nudgeSentAt);
+    }
     const settleHold = renderSettling() && !settleGateExpired();
     const garmentMismatch = settleHoldEnabled && wireGarmentId !== null && wireGarmentId !== selectedGarmentId();
     const wrongGarmentHold = garmentMismatch && !settleGateExpired();
@@ -17166,6 +17177,48 @@ async function applyConditioningWithRecovery() {
  * bookkeeping stays true and the next apply can take its usual fast path.
  * @returns {Promise<void>}
  */
+/* ── A SLOW ENGINE IS LEFT BEFORE THE SHOPPER SEES IT (2026-10-15) - see the reveal gate's note. Once per go-live: the
+   cold-start recovery's own reconnect (connectRealtime force - a new session, the floor in its join), the conditioning
+   marked applied (applyFallbackConditioning - the floor already holds it), the back primed again, and a first-frame guard
+   for the new session (goLive's guard belongs to the old one). The new session's own reveal gate - armed by its stream -
+   holds, nudges and reveals as any session does. The cost is the loading screen: ~4-6s more, in the sessions that would
+   otherwise lose the turn's back. */
+const SLOW_ENGINE_ACK_MS = 1500;
+let _slowEngineRetried = false;
+async function reconnectForSlowEngine(fromGen, ms) {
+  if (_slowEngineRetried || fromGen !== sessionGen || billingStarted) return false;
+  _slowEngineRetried = true;
+  if (typeof traceOrient === "function") traceOrient("slow-engine", { ms: Math.round(ms) });
+  console.warn(`[PEAR] the render engine took ${Math.round(ms)}ms and counting to accept the first reference -`,
+    "opening a fresh session before the reveal (a slow engine loses the turn's back)");
+  try {
+    resetConditionWire();
+    await connectRealtime({ force: true });
+    await waitConnected(CONNECT_TIMEOUT_MS);
+    const g = sessionGen;
+    await applyFallbackConditioning();
+    if (g !== sessionGen) return false;
+    if (typeof primeAtConnect === "function") primeAtConnect(g);
+    if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
+    firstFrameGuardTimer = setTimeout(() => {
+      firstFrameGuardTimer = null;
+      if (sessionGen !== g || billingStarted) return;
+      console.warn("[PEAR] No first frame within " + FIRST_FRAME_TIMEOUT_MS + "ms of the fresh session - tearing down (no idle billing)");
+      stopScanTimer();
+      $("scanOverlay").hidden = true;
+      stopLive();
+      showCamError("החיבור לא הניב תמונה - נסה שוב.");
+      setConn("error");
+    }, FIRST_FRAME_TIMEOUT_MS);
+    if (typeof traceOrient === "function") traceOrient("slow-engine-reconnected", {});
+    return true;
+  } catch (e) {
+    console.warn("[PEAR] fresh session for a slow engine failed:", e?.message || e);
+    if (typeof traceOrient === "function") traceOrient("slow-engine-failed", { m: String(e?.message || e).slice(0, 100) });
+    return false;
+  }
+}
+
 async function applyFallbackConditioning() {
   const look = resolveLook();
   const item = look ? look.top : activeItem;
@@ -17597,6 +17650,7 @@ async function goLive() {
     // cancelled the moment billing actually starts. Guard against the fast-frame race where
     // the first frame already armed billing before we got here.
     const guardGen = sessionGen;
+    _slowEngineRetried = false;        // a fresh go-live may leave a slow engine once (reconnectForSlowEngine)
     if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
     if (!billingStarted) {
       firstFrameGuardTimer = setTimeout(() => {
