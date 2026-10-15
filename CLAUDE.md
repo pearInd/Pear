@@ -1826,6 +1826,31 @@ Do this yourself, unprompted, every time — not only at commit time:
 If any of these come back red, say so plainly and stop — don't fix it by
 silently loosening the check.
 
+### 7.1 THE OWNER'S RULE - every change to the room is measured on the real engine, frame by frame (2026-10-15)
+"Every time something in the interface changes, Claude has to measure, go frame by frame and make sure everything
+works." `qa:visual` (mock engine) and the unit suite are necessary and NOT enough - they never see the real render.
+For any change that can alter what the shopper sees (the room, the reference, the orientation engine, the prompt,
+the view/crop, the reveal), before reporting it done:
+
+1. **Measure it on the real engine** - the real-session rig (a recorded clip as the camera, the deployed preview, a
+   TEST flight record), or the owner's own clip. At least: a shirt alone, pants alone and a full look when the change
+   can touch them; a normal and a fast turn when the change touches orientation.
+2. **Go frame by frame** over the whole 5s window (a contact sheet at ~0.1s; a zoomed sheet across each transition)
+   and check, with the TEST record beside it:
+   - **the garment is there from the first frame** (shirt AND pants in a full look);
+   - **the garment does not jump** - same size, same length, same sides from frame to frame (no giant shirt, no
+     shirt dropping, no width change on a turn);
+   - **front/back on every frame** - the front print only while the chest faces the lens, the back print only while
+     the back does, the switch at the side view; no front print on the back, no back print on the chest;
+   - **re-fitting** - every swap and re-drape lands the right reference and the garment settles (no plain garment,
+     no shopper's own clothes, no stuck back - check `swap-acked` for every `swap-sent`);
+   - **nothing added** - no jewellery, logos or accessories the reference does not carry.
+3. **Report what the frames show, with timestamps**, worse or better than the version before. A change that measures
+   worse is reverted first (the owner's standing rule), analysed after.
+
+Credits: a real session spends the owner's render credits. Measure within what the owner approved; if nothing is
+approved, say the change is NOT yet verified and ask for the credits - never report it done without the measurement.
+
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
