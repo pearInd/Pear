@@ -1627,6 +1627,16 @@ camera clip was lost to a scratchpad cleanup):
   until then - and the BACK queued behind it never acknowledged before the end (front print on the back). Acks were ~0.3s in
   the other three. The reveal hold's re-send of an image already on the wire is the request that stalled.
 
+### 2.51 A full look's bottom from the first frame - the reveal hold's re-assert is a back->front cycle (2026-10-15)
+Real session m4 (§2.50): the look's front composite went out at connect and three times before the reveal, the connect's back
+prime BEFORE the engine began generating (generation_started after both acks); from the first generated frame the engine had
+one image and dressed only the top - the shopper's own shorts until the turn's back composite, the CHICAGO shorts from then on,
+through the front's return. `lookStartCycle()` turns a full look's one reveal-hold re-assert (main's re-send, ~1s in, hidden)
+into the change that dressed the bottom: the back composite, then the front again (the settle hold waits on the front, so the
+reveal is on it). A single garment keeps main's re-assert (§2.25: a back->front switch there once revealed a sleeveless front).
+Once per session; `?look_cycle=0`; records carry `look-cycle`; `look-cycle` and `composite` (8 send sites) pin it.
+**Not measured yet** - the owner's credits for this round are spent; two look sessions are the check.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

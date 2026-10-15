@@ -548,6 +548,7 @@ const SUITES = [
   ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
   ["wide-view", "wide-view.test.mjs"],
   ["lag-comp", "lag-comp.test.mjs"],
+  ["look-cycle", "look-cycle.test.mjs"],
   ["engine-exp", "engine-exp.test.mjs"],
   ["garment-box", "garment-box.test.mjs"],
   ["head-frame", "head-frame.test.mjs"],
