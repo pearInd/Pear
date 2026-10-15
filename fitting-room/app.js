@@ -16210,6 +16210,9 @@ let _primedBackGen = -1;
 /* The session whose back prime was ACKNOWLEDGED - read by the reveal gate (armFirstFrameBilling): on such a session the
    hold's re-assert is a PROMPT-ONLY nudge, not a second copy of the image (see "THE NUDGE WITHOUT THE IMAGE"). */
 let _primedBackAckedGen = -1;
+/* The session whose fresh-copy nudge already went out: the reveal gate can be armed twice per session (onRemoteStream fires
+   more than once), and a second copy is byte-identical to the first - the very repeat the copy exists to avoid (g4). */
+let _freshNudgeGen = -1;
 async function primeBackReference(gen) {
   if (_primedBackGen === gen) return false;
   _primedBackGen = gen;
@@ -16569,8 +16572,12 @@ function armFirstFrameBilling(video, gen) {
         const nudgePrompt = typeof lastSentPrompt === "string" && lastSentPrompt ? lastSentPrompt : null;
         const wireBlob = typeof Blob !== "undefined" && typeof lastSentImageRef !== "undefined" && lastSentImageRef instanceof Blob
           ? lastSentImageRef : null;
-        if (primedSession && reassertMode !== "image" && nudgePrompt && wireBlob && typeof freshImageCopy === "function" &&
+        const nudgedAlready = typeof _freshNudgeGen !== "undefined" && _freshNudgeGen === gen;
+        if (primedSession && nudgedAlready) {
+          /* the other arm of this session sent it - one copy per session */
+        } else if (primedSession && reassertMode !== "image" && nudgePrompt && wireBlob && typeof freshImageCopy === "function" &&
             typeof rtClient !== "undefined" && rtClient && typeof sendCondition === "function") {
+          if (typeof _freshNudgeGen !== "undefined") _freshNudgeGen = gen;
           freshImageCopy(wireBlob).then((copy) => {
             if (!copy || gen !== sessionGen || !rtClient) { redispatchColdStart(gen, NaN, "cold-start re-assert"); return; }
             if (typeof traceOrient === "function") traceOrient("reassert-fresh", { at: sinceQualified, kb: Math.round(copy.size / 1024) });

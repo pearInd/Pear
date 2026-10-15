@@ -551,11 +551,11 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
   const code = extract("function armFirstFrameBilling(video, gen) {",
                        "/* ═══════════════════════════════════════════════════════════════════════════\n   FRAME-FREEZE WATCHDOG");
   const WIRE_BLOB = new Blob(["front-on-the-wire"], { type: "image/jpeg" });
-  const mk = ({ holdMs, search = "", primedGen = -1, wirePrompt = "P", wireRef = WIRE_BLOB, copyFails = false }) => {
+  const mk = ({ holdMs, search = "", primedGen = -1, wirePrompt = "P", wireRef = WIRE_BLOB, copyFails = false, nudgedGen = -1 }) => {
     let now = 5_000_000, fired = false, frameCb = null;
     const applies = [], sets = [], acked = [], traced = [];
     const sandbox = {
-      _primedBackAckedGen: primedGen, traceOrient: (k) => traced.push(k),
+      _primedBackAckedGen: primedGen, _freshNudgeGen: nudgedGen, traceOrient: (k) => traced.push(k),
       freshImageCopy: async (b) => (copyFails ? null : new Blob([b, "+"], { type: "image/jpeg" })),
       rtClient: { set: (p) => { sets.push(p); return Promise.resolve(); } },
       sendCondition: (label, send) => Promise.resolve(send()).then(() => true),
@@ -620,6 +620,10 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
     check("...acknowledged like any upload, so the settle hold waits out its render", h.acked.join() === "coldStartFresh");
     h.advance(CONFIG.COLD_START_MIN_HOLD_MS + CONFIG.REFERENCE_RENDER_SETTLE_MS); h.tick();
     check("...and the reveal still comes", h.fired() === true);
+    const twice = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1, nudgedGen: 1 });
+    twice.tick(); twice.advance(CONFIG.COLD_START_REASSERT_MS); twice.tick(); await settle(); await settle();
+    check("one copy per session: a second arm of the same session sends nothing (g4 sent two identical copies)",
+      twice.sets.length === 0 && twice.applies.length === 0, JSON.stringify({ sets: twice.sets.length, applies: twice.applies.length }));
     const img = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1, search: "?reassert=image" });
     img.tick(); img.advance(CONFIG.COLD_START_REASSERT_MS); img.tick();
     check("?reassert=image re-sends the image as before", img.applies.length === 1 && img.sets.length === 0);

@@ -1642,16 +1642,23 @@ FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
 ### 2.50 Back on d7cde9a's tree, two measured changes re-applied (2026-10-15 afternoon)
 The owner asked for d7cde9a's version (6ce01e5). Its 16:55 clip: the shirt rendered far too big - the wide view's giant-shirt
 hallucination (3 of 3 wide sessions on 10-14, 0 of 4 portrait). Re-applied on top: df0ee99 (the sides cut, the height kept -
-a portrait view at the widest zoom; "turn slowly" in the guide) and bc7ea00 (§2.49 - reverted the same day: the print never drew). Not re-applied: the TEST-only lag compensation, the full look's prompt. The PEAK prompt carries ADD_NOTHING_ELSE
+a portrait view at the widest zoom; "turn slowly" in the guide) and bc7ea00 (§2.49 - replaced the same day by a fresh copy). Not re-applied: the TEST-only lag compensation, the full look's prompt. The PEAK prompt carries ADD_NOTHING_ELSE
 and the fit sentence on both angles in this tree too (checked) - the necklace the owner saw is the engine's, not a shed clause.
 
-### 2.49 Tried and reverted (again): skipping the cold-start re-assert on a primed session (2026-10-15)
-bc7ea00 skipped the reveal hold's re-assert (a repeat of the front once the engine is generating), whose acknowledgement the
-engine sometimes holds 5.4-5.7s - losing the turn's back behind it (8 of 48 records). Measured on the real engine (g1, PEAK,
-portrait): with no post-generation repeat the front print NEVER drew - a plain brown tee from 0.00 to 4.5s, PEAK only when the
-return re-sent the front. The re-assert is what makes the engine draw the print at the start; it stays. A byte-different copy
-is not the way round it either: l1 (§ the full look's hold cycle) showed a NEW image on a still body leaves a plain garment.
-The back stall (~1 session in 6) is the engine's and is still open.
+### 2.49 The cold-start nudge is a fresh copy of the front on a primed session (2026-10-15, four real sessions)
+The reveal hold's re-assert (a byte-identical repeat of the front once the engine is generating) had its acknowledgement
+held 5.4-5.7s in 4 of ~27 logged cases (m1, p2, p4, g2) and the turn's BACK waited behind it - g2: big front letters across
+the back, then the back panel on the chest at 4.3-4.9s. Measured, one session each (PEAK, the vneck clip, portrait):
+- **no re-assert (g1):** the front print never drew - a plain tee 0-4.5s, PEAK only when the return re-sent the front;
+- **the wire prompt alone (g3):** the same - the print needs an IMAGE once generating;
+- **a fresh copy (g4):** `freshImageCopy()` re-encodes the front on the wire - the same picture under new bytes - and sends
+  it with the wire prompt: PEAK from frame 0, the back at 2.9-3.9s. KEPT, on a session whose back prime was acknowledged
+  (`_primedBackAckedGen`); once per session (`_freshNudgeGen` - the gate is armed twice and g4 sent two identical copies);
+  any failure falls back to the image re-assert; `?reassert=image` forces it. TEST records carry `reassert-fresh`.
+Not proven: that a new-bytes copy never stalls - new images stalled 0 of ~40 in the logs, but one clean session cannot show
+a 1-in-6 failure is gone. The owner's TEST sessions are the check: no `swap-fail`, a back `swap-acked` within ~0.5s.
+Still open from g4: a slow return ack (790ms) left the front plain for ~0.5s, and white lines like a necklace appeared on the
+chest at 4.4-4.9s - the engine's, no clause was shed (the PEAK prompt carries ADD_NOTHING_ELSE on both angles).
 
 ### 7.1 THE OWNER'S RULE - every change to the room is measured on the real engine, frame by frame (2026-10-15)
 "Every time something in the interface changes, Claude has to measure, go frame by frame and make sure everything
