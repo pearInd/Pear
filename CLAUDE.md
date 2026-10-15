@@ -1639,6 +1639,14 @@ FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
   supplied, `one-view {on: true, why: "plain-both"}`, `watch {dual: false}`, no prime and no swap through the whole 360.
 - **Measured on a body:** not yet - the owner's next TEST session of the tee (`ctx.size` now names the size rung).
 
+### 2.52 The cold-start nudge is waited out under the loading screen (2026-10-15, g5)
+g5 (the fresh copy, §2.49): the copy's acknowledgement was held 6.0s - so the stall is not the bytes; it is the first image
+the engine gets once generating, whatever it is (m1, p2, p4, g2, g5). Without that image the print never draws (g1, g3). The
+settle hold's ceiling (REVEAL_SETTLE_MAX_MS from arming) revealed g5 mid-stall and the turn's BACK was never acknowledged. Now
+`settleGateExpired()` does not expire while the nudge is unacknowledged (`NUDGE_HOLD_MAX_MS` 8s from its send) or rendering
+(`REFERENCE_RENDER_SETTLE_MS` after its ack). A stalled session loads ~5s longer and turns on an engine that answers; every
+other session reveals at the same moment as before (`reveal-settle` §9). TEST records carry `nudge-acked` / `nudge-hold-expired`.
+
 ### 2.51 A top goes live only with the whole head in the frame (2026-10-15, the owner's 18:11 session)
 The back print stayed on the chest to the end and FRONT was never sent. The record (mv9oevza): the shopper stood with the head
 touching the frame's top edge; the pose model read the body MIRRORED on the way back (BACK, order -1, at 3.0-3.25s while facing

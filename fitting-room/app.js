@@ -16279,6 +16279,9 @@ function primeAtConnect(gen) {
    engine receives the front it already renders, pixel for pixel, as a file it has not seen: every logged image the engine
    had not been sent before was acknowledged in 0.26-1.8s once generating (0 stalls in ~40), while a byte-identical repeat
    was held 5.4-5.7s in 4 of ~27 (m1, p2, p4, g2). null on any failure - the caller then re-asserts the image as before. */
+/* How long the reveal waits on the cold-start nudge's acknowledgement (THE NUDGE IS WAITED OUT): the stalls measured 5.4-6.0s;
+   with the render after it, the reveal still lands well inside FIRST_FRAME_TIMEOUT_MS. */
+const NUDGE_HOLD_MAX_MS = 8000;
 async function freshImageCopy(blob) {
   try {
     if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas === "undefined") return null;
@@ -16329,6 +16332,17 @@ function armFirstFrameBilling(video, gen) {
      hold measured from arming would be spent on the handshake. See CONFIG.COLD_START_MIN_HOLD_MS. */
   let firstQualifyingAt = null;
   let reasserted = false;
+  /* THE NUDGE IS WAITED OUT UNDER THE LOADING SCREEN (2026-10-15) - see NUDGE_HOLD_MAX_MS. */
+  let nudgeSentAt = null, nudgeAckedAt = null, nudgeExpiryLogged = false;
+  const trackNudge = (p) => {
+    if (!p || typeof p.then !== "function") return;
+    nudgeSentAt = Date.now();
+    p.then((ok) => {
+      if (ok === false) { nudgeSentAt = null; return; }
+      nudgeAckedAt = Date.now();
+      if (typeof traceOrient === "function") traceOrient("nudge-acked", { ms: nudgeAckedAt - nudgeSentAt });
+    }, () => { nudgeSentAt = null; });
+  };
   /* ?cold_hold=<ms> - tune the hold live, 0 restores the pre-2026-09-16 behaviour exactly. */
   const minHoldMs = (() => {
     let raw = null;
@@ -16353,8 +16367,28 @@ function armFirstFrameBilling(video, gen) {
   })();
   const settleMaxMs = typeof REVEAL_SETTLE_MAX_MS === "number" ? REVEAL_SETTLE_MAX_MS : 6000;
   let settleExpiryLogged = false;
+  /* THE NUDGE IS WAITED OUT UNDER THE LOADING SCREEN (2026-10-15). The first image the engine gets once it is generating -
+     the cold-start re-assert, a fresh copy or the image itself - is what draws the print (g1, g3: without it, a plain tee),
+     and the engine sometimes holds its acknowledgement 5.4-6.0s (m1, p2, p4, g2; g5 with a fresh copy - so not the bytes).
+     Revealed inside that, the shopper turns and the BACK queues behind it: the front's print across the back, then the back
+     on the chest. The settle hold already waits while a write is in flight and REFERENCE_RENDER_SETTLE_MS after its ack;
+     its ceiling (settleMaxMs from arming) is what revealed g5 mid-stall. While the nudge is unacknowledged the ceiling moves
+     to NUDGE_HOLD_MAX_MS after the nudge went out. An ack in 0.3-0.9s - every other session - changes nothing. */
+  const nudgePending = () => {
+    if (nudgeSentAt === null) return false;
+    if (nudgeAckedAt !== null) {   // acknowledged: its render still has to land (REFERENCE_RENDER_SETTLE_MS)
+      return Date.now() - nudgeAckedAt < (typeof REFERENCE_RENDER_SETTLE_MS === "number" ? REFERENCE_RENDER_SETTLE_MS : 1400);
+    }
+    const max = typeof NUDGE_HOLD_MAX_MS === "number" ? NUDGE_HOLD_MAX_MS : 8000;
+    const open = Date.now() - nudgeSentAt < max;
+    if (!open && !nudgeExpiryLogged) {
+      nudgeExpiryLogged = true;
+      if (typeof traceOrient === "function") traceOrient("nudge-hold-expired", { ms: Date.now() - nudgeSentAt });
+    }
+    return open;
+  };
   const settleGateExpired = () => {
-    const expired = Date.now() - armedAt >= settleMaxMs;
+    const expired = Date.now() - armedAt >= settleMaxMs && !nudgePending();
     if (expired && !settleExpiryLogged) {
       settleExpiryLogged = true;
       console.warn(`[PEAR] render-settle hold expired after ${settleMaxMs}ms - revealing anyway.`,
@@ -16451,8 +16485,10 @@ function armFirstFrameBilling(video, gen) {
     lastSentImageRef = null;
     rtImageOnWire = false;
     lastSentPrompt = null;
-    applyActive().catch((e) =>
-      console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e));
+    return applyActive().then(() => true, (e) => {
+      console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e);
+      return false;
+    });
   };
 
   const fire = () => {
@@ -16578,14 +16614,14 @@ function armFirstFrameBilling(video, gen) {
         } else if (primedSession && reassertMode !== "image" && nudgePrompt && wireBlob && typeof freshImageCopy === "function" &&
             typeof rtClient !== "undefined" && rtClient && typeof sendCondition === "function") {
           if (typeof _freshNudgeGen !== "undefined") _freshNudgeGen = gen;
-          freshImageCopy(wireBlob).then((copy) => {
-            if (!copy || gen !== sessionGen || !rtClient) { redispatchColdStart(gen, NaN, "cold-start re-assert"); return; }
+          trackNudge(freshImageCopy(wireBlob).then((copy) => {
+            if (!copy || gen !== sessionGen || !rtClient) return redispatchColdStart(gen, NaN, "cold-start re-assert") || false;
             if (typeof traceOrient === "function") traceOrient("reassert-fresh", { at: sinceQualified, kb: Math.round(copy.size / 1024) });
             return sendCondition("coldStartFresh", () => rtClient.set({ image: copy, prompt: nudgePrompt, enhance: false }))
-              .then((sent) => { if (sent && typeof noteImageUploadAcked === "function") noteImageUploadAcked("coldStartFresh"); });
-          }).catch((e) => console.warn("[PEAR] cold-start fresh copy failed:", e?.message || e));
+              .then((sent) => { if (sent && typeof noteImageUploadAcked === "function") noteImageUploadAcked("coldStartFresh"); return !!sent; });
+          }).catch((e) => { console.warn("[PEAR] cold-start fresh copy failed:", e?.message || e); return false; }));
         } else {
-          redispatchColdStart(gen, NaN, "cold-start re-assert");
+          trackNudge(redispatchColdStart(gen, NaN, "cold-start re-assert"));
         }
       }
     }

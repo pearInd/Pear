@@ -98,7 +98,7 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
   const redispatch = between("const redispatchColdStart = (myGen, delta, why) => {", "\n  const fire = () => {");
   check("§8 the reveal hold's re-assert is main's exactly again - no prime inside it",
     !/primeBackReference/.test(redispatch.replace(/\/\*[\s\S]*?\*\//g, "")) &&
-    /lastSentImageRef = null;\s*rtImageOnWire = false;\s*lastSentPrompt = null;\s*applyActive\(\)\.catch\(\(e\) =>/.test(redispatch));
+    /lastSentImageRef = null;\s*rtImageOnWire = false;\s*lastSentPrompt = null;\s*return applyActive\(\)\.then\(\(\) => true, \(e\) =>/.test(redispatch));
   check("§9 goLive primes right after the garment is applied at connect, fire-and-forget (after the uploads in a TEST \"ref\" session)",
     /if \(!await applyConditioningWithRecovery\(\)\) return;\s*\n\s*\/\*[^*]*\*\/\s*\n\s*\/\*[^*]*\*\/\s*\n\s*if \(typeof EXP_REF !== "undefined" && EXP_REF && typeof expUploadReferences === "function"\) \{[\s\S]{0,300}\} else if \(typeof primeAtConnect === "function"\) primeAtConnect\(sessionGen\);/.test(APP));
 }
