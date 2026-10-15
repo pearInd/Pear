@@ -1635,7 +1635,7 @@ hidden at -2.8s/-1.7s and the shopper was revealed in a plain dark top WITHOUT i
 region on a new image mainly while the body MOVES; a re-upload on a still shopper leaves a plain garment. Do not retry a hidden
 pre-reveal re-upload for this without a different mechanism.
 
-### 2.52 The full look's prompt names the bottom on the body (2026-10-15, Layer A - measuring)
+### 2.52 The full look's prompt names the bottom on the body (2026-10-15, Layer A - measured, kept)
 m4 and m3 sent the same wire shape (floor, primed back, front, prompt, generation start) on the same clip; the shorts alone
 (m3) rendered from frame 0, the full look (m4) rendered its top from frame 0 and the shopper's own shorts until the turn. So
 the difference is what the engine was given, and the look prompt named the lower garment once, abstractly, with three of its
@@ -1643,7 +1643,11 @@ five sentences about the torso. `LOOK_ANCHOR`'s second sentence now says the bot
 shorts "on the CURRENT lower body in this frame" - the single bottoms anchor's wording. 566 -> 646 of 650, nothing sheds;
 `prompt-engine` re-pinned (the look case only), `lib/api-version.js` re-synced. **Needs a `wrangler deploy`**: until then the
 deployed Worker's fingerprint differs and the room asks the origin for /prompt and /size (slower, never wrong - §2.15).
-Measured in one real session against m4 before it is kept; revert if the start is not better.
+**Measured (l2, record mv99bvhe, the m4 clip and products):** PEAK and CHICAGO both from frame 0 (m4: the shorts from
+2.5s); the back with its print and the shorts' back 3.1-3.9s, the front back on the chest at 4.7s, no back print on the
+front. The new prompt rode every set_image (+80 chars). The engine was slow that session (lag median 1.24s vs m4's 0.83).
+The FIRST TEST of a full look on this clip with no own garment showing at the start. Shirt-only and shorts-only prompts
+are byte-identical (trace:prompt).
 
 ## 3. Cross-file lockstep
 
