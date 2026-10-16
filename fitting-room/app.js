@@ -10908,7 +10908,11 @@ function orientLinkUrl() {
    three-quarters to the lens (r1 2.51s, r2 2.62s - a plain tee). The next reading in both was 85-89. So the room asks the
    engine for 60 (its ceiling) on both early-turn paths; a URL value still wins (?early_turn=40&early_turn_slow=40 is the
    engine's own default). */
-const ORIENT_KNOB_DEFAULTS = { early_turn: "60", early_turn_slow: "60" };
+/* 50, not 60 (2026-10-17, u1): the early turn's threshold is also the withdrawal's - an early BACK is withdrawn on two FRONT
+   votes in a row with |yaw| under it - and at 60 a real turn's 37 and 58 counted as "the look came back": BACK withdrawn
+   mid-turn, the front print on the back through the whole back view. Replayed on fifteen recorded sessions: 50 keeps 60's
+   later send in s1/r1/r2/g8 (70-89 instead of 41-49) and 40's no-withdrawal in u1; every other session the same at all three. */
+const ORIENT_KNOB_DEFAULTS = { early_turn: "50", early_turn_slow: "50" };
 function orientKnobs() {
   const out = { ...ORIENT_KNOB_DEFAULTS };
   try {

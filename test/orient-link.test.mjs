@@ -295,7 +295,7 @@ console.log("\n── THE BACK GOES OUT NEAR THE SIDE: the room's early-turn def
   const knobs = (search) => new Function("location", keys + "\n" + SRC.slice(a0, a1) + "\nreturn orientKnobs();")({ search });
   const d = knobs("");
   const ok = (c, l, x) => { if (!c) fails++; console.log(`${c ? "PASS" : "FAIL"}  ${l}`); if (!c && x) console.log("        " + x); };
-  ok(d.early_turn === "60" && d.early_turn_slow === "60", "with no URL knob the room asks for 60 on both early-turn paths", JSON.stringify(d));
+  ok(d.early_turn === "50" && d.early_turn_slow === "50", "with no URL knob the room asks for 50 on both early-turn paths (60 withdrew a real turn in u1)", JSON.stringify(d));
   const o = knobs("?early_turn=40&early_turn_slow=40&predict_back=0");
   ok(o.early_turn === "40" && o.early_turn_slow === "40" && o.predict_back === "0", "...and a URL value still wins", JSON.stringify(o));
 }
