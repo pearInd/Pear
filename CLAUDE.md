@@ -1781,7 +1781,7 @@ reading and landed ~0.1s after its send - a white panel on a chest already turni
 the reading before. u3 (normal turn) and u4 (fast turn) at 700: the front clean on every frame.
 
 ### 7.6 The back waits for the body it lands on (2026-10-17, u4)
-u4 (a 1.6x-speed turn, 470 kbps uplink, the output 1.18s behind the camera): BACK went out on the side reading (order -0.01),
+u4 (a 1.6x-speed turn, the output 1.18s behind the camera): BACK went out on the side reading (order -0.01),
 acked in 281ms, and reached a body at ~40-60 degrees - one frame (2.40s) of the back print on a chest still facing the lens. The
 engine paints a new reference onto frames it already holds; read frame by frame against each session's lag, a pre-upload
 session's back landed 0-0.1s after its send at 0.95-1.03s lag (u2, u3: clean), 0.26-0.31s BEFORE it at 1.18-1.39s (u4, r2 - r2
@@ -1789,7 +1789,13 @@ took PEAK off a three-quarter chest). The lag cannot be read before the turn (th
 `refBackDelay()` (beside `REF_LAT_FLOOR_MS`) sends a pre-upload session's predictive BACK `REF_BACK_DELAY_MS` (200) late - under
 the 250ms tick, so the lock moves before the next sample; any newer decision supersedes it. u4's would land at the side (~75-80),
 a low-lag session's ~0.2s later (~120, the print from the 3/4 back). The return is untouched. `?ref_back_delay=0` is the old send.
-`return-side` §5.8b-d. Not yet measured live.
+`return-side` §5.8b-d. **Measured live (6c656e2), both on the high-lag side u4 failed on:** v1 (1.6x, lag 1.14s) - decided on the
+side reading at 1.52, sent 1.73; v2 (1.0x, lag 1.13s) - decided at 1.78 (~77), sent 1.99. Frame by frame, both: PEAK from the
+first frame and through the 3/4 front, the side plain, the back print on the back on every frame, the side plain, PEAK as the
+chest comes round - no back print on a chest, no front print on a back. v1's next tick came 200ms after the decision and still
+read the front lock: harmless (the trigger is unarmed after its fire - it can neither fire nor withdraw on that tick). The
+media send estimate (`avail`, ~470 in u4/v1) is the congestion controller's ramp, not the line: a speed test read 31 Mbps up
+beside v1's 479. The "chain" the render draws after a turn is the camera clip's white headset cable.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL

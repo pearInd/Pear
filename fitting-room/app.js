@@ -7381,7 +7381,7 @@ const REF_LAT_FLOOR_MS = 700;
    and an id is acknowledged in ~0.28s where the image bytes every outbound rule was placed for took ~0.43s - so a pre-upload
    session's BACK reaches a body older than the one it was decided on, by as much as the session's render lags. Read frame by
    frame against each session's lag: u3 (0.95s) and u2 (1.03s) landed 0-0.1s after the send, past the side; u4 (1.18s, a fast
-   turn on a 470 kbps uplink) 0.31s BEFORE it - sent on the side reading (-0.01), it reached a body at ~40-60 degrees, the back
+   turn, the media send estimate ~470 kbps) 0.31s BEFORE it - sent on the side reading (-0.01), it reached a body at ~40-60 degrees, the back
    print on a chest still facing the lens for a frame (2.40s); r2 (1.39s) took PEAK off a three-quarter chest. The engine's
    predictive BACK of such a session goes out this long after it is asked for: u4's lands at the side (~75-80 degrees), a
    low-lag session's ~0.2s later on the back (~120). Under the 250ms tick, so the lock has moved before the next sample;
