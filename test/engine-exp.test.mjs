@@ -35,10 +35,15 @@ console.log("\n── §1 only a TEST session ──");
 {
   const mode = (search, test) => new Function("location", "traceEnabled", EXP + "\nreturn [PEAR_EXP, EXP_SMALL, EXP_REF, EXP_NOTEL];")(
     { search }, () => test);
+  /* EXP_REF is every session's since 2026-10-16 (THE REFERENCES GO UP BEFORE THE SESSION - r1/r2): the third slot is true
+     without a mode, and ?ref_upload=0 turns it off in any session. The other experiments stay TEST-only. */
   check("§1.1 a TEST session reads the mode", JSON.stringify(mode("?pear_exp=small-ref", true)) === JSON.stringify(["small-ref", true, true, false]) &&
-    JSON.stringify(mode("?pear_exp=notel", true)) === JSON.stringify(["notel", false, false, true]));
-  check("§1.2 a shopper's session runs none of it, whatever the URL says", JSON.stringify(mode("?pear_exp=ref", false)) === JSON.stringify(["", false, false, false]) &&
-    JSON.stringify(mode("?pear_exp=notel", false)) === JSON.stringify(["", false, false, false]));
+    JSON.stringify(mode("?pear_exp=notel", true)) === JSON.stringify(["notel", false, true, true]));
+  check("§1.2 a shopper's session runs none of the EXPERIMENTS, whatever the URL says (the reference upload is everyone's)",
+    JSON.stringify(mode("?pear_exp=small", false)) === JSON.stringify(["", false, true, false]) &&
+    JSON.stringify(mode("?pear_exp=notel", false)) === JSON.stringify(["", false, true, false]));
+  check("§1.5 the reference upload is every session's, and ?ref_upload=0 sends the bytes (TEST or not)",
+    mode("", false)[2] === true && mode("?ref_upload=0", false)[2] === false && mode("?ref_upload=0&pear_exp=ref", true)[2] === true);
   check("§1.3 an unknown mode is no mode", mode("?pear_exp=fast", true)[0] === "");
   check("§1.4 ...and the TEST record carries it", /exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP \? PEAR_EXP : undefined,/.test(APP));
 }

@@ -7340,7 +7340,14 @@ const PEAR_EXP = (() => {
   } catch (_) { return ""; }
 })();
 const EXP_SMALL = PEAR_EXP === "small" || PEAR_EXP === "small-ref";
-const EXP_REF = PEAR_EXP === "ref" || PEAR_EXP === "small-ref";
+/* THE REFERENCES GO UP BEFORE THE SESSION - every session's (2026-10-16, r1/r2 against A/B/C). Sending the image bytes at the
+   turn made the BACK's acknowledgement the session's lottery: 0.47s in the owner's good session (B), 1.57s and 1.7s in the two
+   that failed the same evening (A, C - the back landed on the chest or never), and 1.9s+ in every lost back that week. With
+   both references uploaded once at connect (through our edge, /f) and the turn sending the engine's file id, two real sessions
+   acknowledged the back in 283ms and 289ms and the front in 286ms and 290ms, the back print on the back in both. Every
+   session now; ?ref_upload=0 sends the bytes as before (an A/B). A failed upload simply sends the bytes. */
+const REF_UPLOAD_OFF = (() => { try { return new URLSearchParams(location.search).get("ref_upload") === "0"; } catch (_) { return false; } })();
+const EXP_REF = !REF_UPLOAD_OFF || PEAR_EXP === "ref" || PEAR_EXP === "small-ref";
 const EXP_NOTEL = PEAR_EXP === "notel";
 const EXP_SMALL_W = 640;
 /** The "small" mode: a reference no wider than EXP_SMALL_W (JPEG 0.9). Never fails - the original on any error. */
@@ -17192,11 +17199,12 @@ async function goLive() {
        had not finished settling. See applyConditioningWithRecovery(). */
     if (!await applyConditioningWithRecovery()) return;
     /* The back's one-time send, now that the garment is on (primeAtConnect) - fire-and-forget, hidden. */
-    /* THE ENGINE-SPEED EXPERIMENT's "ref" mode (TEST sessions only): the references uploaded first, so the prime and every
-       swap after it send an id. Hidden, like the prime. */
+    /* THE REFERENCES GO UP BEFORE THE SESSION (every session since 2026-10-16 - see EXP_REF): uploaded first, so the prime and
+       every swap after it send an id. Hidden, like the prime; bounded, so a stuck upload never costs the session its prime. */
     if (typeof EXP_REF !== "undefined" && EXP_REF && typeof expUploadReferences === "function") {
       const g = sessionGen;
-      expUploadReferences(g).catch(() => {}).then(() => { if (typeof primeAtConnect === "function" && g === sessionGen) primeAtConnect(g); });
+      Promise.race([expUploadReferences(g).catch(() => {}), new Promise((r) => setTimeout(r, 6000))])
+        .then(() => { if (typeof primeAtConnect === "function" && g === sessionGen) primeAtConnect(g); });
     } else if (typeof primeAtConnect === "function") primeAtConnect(sessionGen);
     // Log every garment being worn - both top AND bottom when a full look is active.
     const _trackSize = activeTryOnSize || currentUserSize;

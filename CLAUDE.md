@@ -1746,6 +1746,16 @@ cold-start re-assert (g1, the print never drew), a prompt-only nudge (g3). The f
 sessions accept references slowly once generating (1.9s+ for the first) and then lose the turn's back - see that branch's
 history (commits through 82bcadf) and its CLAUDE.md §2.47-§2.55 before changing any of it again.
 
+
+### 7.3 The references go up before the session - every session's (2026-10-16, measured)
+On this tree (def1a2b) three owner sessions in two minutes ran the same code and differed only in the engine's
+acknowledgement of the turn's BACK: 0.47s - correct throughout (B); 1.57s and 1.7s - the back landed on the chest or never
+(A, C). The TEST-only "ref" mode (`expUploadReferences`: front and back uploaded once at connect through the edge's /f, the
+turn sending the engine's file id) in two real sessions: BACK acked 283ms / 289ms, FRONT 286ms / 290ms, the back print on the
+back in both. `EXP_REF` is now every session's; `?ref_upload=0` sends the bytes; a failed or slow upload (bounded at 6s before
+the prime) sends the bytes. `engine-exp` §1.5. Left open from r1/r2: the return's FRONT goes out on the first reading at or
+past the side (SIDE_FIRE 0, lib/orient-engine.js) - one reading late at a normal turn, so a thin strip of the back panel shows
+on the side for ~0.15-0.3s (r1 4.21-4.53s, r2 4.42-4.56s); -0.25 landed the front too early on fast acks (7187b26).
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
