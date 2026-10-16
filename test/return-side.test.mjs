@@ -800,7 +800,7 @@ console.log("\n── §5 the wiring ──");
   /* ...floored at REF_LAT_FLOOR_MS when the session's references went up as ids (2026-10-17): an id's ~0.29s ack is not the
      swap's landing time the model reads (s1, r1, g9: FRONT held at the side reading, sent a reading late). */
   check("§5.8 the tick sends the engine's pace, typeof-guarded - floored only when the references went up before the session",
-    /lat: typeof engineAckEstimate === "function" \? \(\(\) => \{\s*const a = engineAckEstimate\(\);\s*const refs = typeof _refUploadedGen !== "undefined" && _refUploadedGen === sessionGen;\s*return a !== null && refs \? Math\.max\(a, typeof REF_LAT_FLOOR_MS === "number" \? REF_LAT_FLOOR_MS : 530\) : a;\s*\}\)\(\) : null,/.test(APP) &&
+    /lat: typeof engineAckEstimate === "function" \? \(\(\) => \{\s*const a = engineAckEstimate\(\);\s*const refs = typeof _refUploadedGen !== "undefined" && _refUploadedGen === sessionGen;\s*return a !== null && refs \? Math\.max\(a, typeof REF_LAT_FLOOR_MS === "number" \? REF_LAT_FLOOR_MS : 700\) : a;\s*\}\)\(\) : null,/.test(APP) &&
     /_expFileIds\.set\(blob, id\); _refUploadedGen = gen;/.test(APP));
   check("§5.9 ...measured on every REPEAT image write (never a prompt-only write, nor the back's first send), reset with the wire",
     /const ENGINE_PACE_LABELS = new Set\(\["applyGarment", "applyLook"\]\);/.test(APP) &&

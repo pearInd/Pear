@@ -7372,7 +7372,11 @@ const _expFileIds = new WeakMap();
 /* The session whose references went up as ids, and the latency the engine's landing model is then sent at least (see the
    orientation tick's `lat`): the swap's landing is what the model reads, not an id's fast acknowledgement. */
 let _refUploadedGen = -1;
-const REF_LAT_FLOOR_MS = 530;
+/* 700, not 530 (2026-10-17, u2): at 530 the return went out at the side reading and landed ~0.1s after its send - the chest
+   already turning to the lens with the back reference on it (u2 4.30-4.44s, a white panel on the chest). 700 sends it from the
+   reading before, landing at ~255-265: replayed, u2 3.41 -> 3.23s, r2 2.98 -> 2.81, g7 3.27 -> 3.14, s1/r1 0.1s sooner, h2/g8/g9
+   unchanged. */
+const REF_LAT_FLOOR_MS = 700;
 let _expFilesClient = null;
 /** The edge's file route for the render client (`baseUrl`) - our host, never the engine's. The edge's ORIGIN + /f:
  *  the realtime URL carries its own path (`wss://<edge>/v`), and the first real "ref" session posted to /v/f/... - a
@@ -10791,7 +10795,7 @@ function createOrientationWatcher() {
         lat: typeof engineAckEstimate === "function" ? (() => {
           const a = engineAckEstimate();
           const refs = typeof _refUploadedGen !== "undefined" && _refUploadedGen === sessionGen;
-          return a !== null && refs ? Math.max(a, typeof REF_LAT_FLOOR_MS === "number" ? REF_LAT_FLOOR_MS : 530) : a;
+          return a !== null && refs ? Math.max(a, typeof REF_LAT_FLOOR_MS === "number" ? REF_LAT_FLOOR_MS : 700) : a;
         })() : null,
         latHi: typeof engineAckHigh === "function" ? engineAckHigh() : null,
         lock: autoOrientation, profile: autoProfile, dualView: currentAngle === AUTO_ANGLE,
