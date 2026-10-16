@@ -475,8 +475,9 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
   }
   check("§3e.5 both knob lists carry lead_project", E.ORIENT_KNOB_KEYS.includes("lead_project") && /const ORIENT_KNOB_KEYS = \[[^\]]*"lead_project"/.test(APP));
   check("§3e.6 the room honours a delay only with the swap flow; a newer swap supersedes it; stop() clears it",
-    /const sw = SWAP_FLOW && a\.delay > 0 \? delayedSwap\(a\) : maybeSwap\(a\.next, a\.predictive === true\);/.test(APP) &&
-    /if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const sw = /.test(APP) &&
+    /* ...through refBackDelay() since 2026-10-17 (§5.8b): the delay honoured is the action's after it. */
+    /const d = typeof refBackDelay === "function" \? refBackDelay\(a\) : a;[^\n]*\n\s*const sw = SWAP_FLOW && d\.delay > 0 \? delayedSwap\(d\) : maybeSwap\(a\.next, a\.predictive === true\);/.test(APP) &&
+    /if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const d = /.test(APP) &&
     /clearInterval\(timer\);\s*\n\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}/.test(APP) &&
     /Math\.max\(0, Math\.min\(400, Number\(a\.delay\) \|\| 0\)\)/.test(APP));
 }
@@ -802,6 +803,24 @@ console.log("\n── §5 the wiring ──");
   check("§5.8 the tick sends the engine's pace, typeof-guarded - floored only when the references went up before the session",
     /lat: typeof engineAckEstimate === "function" \? \(\(\) => \{\s*const a = engineAckEstimate\(\);\s*const refs = typeof _refUploadedGen !== "undefined" && _refUploadedGen === sessionGen;\s*return a !== null && refs \? Math\.max\(a, typeof REF_LAT_FLOOR_MS === "number" \? REF_LAT_FLOOR_MS : 700\) : a;\s*\}\)\(\) : null,/.test(APP) &&
     /_expFileIds\.set\(blob, id\); _refUploadedGen = gen;/.test(APP));
+  /* THE BACK WAITS FOR THE BODY IT LANDS ON (2026-10-17, u4): a pre-upload session's predictive BACK goes out REF_BACK_DELAY_MS
+     late (under the 250ms tick); nothing else moves. Run standalone on the real block. */
+  {
+    const blk = between(APP, "const REF_BACK_DELAY_MS = ", "\nlet _expFilesClient = null;");
+    const mk = (search, refGen, gen) => new Function("location", "_refUploadedGen", "sessionGen",
+      blk + "\nreturn { REF_BACK_DELAY_MS, refBackDelay };")({ search }, refGen, gen);
+    const on = mk("", 3, 3), off = mk("", -1, 3), old = mk("?ref_back_delay=0", 3, 3), big = mk("?ref_back_delay=900", 3, 3);
+    const back = { do: "swap", next: "back", predictive: true }, vote = { do: "swap", next: "back", predictive: false };
+    const front = { do: "swap", next: "front", predictive: false, delay: 120 };
+    check("§5.8b a pre-upload session's predictive BACK goes out 200ms late - under the 250ms tick",
+      on.REF_BACK_DELAY_MS === 200 && on.refBackDelay(back).delay === 200 && on.refBackDelay(back).next === "back" &&
+      on.refBackDelay(back).predictive === true && back.delay === undefined);
+    check("§5.8c ...and nothing else: a vote's BACK, the FRONT (its own projected delay kept), a session that sent bytes, ?ref_back_delay=0",
+      on.refBackDelay(vote) === vote && on.refBackDelay(front) === front && off.refBackDelay(back) === back &&
+      old.REF_BACK_DELAY_MS === 0 && old.refBackDelay(back) === back);
+    check("§5.8d the knob is clamped under the tick, and a longer delay the engine asked for is kept",
+      big.REF_BACK_DELAY_MS === 220 && on.refBackDelay({ ...back, delay: 300 }).delay === 300);
+  }
   check("§5.9 ...measured on every REPEAT image write (never a prompt-only write, nor the back's first send), reset with the wire",
     /const ENGINE_PACE_LABELS = new Set\(\["applyGarment", "applyLook"\]\);/.test(APP) &&
     /await send\(\);\s*\n\s*if \(ENGINE_PACE_LABELS\.has\(label\)\) noteEngineAck\(Date\.now\(\) - sentAt\);/.test(APP) &&

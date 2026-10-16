@@ -1757,12 +1757,14 @@ the prime) sends the bytes. `engine-exp` §1.5. Left open from r1/r2: the return
 past the side (SIDE_FIRE 0, lib/orient-engine.js) - one reading late at a normal turn, so a thin strip of the back panel shows
 on the side for ~0.15-0.3s (r1 4.21-4.53s, r2 4.42-4.56s); -0.25 landed the front too early on fast acks (7187b26).
 
-### 7.4 The back goes out near the side - the room asks the engine for a 60-degree early turn (2026-10-17)
+### 7.4 The back goes out near the side - the room asks the engine for a 50-degree early turn (60 first; 2026-10-17)
 r1/r2 (references uploaded, the back acked in ~0.29s, the output 1.2-1.4s behind the camera): the early turn fired on the first
 reading past 40 (49, 41) and the front print left a chest still three-quarters to the lens (r1 2.51s, r2 2.62s). Replaying the
 recorded readings through lib/orient-engine.js: with `early_turn=60&early_turn_slow=60` the back goes out at 87 / 89 (r1, r2),
 77 (g8, the back print on a chest at 40), and h2 - the clean session - is unchanged at 77. `ORIENT_KNOB_DEFAULTS` in the room
-(no Worker deploy; a URL value still wins). `orient-link` pins it. Not yet measured live.
+(no Worker deploy; a URL value still wins). `orient-link` pins it. **Measured live, and moved to 50 the same day:** at 60, u1's
+early BACK was withdrawn mid-turn (the |yaw| fell back under 60 on the way into the back) and the back print rode the chest;
+replayed, 50 avoids both that and r1/r2's early fire. `ORIENT_KNOB_DEFAULTS = { early_turn: "50", early_turn_slow: "50" }`.
 
 ### 7.5 The return's pace in a pre-upload session (2026-10-17, s1)
 s1 (60-degree early turn, references uploaded): the outbound right (PEAK through the 3/4 view, the back print from the side),
@@ -1774,7 +1776,20 @@ In those sessions the front landed about where it was sent (s1 +0.01s, r1 0.00s,
 DEPLOYED engine: FRONT at 3.08 / 3.17 / 2.98s (s1 / r1 / r2) instead of 3.42 / 3.52 / 3.48 - scheduled from the reading before
 the side, landing just before it rather than on the chest. Tried and taken out the same day: SIDE_FIRE -0.1 with the projection
 off (the side reading itself) - return-side's clip landings put two fast turns later (294->299, 305->309); a 450ms schedule
-window - one session later (r2). Not yet measured live.
+window - one session later (r2). **Measured live, and raised to 700 the same day:** at 530, u2's FRONT went out on the side
+reading and landed ~0.1s after its send - a white panel on a chest already turning to the lens (4.30-4.44s); 700 sends it from
+the reading before. u3 (normal turn) and u4 (fast turn) at 700: the front clean on every frame.
+
+### 7.6 The back waits for the body it lands on (2026-10-17, u4)
+u4 (a 1.6x-speed turn, 470 kbps uplink, the output 1.18s behind the camera): BACK went out on the side reading (order -0.01),
+acked in 281ms, and reached a body at ~40-60 degrees - one frame (2.40s) of the back print on a chest still facing the lens. The
+engine paints a new reference onto frames it already holds; read frame by frame against each session's lag, a pre-upload
+session's back landed 0-0.1s after its send at 0.95-1.03s lag (u2, u3: clean), 0.26-0.31s BEFORE it at 1.18-1.39s (u4, r2 - r2
+took PEAK off a three-quarter chest). The lag cannot be read before the turn (the probe needs motion, TEST sessions only), so
+`refBackDelay()` (beside `REF_LAT_FLOOR_MS`) sends a pre-upload session's predictive BACK `REF_BACK_DELAY_MS` (200) late - under
+the 250ms tick, so the lock moves before the next sample; any newer decision supersedes it. u4's would land at the side (~75-80),
+a low-lag session's ~0.2s later (~120, the print from the 3/4 back). The return is untouched. `?ref_back_delay=0` is the old send.
+`return-side` §5.8b-d. Not yet measured live.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL

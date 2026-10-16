@@ -176,8 +176,10 @@ console.log("\n── §4 the decision is absent from the browser, and the tick 
     /if \(typeof POSE_SYNC !== "undefined" && POSE_SYNC && typeof _poseInferNow === "function" && _poseInferNow\) \{\s*\n\s*_poseSyncAt = Date\.now\(\);\s*\n\s*await Promise\.race\(\[_poseInferNow\(\)\.catch\(\(\) => \{\}\), new Promise\(\(r\) => setTimeout\(r, POSE_SYNC_WAIT_MS\)\)\]\);/.test(tick) &&
     tick.indexOf("_poseInferNow()") < tick.indexOf("await classify()"));
   /* THE TICK WAITS FOR THE READING (2026-10-09): a fifth await, ahead of the sample, in POSE_SYNC's place (pose-follow). */
+  /* THE BACK WAITS FOR THE BODY IT LANDS ON (2026-10-17): the action is first passed through refBackDelay() (app.js, beside
+     REF_LAT_FLOOR_MS) - typeof-guarded, so the replay harness, which has no such function, runs the engine's action as sent. */
   check("the swap is the only awaited action, and only without the swap flow (main's ?swap_flow=0)", (tick.match(/await /g) || []).length === 5 &&
-    /a\.do === "swap"\) \{\s*\n(?:\s*\/\*[^\n]*\*\/\s*\n)?\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const sw = SWAP_FLOW && a\.delay > 0 \? delayedSwap\(a\) : maybeSwap\(a\.next, a\.predictive === true\);\s*\n\s*if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw;\s*\n\s*\}/.test(tick),
+    /a\.do === "swap"\) \{\s*\n(?:\s*\/\*[^\n]*\*\/\s*\n)?\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const d = typeof refBackDelay === "function" \? refBackDelay\(a\) : a;[^\n]*\n\s*const sw = SWAP_FLOW && d\.delay > 0 \? delayedSwap\(d\) : maybeSwap\(a\.next, a\.predictive === true\);\s*\n\s*if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw;\s*\n\s*\}/.test(tick),
     (tick.match(/[^\n]*await [^\n]*/g) || []).join(" | "));
 }
 

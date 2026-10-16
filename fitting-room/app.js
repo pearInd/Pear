@@ -7377,6 +7377,28 @@ let _refUploadedGen = -1;
    reading before, landing at ~255-265: replayed, u2 3.41 -> 3.23s, r2 2.98 -> 2.81, g7 3.27 -> 3.14, s1/r1 0.1s sooner, h2/g8/g9
    unchanged. */
 const REF_LAT_FLOOR_MS = 700;
+/* THE BACK WAITS FOR THE BODY IT LANDS ON (2026-10-17, u4). The engine paints a new reference onto frames it already holds,
+   and an id is acknowledged in ~0.28s where the image bytes every outbound rule was placed for took ~0.43s - so a pre-upload
+   session's BACK reaches a body older than the one it was decided on, by as much as the session's render lags. Read frame by
+   frame against each session's lag: u3 (0.95s) and u2 (1.03s) landed 0-0.1s after the send, past the side; u4 (1.18s, a fast
+   turn on a 470 kbps uplink) 0.31s BEFORE it - sent on the side reading (-0.01), it reached a body at ~40-60 degrees, the back
+   print on a chest still facing the lens for a frame (2.40s); r2 (1.39s) took PEAK off a three-quarter chest. The engine's
+   predictive BACK of such a session goes out this long after it is asked for: u4's lands at the side (~75-80 degrees), a
+   low-lag session's ~0.2s later on the back (~120). Under the 250ms tick, so the lock has moved before the next sample;
+   a newer decision supersedes it like any delayed swap. ?ref_back_delay=<ms> (0-220) for an A/B, 0 is the old send. */
+const REF_BACK_DELAY_MS = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("ref_back_delay"); } catch (_) { return 200; }
+  const v = raw === null || raw === "" ? NaN : Number(raw);
+  return Number.isFinite(v) ? Math.max(0, Math.min(220, Math.round(v))) : 200;
+})();
+/** The swap action as the tick runs it: a predictive BACK, in a session whose references went up as ids, at least
+ *  REF_BACK_DELAY_MS late. Anything else unchanged (the same object). */
+function refBackDelay(a) {
+  if (!a || a.next !== "back" || a.predictive !== true || !(REF_BACK_DELAY_MS > 0)) return a;
+  if (typeof _refUploadedGen === "undefined" || typeof sessionGen === "undefined" || _refUploadedGen !== sessionGen) return a;
+  return (Number(a.delay) || 0) >= REF_BACK_DELAY_MS ? a : { ...a, delay: REF_BACK_DELAY_MS };
+}
 let _expFilesClient = null;
 /** The edge's file route for the render client (`baseUrl`) - our host, never the engine's. The edge's ORIGIN + /f:
  *  the realtime URL carries its own path (`wss://<edge>/v`), and the first real "ref" session posted to /v/f/... - a
@@ -10824,7 +10846,8 @@ function createOrientationWatcher() {
         else if (a.do === "swap") {
           /* A newer decision supersedes a delayed one (THE LANDING, PROJECTED); a delay is honoured only with the flow. */
           if (delayedSwapTimer) { clearTimeout(delayedSwapTimer); delayedSwapTimer = null; }
-          const sw = SWAP_FLOW && a.delay > 0 ? delayedSwap(a) : maybeSwap(a.next, a.predictive === true);
+          const d = typeof refBackDelay === "function" ? refBackDelay(a) : a;   // THE BACK WAITS FOR THE BODY IT LANDS ON
+          const sw = SWAP_FLOW && d.delay > 0 ? delayedSwap(d) : maybeSwap(a.next, a.predictive === true);
           if (SWAP_FLOW) sw.catch(() => {}); else await sw;
         }
       }
