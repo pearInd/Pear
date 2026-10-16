@@ -25,20 +25,7 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-/* RE-PINNED 2026-10-14, deliberately (CLAUDE.md §2.47): ADD NOTHING ELSE (a P.LOW operator closing every branch with room)
-   and the warm colour names (beige/cream reachable, a dark warm colour is dark brown). Proven against the previous engine
-   over 491,640 prompts (scratch, re-runnable): 202,850 identical, 283,990 differ ONLY by the appended clause, 4,434 only by
-   a colour name - every one a warm colour (the 4,096-colour grid: 32 gain beige/dark brown/cream, 8 borderline warm
-   colours move between brown/burgundy and none/dark brown, nothing else) - and 366 by a renamed colour meeting the size
-   phrase's budget. The pre-move pin was 221a5b58….
-   RE-PINNED AGAIN 2026-10-14 (CLAUDE.md §2.48, SHED IN LOCKSTEP): a clause both angles carry ships only if both keep it.
-   Over this corpus against the previous engine (scratch, re-runnable): 121,800 of 161,756 prompts identical, 9,120 lose
-   only the fit sentence, 12,296 only "Add nothing else", 18,540 both, 0 anything else; front/back pairs disagreeing about
-   those clauses 39,956 -> 0. The previous pin was 3d1f5304…. */
-/* RE-PINNED 2026-10-15 (evening), deliberately (CLAUDE.md §2.55): the full look's anchor names the bottom on the body - one
-   sentence in LOOK_ANCHOR, 566 -> 646 of 650 (measured in l2: the shorts from frame 0). LOOK_ANCHOR is read by
-   lookAnchorPrompt() alone; trace:prompt --json moved on the full-look entries only. The previous pin was a7bd6b79…. */
-const PINNED = "56698dc6ec79824d88cc4bfe9517f477fa172d2c736985d45209999802dc56cc";
+const PINNED = "221a5b5835f450b0c12fe8d3037456af0ea1b62b1155c26476e97b24519d912c";
 
 let fails = 0;
 function check(label, cond, detail) {

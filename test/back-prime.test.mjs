@@ -39,7 +39,7 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
     } : {}),
   };
   const names = Object.keys(env);
-  const api = new Function(...names, `${SRC}\nreturn { primeBackReference, primeAtConnect, state: () => ({ lastSentImageRef, lastSentPrompt, rtImageOnWire, primedAckedGen: _primedBackAckedGen }) };`)(...names.map((k) => env[k]));
+  const api = new Function(...names, `${SRC}\nreturn { primeBackReference, primeAtConnect, state: () => ({ lastSentImageRef, lastSentPrompt, rtImageOnWire }) };`)(...names.map((k) => env[k]));
   return { api, sent, acked, blobs, env, stitched };
 }
 
@@ -53,7 +53,6 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
   check("§3 ...and the no-op refs are cleared, so the re-assert re-uploads the FRONT",
     w.api.state().lastSentImageRef === null && w.api.state().lastSentPrompt === null);
   check("§4 once per session: a second call for the same session sends nothing", (await w.api.primeBackReference(3)) === false && w.sent.length === 1);
-  check("§4b an acknowledged prime marks its session (the reveal hold then nudges prompt-only)", w.api.state().primedAckedGen === 3);
 }
 {
   const cases = [
@@ -82,8 +81,7 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
   check("§5d at connect, a look: the back composite once, then the look re-applied with the no-op refs cleared",
     lkcOk === true && lkc.sent.length === 1 && lkc.env.applied.length === 1 && lkc.env.applied[0].ref === null);
   const busy = world({ busySkip: true });
-  check("§6 a wire that declines the write sends nothing and claims nothing", (await busy.api.primeBackReference(3)) === false && busy.acked.length === 0 &&
-    busy.api.state().primedAckedGen === -1);
+  check("§6 a wire that declines the write sends nothing and claims nothing", (await busy.api.primeBackReference(3)) === false && busy.acked.length === 0);
 }
 {
   /* MOVED TO THE CONNECT (2026-10-04): the reveal hold's re-assert is main's again, and the back goes out right
@@ -98,7 +96,7 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
   const redispatch = between("const redispatchColdStart = (myGen, delta, why) => {", "\n  const fire = () => {");
   check("§8 the reveal hold's re-assert is main's exactly again - no prime inside it",
     !/primeBackReference/.test(redispatch.replace(/\/\*[\s\S]*?\*\//g, "")) &&
-    /lastSentImageRef = null;\s*rtImageOnWire = false;\s*lastSentPrompt = null;\s*return applyActive\(\)\.then\(\(\) => true, \(e\) =>/.test(redispatch));
+    /lastSentImageRef = null;\s*rtImageOnWire = false;\s*lastSentPrompt = null;\s*applyActive\(\)\.catch\(\(e\) =>/.test(redispatch));
   check("§9 goLive primes right after the garment is applied at connect, fire-and-forget (after the uploads in a TEST \"ref\" session)",
     /if \(!await applyConditioningWithRecovery\(\)\) return;\s*\n\s*\/\*[^*]*\*\/\s*\n\s*\/\*[^*]*\*\/\s*\n\s*if \(typeof EXP_REF !== "undefined" && EXP_REF && typeof expUploadReferences === "function"\) \{[\s\S]{0,300}\} else if \(typeof primeAtConnect === "function"\) primeAtConnect\(sessionGen\);/.test(APP));
 }

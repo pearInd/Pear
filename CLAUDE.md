@@ -67,10 +67,6 @@ This is not a bug — see the comment above the `[P.MED, fitSentence(...)]`
 line in `imageOnlyPrompt()` before "fixing" it by raising its priority,
 which would risk the closure lock shedding instead and reopening the
 "rendered wide open" report.
-**And since 2026-10-14 the two angles shed together (§2.48, SHED IN LOCKSTEP):**
-a clause both the front and the back carry - the fit sentence, "Add nothing
-else" - ships only if both dispatches keep it, so a turn never changes the
-size in words. Where the front sheds the size phrase, the back does too.
 
 > **RULE 0 — NEVER edit a dead clause and report the behaviour as changed.**
 > If a request is about how the garment renders (fit, drape, print placement,
@@ -1547,169 +1543,173 @@ answered a cache HIT in 3.4s (/api/health 0.33s).
   engine refused every session 2026-10-13 17:16Z to ~09:00Z 10-14 (1011 through the edge, every product) and has worked
   since; the edge maps the engine's policy close (1008) to 1011, which hides the reason - a Worker change.
 
-### 2.47 The whole camera; the garment's colour named; nothing added (2026-10-14, branch `polish/view-color`)
-"The camera is too close - zoom out, show as much as possible; colours not faded, exactly like the photo; no unrelated
-jewelry like chains." Measured before changing anything:
-- **THE WHOLE CAMERA, NOT A STRIP OF IT (`liveWideView()`, by `LIVE_W`; `?wide=0` is the room before it).** Three crops
-  stacked: `buildVideoConstraints()` called any window under 769px a phone, so the widget's ~480px room frame on a DESKTOP
-  page asked the webcam for 9:16 and Chrome cropped it (the source room on the FOX page: 640x480 -> 270x480); `drawFrame()`
-  cover-fitted that into the engine's 16:9 input - a strip of ~32% of its height (the owner's PEAK clips: the face cut off);
-  the card cover-cropped the render again. Now a phone is a touch device with a coarse pointer and asks for its full 4:3
-  sensor (3:4 upright, 4:3 on its side); a desktop asks for the width alone, so a webcam keeps its shape (16:9 is the
-  512x288 it always was); the whole frame is CONTAINED in the engine input beside BLACK bands (never shown - the first cut
-  stretched the frame's edge columns into them, and the engine read the streaks as fabric: with a pinstripe reference it
-  painted giant shorts across the band and into view for 1.4s, real session q2); the card takes the camera's exact shape (`style.aspectRatio`), so the render's cover-fit crops
-  only the bands; the clip records that rectangle (`liveContentRect()`, even dimensions, the frozen tail too); the
-  continuity layer is fitted with the same switch. A 16:9 camera reaches the engine unchanged. After: the same room/camera
-  -> 512x384, card 437x328, all four corners of the camera on screen. The cost: a portrait or 4:3 camera's body gets fewer
-  engine pixels than the strip did - the whole body instead of a torso.
-- **Colours: the engine does not fade.** On the background the render's saturation/contrast equal the camera's (0.28 vs
-  0.26, 0.214 vs 0.212); the garment takes the room's light (the beige shorts' fabric rendered L66 b20 against the photo's
-  L87 b10 in a warm-lit room), and a global grade moved it FURTHER from the photo (dE 23.1 -> 24.9) - none added. What was
-  wrong is that the prompt rarely named the colour: (1) the classifier's colour/print/plain-rear were dropped when the
-  photos did not change (kept now, every session - THE GARMENT'S FACTS ARE KEPT, the sides fix); (2) `colorNameFromHex()`
-  could never name beige or cream (held to chroma 25; the palette's own beige has 56) and named the PEAK tee #4e3b38
-  "charcoal" - now warm names for warm colours only (beige <= 70, cream <= 45, a dark warm colour is "dark brown"), every
-  non-warm colour exactly as before (4,096-colour grid: 40 change, all warm); (3) a product with no classifier colour got
-  none - the room now measures it on the rear photo the mask already holds a band for (`noteReferenceFabricColor()`: the
-  flanks beside where a print sits, the median, abstain under 60% agreement; the classifier's colour wins; `?fabric_measure=0`).
-- **No added jewelry - and the word "jewelry" is NOT the fix.** No reference the owner measured carries any; the render
-  invents it. `summoning-tokens` records why a noun cannot be the fix (no negative prompt in the SDK: "never ... tuxedo,
-  bowtie" streamed back a tuxedo). `ADD_NOTHING_ELSE` ("Add nothing else to the subject.") is an operator over the subject
-  the anchors already name, at P.LOW (shed first - it never evicts the fit sentence). Unproven until measured.
-- **Measured (real sessions, the cream pinstripe basketball shorts - "23" on the front, pinstripes behind, a stripe at the
-  side; the owner's 360 clip, wearing RED shorts):** q1 (16:9 camera): the prompt carried the measured #ebe6e2 ("Fabric:
-  cream."), front "23" on the right leg, the side stripe, a plain back (no number), front again - one cream throughout,
-  no jump at the swaps, the red fully replaced, nothing added, back ack 432ms, 10fps, no stall. q2 (a 3:4 portrait camera,
-  edge-column bands): the giant shorts in the band - fixed to black bands. q3 (the same, black bands): the bands stayed
-  black, the whole body head to feet in view, the same front/side/back sequence, 10fps, no stall.
-- **Proven:** 491,640 prompts old vs new - 202,850 identical, 283,990 only the appended clause, 4,434 only a (warm) colour
-  name, 366 a renamed colour meeting the size phrase's budget; `prompt-engine` re-pinned; `wide-view` (27 checks);
-  qa:visual 40/40. **Worker deploy** for the prompt changes (`lib/api-version.js` synced) - until then prompts come from
-  the origin (~350ms, correct).
+## 3. Cross-file lockstep
 
-### 2.48 One garment through the turn - the size never changes with the angle; plain both sides is one reference (2026-10-14)
-"There were jumps - the shirt went down in the middle of the measurement. Keep it one shirt, not up and down while I
-measure; for every garment, at the sides too, and with the size change." The clip (FOX V-neck tee 1919148300, orange,
-sized up two) read frame by frame against its TEST record: fitted, the hem on the shorts, while the FRONT reference was on
-the wire; wider, dropped shoulders, the hem down the shorts from the BACK's acknowledgement (2.12s); fitted again after the
-FRONT came back (3.71s). Two causes, both fixed on branch `polish/view-color`:
-- **SHED IN LOCKSTEP (`lib/prompts.js` `imageOnlyPrompt()`, Layer A).** The plain-tee front is the longest branch: at "two
-  up" with the colour named (§2.47) fitPrompt() shed its fit sentence (512 chars without, 659 with) while the shorter back
-  kept "Fit: oversized ..., generously dropped shoulders, ... elongated hem" - every turn changed the SIZE in words. The
-  flip sat on every rung where the front sheds and the back does not (a plain tee sized down: the back said "snug" /
-  "undersized"; "Add nothing else" on most rungs). A clause both angles carry now ships only if both dispatches keep it;
-  a clause one angle has (FRONT_CLOSURE_LOCK) follows its own budget. Against the previous engine: 121,800 of 161,756
-  prompts identical, 9,120 lose only the fit sentence, 12,296 only "Add nothing else", 18,540 both, 0 anything else;
-  front/back pairs that disagreed 39,956 -> 0 (`prompt-lockstep`; `prompt-engine` re-pinned; `trace:prompt` models it).
-  **The cost:** where the front already lost the size phrase (§0's limitation) the back loses it too - on a plain tee with
-  its colour named, sizing down 1-2 and up 2. Buying those rungs back is shorter fit phrasings (§0) - not done, unmeasured.
-- **ONE GARMENT, ONE REFERENCE (`app.js` `oneReferenceWillDo()`, in the preload gate, Layer B).** The photo moves the fit
-  too, and that predates the prompt flip: OASIS 2026-09-27 and the 09-29 session (with the front's lower-body sentence on
-  the back anchor - it did not help) both ran the hem down the thighs exactly while the back reference was on the wire. The
-  engine re-fits the garment to every new reference. A top plain on both sides gains nothing from its back photo, so it
-  goes as ONE reference for the whole measurement: the front-only run every product without a back photo takes (no swap,
-  the front anchor throughout, no back prime, no "back view unavailable" toast) and no re-drape (`reconditionForTopology`;
-  AI Auto stopped those 2026-10-06). Positive evidence on every count, or the swap stays: one garment, a top, a PLAIN KNIT
-  one by the engine's own construction verdict (`plainKnit` in every /prompt answer, `promptAnswerFor()` - a button, zip,
-  placket or hood would be drawn on the back); the classifier saw no graphic on the front (`front_is_plain`, new: server ->
-  widget `garment_front_is_plain` -> `item.frontIsPlain`, never a prompt fact) nor on the back (`backIsPlain`) and no front
-  lettering; neither photo measures a graphic (`blobLooksPrinted`) and both are one fabric colour (central medians within
-  `ONE_VIEW_COLOUR_MAX_L1` = 60). The reported tee's photos: front 1.87, back 2.02 (bar 2.5), colours 10 apart - one
-  reference; OASIS 42.8 / 25.8 - keeps its swap. `?one_view=0` is the swap; a TEST record carries `one-view {on, why}` and
-  `redrape-skip {one: true}`. `one-view` pins every count by name.
-- **Not changed:** a garment printed on either side still swaps - it must, to show its back; how far the engine re-fits on
-  such a photo was not measured further. The back anchors' words (§2.17: "top" and the lower-body lock were tried and
-  reverted).
-- **Deploy:** `lib/prompts.js` and the /prompt answer changed - `wrangler deploy` (cloudflare/orient) for the edge; until
-  then the room asks the origin (`lib/api-version.js` synced). An older server or widget sends no `front_is_plain`, and the
-  room keeps the swap.
-- **⚠ PRODUCTION'S CACHE CANNOT CARRY THE VERDICTS YET.** The preview's /api/classify-images on a FOX tee never seen
-  before answered `primary_color_hex`, `front_text_ocr` and `front_is_plain`; asked again three seconds later (a cache
-  hit) every one of them came back null, and the reported tee answers `back_is_plain: null, front_is_plain: null` - the
-  `garment_cache` table has no v12 columns (`text_ocr`, `has_graphic`, `primary_color_hex`, `classifier_version`), so a
-  repeat visit loses the classifier's colour, print text and plain-rear verdict as well (and `front_text_ocr` arrives as
-  "" for "nobody looked"). The fix is the owner's: run `archive/supabase_setup_v12.sql` in Supabase - rows with a null
-  `classifier_version` then count as stale and are re-classified on their next visit. Until then ONE GARMENT, ONE
-  REFERENCE abstains (`front-unproven`) on every cached product and the swap stays. **Pixels alone are not enough** -
-  the probe over FOX's catalogue: 0 of 80 printed tees read plain on both photos, but the lowest two scored 2.61 and 2.77
-  against the 2.5 bar (16 of 40 plain basics pass); so no pixel-only fallback.
-- **Checked end to end without the engine** (the source room on the real FOX page, the mock engine, the preview's
-  classifier): as served, `one-view {on: false, why: "front-unproven"}` and the swaps as before; with the two verdicts
-  supplied, `one-view {on: true, why: "plain-both"}`, `watch {dual: false}`, no prime and no swap through the whole 360.
-- **Measured on a body:** not yet - the owner's next TEST session of the tee (`ctx.size` now names the size rung).
+These have **no shared module system**. Copies must be edited together, in the
+same commit. Whichever is wrong is the one that wins.
 
-### 2.55 A slow engine is left before the shopper sees it; the full look's prompt again (2026-10-15, evening)
-Every session with a full network record, by how long the first image the engine took once generating (the cold-start
-nudge) waited for its acknowledgement: 0.29-1.08s - the turn's BACK landed (m2, m4, g4, g7, l2 ...); 1.9s or more - the
-BACK was late or never acknowledged (m1, p2, p4, g2, g5, g6, the owner's 19:47 with the small reference). Not the bytes (a
-fresh copy, g5), not the size (§2.53), not a wait (g6 turned 3s after the nudge's ack and still lost it): a slow engine
-stays slow for the session. `reconnectForSlowEngine()` - past `SLOW_ENGINE_ACK_MS` (1.5s) with the nudge unacknowledged, once
-per go-live, under the loading screen: the cold-start recovery's own reconnect (connectRealtime force), the floor marked
-applied, the back primed, a first-frame guard of its own; the new session's gate holds and nudges as any. `reveal-settle`
-§10. Whether a fresh session lands on a faster engine is NOT yet measured - the next slow session's record shows
-`slow-engine` / `slow-engine-reconnected` and the new nudge's ack.
-Re-applied: the full look's LOOK_ANCHOR sentence (4644901, §2.52 of the bc7ea00 line - l2: the shorts from frame 0), lost when
-the tree went back to d7cde9a; prompt-engine re-pinned (look case only), api-version re-synced (the Worker needs a deploy to
-answer /prompt and /size again; until then the origin answers).
+| Logic | Copies |
+|---|---|
+| URL canonicalisation | `pear-widget.js: canonicalPhoto` ↔ `app.js: canonicalImageUrl` |
+| CDN size-suffix strip | `pear-widget.js: upgradeImageUrl` ↔ `app.js: canonicalImageUrl` |
+| Composite layout (front left, back right, labels below panels) | `pear-widget.js: createGarmentComposite` ↔ `app.js: createGarmentComposite` |
+| Backdrop sampling | `pear-widget.js: sampleBackdrop` ↔ `app.js: sampleBackdrop` |
+| Garment title → category, incl. `FABRIC_AMBIGUOUS` | `pear-widget.js: detectCategory` ↔ `app.js: classifyGarmentTitle` |
+| Resizer detection | `RESIZER_RE` in both |
+| CDN transform in the **path** (`/images/w_1880,f_auto,q_auto/…`) | `pear-widget.js: upgradeImageUrl` ↔ `app.js` ↔ `server.js` ↔ `scan-store.js: canonicalImageUrl` — **four** copies |
+| `srcset` parsing (split on whitespace, never on `,`) | `pear-widget.js: largestFromSrcset` ↔ `scan-store.js: largestFromSrcset` |
+| Decorative-image keyword list | `pear-widget.js: EXCLUDE_SRC` ↔ `scan-store.js: EXCLUDE_IMG_SRC` |
+| Trust-tiered exclusion + name corroboration | `isExcludedSrc` / `nameEchoesProduct` in `pear-widget.js` ↔ `scan-store.js` |
+| Raw size-chart wire (`raw;` + candidate tables, U+001C–U+001F separators) | `pear-widget.js: encodeRawSizeChart` ↔ `lib/sizing.js: decodeRawSizeChart` (`size-chart-overlay` §4 round-trips it) |
+| Size-chart sanity clamps (cm) | `lib/sizing.js: SIZE_CHART_CLAMPS` (the reader, per column) ↔ `lib/sizing.js: STORE_CHART_CLAMPS` (the overlay) ↔ `lib/store-size-charts.js: STORE_CHART_CLAMPS` (stored charts, re-applied per read) ↔ `scanner/size-chart-reader.src.js: SIZE_CHART_CLAMPS` (the scanner's reader) |
+| Size-token plausibility (`isPlausibleSizeToken`, `SIZE_TOKEN_ALPHA_RE`) | `pear-widget.js` (the size-list scrape; copied into the generated scanner parser) ↔ `lib/sizing.js` (the chart reader) |
+| Store host key (`store_size_charts.store_domain`) | `canonicalStoreHost` in `pear-widget.js` ↔ `app.js` ↔ `lib/store-size-charts.js` ↔ `scanner/size-charts.js` — **four** copies |
+| Size-guide reader, two runtimes | `lib/sizing.js`'s grid reader (the live widget chart) ↔ `scanner/size-chart-reader.src.js` → **generated** `scanner/size-chart-parser.js` (stored charts; `npm run sync:size-chart-parser`) - `size-chart-parser-sync` §3 runs one fixture set through both |
+| Centimetre/inch unit regexes (`SIZE_CHART_CM_RE`, `SIZE_CHART_IN_RE`, `SIZE_CHART_DECLARED_IN_RE`) | `pear-widget.js` (caption tier + the inches/cm twin) ↔ `scanner/size-chart-reader.src.js` ↔ `lib/sizing.js` (cell/header tier) - `size-chart-shared-fixes` §0 |
+| The page's grid finder (`sizeChartGrid` incl. ARIA div-grids, `sizeChartTables` twin collapse, `sizeChartIsGridEl`) | `pear-widget.js` (the live collector) ↔ `scanner/size-chart-reader.src.js` (the scanner) - `size-chart-shared-fixes` §0 asserts the same text |
+| Garment region classifier (`isBottomsGarment`, `BOTTOMS_TOKENS`, `TOPS_TOKENS`) | `app.js` ↔ `lib/prompts.js` (server copy honours the browser's verdict; asserted identical by `prompt-engine` §2) |
+| Orientation knobs the browser forwards vs the knobs the engine reads | `app.js: ORIENT_KNOB_KEYS` ↔ `lib/orient-engine.js: ORIENT_KNOB_KEYS` (`orient-engine` §2) |
+| Orientation values both halves need | `ORIENT_YAW_FRESH_MS`, `PRESENCE_PROMPT_YAW_SUPPRESS_DEG`, `ORIENT_EARLY_TURN_DEFAULT_SPEED` and the `?early_turn_speed` parse (`ORIENT_EARLY_TURN_MIN_SPEED`) in `app.js` (the pose loop, the presence prompt) ↔ `lib/orient-engine.js` (`orient-engine` §2) |
+| Prompt facts the browser sends vs the fields the engine accepts | `app.js: PROMPT_FACT_STRINGS / PROMPT_FACT_BOOLS` ↔ `lib/prompts.js: PROMPT_ITEM_STRINGS / PROMPT_ITEM_BOOLS` (`prompt-engine` §3) |
+| Apostrophe/geresh fold | `pear-widget.js: normApos` ↔ `app.js: _normApos` ↔ `lib/sizing.js: _normApos` — **three** copies (`numeric-pants-sizing` §7 runs all three) |
+| Size tokens (`parseSizeList`, `ADULT_ALPHA_SIZES`) | `app.js` (ladders, `categoryFromSizeRun`) ↔ `lib/sizing.js` (the product rules) |
+| Lower-body vocabulary | `lib/sizing.js: PANTS_TITLE_STEMS_HE / PANTS_TITLE_WORDS_EN / PANTS_EXPLICIT_TYPES` ↔ `app.js: GARMENT_CATEGORY_KEYWORDS.bottom / BOTTOMS_TOKENS / EXPLICIT_BOTTOM_TYPES` — a word added to one side only is a miss on the other path |
+| Size product evidence the browser sends vs the fields the rules accept | `app.js: sizeProductEvidence` ↔ `lib/sizing.js: sanitizeProductEvidence` (`size-fit-pin` §3) |
+| Size ladders (labels only) vs the charts they index | `app.js: CHILD_SIZE_SCALE / ADULT_PANTS_NUMERIC_SIZES / ADULT_JEANS_WAIST_SIZES` ↔ `lib/sizing.js: CHILD_SIZE_CHART / ADULT_PANTS_SIZE_CHART / ADULT_JEANS_WAIST_CHART` (asserted by `numeric-pants-sizing` §5) |
 
-### 2.54 The back goes out near the side - the room asks the engine for 60 (2026-10-15, g8/g9; not yet proven)
-g8 (small references, a good uplink - the back acknowledged in 427ms): the early turn fired on the first reading past 40 - it
-read 43 - and the swap landed, as THE FOLD HANDSHAKE measured, on about the angle it was sent at: the mountain print on a
-chest still three-quarters to the lens at 2.12-2.48s. m2/n2/g4/g7 read 64-88 at the send and landed at the side. The room
-now sends `early_turn=60&early_turn_slow=60` (`ORIENT_KNOB_DEFAULTS`; the engine's ceiling) unless the URL names them - no
-Worker deploy, the engine's defaults untouched. g9 ran with it but read 34 then 88, so it never exercised the change; it showed
-a late RETURN instead (FRONT held one reading past the side by the projection - the back panel on a 3/4 chest at 4.22-4.36s),
-still open. `orient-link` pins the defaults.
+The widget's category verdict is **explicit** and therefore outranks the room's
+own classifier. A widget-side category bug cannot be fixed room-side.
 
-### 2.53 The reference is sent small - a weak uplink was the stall (2026-10-15, g5-g7)
-The "stall" behind every lost back was the UPLINK: images sent before generation (no camera video yet) were always fast;
-after it, a ~100 KB reference shares the uplink with the camera. The sessions that worked had ~1,700 kbps available; g5 and
-g6 ~510 - the nudge 2.5-6s, the turn's BACK never acknowledged. g7 on the same weak uplink (485 kbps) with the TEST-only
-"small" mode (`expDownscale`, 640px wide, JPEG 0.9 - 77/64 KB on the wire instead of 105/96): nudge 1.05s, BACK 349ms, FRONT
-411ms, PEAK from the first frame, the print as sharp. `EXP_SMALL` is now every session's (`garmentBlobCached`); `?ref_full=1`
-sends the full photo. `engine-exp` §1.5. The "ref" mode (ids instead of bytes) stays a TEST experiment.
+**The size-guide parser is the one lockstep pair that is generated, not hand-kept.**
+Edit the widget's `@pear-shared:size-token` block or `scanner/size-chart-reader.src.js`
+(the reader left the widget with the code hiding, §2.12 - the widget only collects tables
+now), then run `npm run sync:size-chart-parser`; never edit `scanner/size-chart-parser.js`
+by hand. `test/size-chart-parser-sync.test.mjs` fails on a single-byte difference and runs
+one fixture set through the live path (the real widget + `lib/sizing.js`) and the scanner's.
+The blocks must stay self-contained (only `d` and `console` are free) — the §2.6 rule, since
+the scanner copy runs with nothing around it. The three clamp copies and
+the four `canonicalStoreHost` copies are compared by value in
+`test/store-size-chart-api.test.mjs`.
 
-### 2.52 The cold-start nudge is waited out under the loading screen (2026-10-15, g5)
-g5 (the fresh copy, §2.49): the copy's acknowledgement was held 6.0s - so the stall is not the bytes; it is the first image
-the engine gets once generating, whatever it is (m1, p2, p4, g2, g5). Without that image the print never draws (g1, g3). The
-settle hold's ceiling (REVEAL_SETTLE_MAX_MS from arming) revealed g5 mid-stall and the turn's BACK was never acknowledged. Now
-`settleGateExpired()` does not expire while the nudge is unacknowledged (`NUDGE_HOLD_MAX_MS` 8s from its send) or rendering
-(`REFERENCE_RENDER_SETTLE_MS` after its ack). A stalled session loads ~5s longer and turns on an engine that answers; every
-other session reveals at the same moment as before (`reveal-settle` §9). TEST records carry `nudge-acked` / `nudge-hold-expired`.
+**`isExcludedSrc` is trust-tiered — a keyword is the weakest signal, not a veto.**
+SVG is refused at every tier (Gemini cannot classify a vector). An image the store
+*declared* as the product — JSON-LD `Product.image`, its own product API, the theme's
+gallery selectors, `itemprop="image"` — skips the keyword list entirely; pass
+`{ declared: true }`. Everything else passes `{ name: productNameHint() }`, where a
+token the product's own name explains **and** whose filename echoes that name is
+forgiven. A bare one-argument call is the old blanket behaviour and is correct only for
+genuinely untrusted URLs. Never widen `EXCLUDE_SRC` to "fix" a false positive — that is
+what refused adidas's "Icon" line and every `logo-tee.jpg` in the industry.
+It also stays IN THE WIDGET: moving it server-side was measured on 2026-09-26 and opened
+the room on a badge / logo / banner with the real photo never sent — several widget paths
+choose a single image, and the server cannot repair a choice it never sees (see the note
+above `isExcludedSrc` in `pear-widget.js`).
 
-### 2.51 A top goes live only with the whole head in the frame (2026-10-15, the owner's 18:11 session)
-The back print stayed on the chest to the end and FRONT was never sent. The record (mv9oevza): the shopper stood with the head
-touching the frame's top edge; the pose model read the body MIRRORED on the way back (BACK, order -1, at 3.0-3.25s while facing
-the lens), the shoulder baseline re-learned at the back (0.39) so every square-on reading after it was rejected as degenerate
-(shR 2.1-27), the last fresh order said -1 and the votes for FRONT never formed a streak before the window ended. Through the
-room's lite model (tasks-vision 0.10.14, first frames): the shoulder line sat 0.42 torso heights below the top edge in that
-session, 0.60 / 0.82 / 1.10 in three whose front/back worked. `awaitBodyPresence()` now holds a TOP until `GATE_HEAD_ROOM`
-(0.5) - the step-back overlay ("please step back to show the full body") meanwhile, and its own 12s timeout still proceeds
-(§2.5). Pre-session only: the mid-session watcher never asks (a back view hides the face). TEST records carry `gate-headroom`.
-`body-presence-gate` pins the four framings. Not measured on the render engine (no credits left) - the decision was measured on
-the model; the next owner session is the check. Still open: the baseline re-learning from a back-view reading.
+**`canonicalImageUrl` has FOUR copies, not two** — `app.js`, `server.js`,
+`scanner/scan-store.js` and (as `canonicalPhoto`) `pear-widget.js`. They are the
+cache key for `garment_cache` as well as the front/back identity test, so a copy
+that drifts writes duplicate rows that then disagree about front vs back.
+`archive/supabase_setup_v9.sql: pear_canonical_url()` is a **fifth, historical**
+copy: it is a one-time backfill script, it already predates the SFCC
+`sw/sh/sm/sfrm/bgcolor` params and the path-transform strip, and it is not on any
+runtime path (the key is computed in JS and passed to Supabase). Do not treat it as
+live — but if you ever re-run that backfill, port the current rules first.
 
-### 2.50 Back on d7cde9a's tree, two measured changes re-applied (2026-10-15 afternoon)
-The owner asked for d7cde9a's version (6ce01e5). Its 16:55 clip: the shirt rendered far too big - the wide view's giant-shirt
-hallucination (3 of 3 wide sessions on 10-14, 0 of 4 portrait). Re-applied on top: df0ee99 (the sides cut, the height kept -
-a portrait view at the widest zoom; "turn slowly" in the guide) and bc7ea00 (§2.49 - replaced the same day by a fresh copy). Not re-applied: the TEST-only lag compensation, the full look's prompt. The PEAK prompt carries ADD_NOTHING_ELSE
-and the fit sentence on both angles in this tree too (checked) - the necklace the owner saw is the engine's, not a shed clause.
+---
 
-### 2.49 The cold-start nudge is a fresh copy of the front on a primed session (2026-10-15, four real sessions)
-The reveal hold's re-assert (a byte-identical repeat of the front once the engine is generating) had its acknowledgement
-held 5.4-5.7s in 4 of ~27 logged cases (m1, p2, p4, g2) and the turn's BACK waited behind it - g2: big front letters across
-the back, then the back panel on the chest at 4.3-4.9s. Measured, one session each (PEAK, the vneck clip, portrait):
-- **no re-assert (g1):** the front print never drew - a plain tee 0-4.5s, PEAK only when the return re-sent the front;
-- **the wire prompt alone (g3):** the same - the print needs an IMAGE once generating;
-- **a fresh copy (g4):** `freshImageCopy()` re-encodes the front on the wire - the same picture under new bytes - and sends
-  it with the wire prompt: PEAK from frame 0, the back at 2.9-3.9s. KEPT, on a session whose back prime was acknowledged
-  (`_primedBackAckedGen`); once per session (`_freshNudgeGen` - the gate is armed twice and g4 sent two identical copies);
-  any failure falls back to the image re-assert; `?reassert=image` forces it. TEST records carry `reassert-fresh`.
-Not proven: that a new-bytes copy never stalls - new images stalled 0 of ~40 in the logs, but one clean session cannot show
-a 1-in-6 failure is gone. The owner's TEST sessions are the check: no `swap-fail`, a back `swap-acked` within ~0.5s.
-Still open from g4: a slow return ack (790ms) left the front plain for ~0.5s, and white lines like a necklace appeared on the
-chest at 4.4-4.9s - the engine's, no clause was shed (the PEAK prompt carries ADD_NOTHING_ELSE on both angles).
+## 4. Commands
+
+```bash
+npm run test:unit        # .test.mjs suite  — the regression guardrail (alias: npm test)
+npm run trace:prompt     # prints every string that actually reaches Decart (traces lib/prompts.js)
+npm start                # the server (node server.js); npm run dev for --watch
+npm run scan             # scanner/scan-store.js over a storefront
+
+npm run qa:visual        # the visual gate: drive a 360 + swap, then score the frames
+npm run test:visual      #   …just the agent  (npx playwright test test/e2e/visual-agent.spec.mjs)
+npm run inspect:visuals  #   …just the scoring (node scripts/inspect-visuals.mjs)
+npm run fixtures         # regenerate test/fixtures/ (generated, gitignored, --force to rebuild)
+
+npm run build            # dist/ — the minified client production serves (§2.11)
+npm run qa:visual:dist   # the visual gate against the MINIFIED room (build --qa → dist-qa/)
+PEAR_SERVE_DIST=1 npm start   # run the server the way production does, after npm run build
+(cd cloudflare/orient && npx wrangler dev)   # the orientation Worker locally (README there; §2.14)
+npm run sync:size-chart-parser            # regenerate scanner/size-chart-parser.js (widget token block + scanner/size-chart-reader.src.js)
+npm run build:edge-assets                 # the pose model's scrambled binaries for the edge + lib/edge-assets.json (§2.24); then wrangler deploy
+npm run scan:size-charts -- <store-url>   # size-guide DRY RUN: coverage report, no keys, writes nothing
+npm run capture -- <store-url> [--dry-run] # Phase 2 one-command capture: static -> browser -> image OCR, y/n, save, live check
+npm run import:chart -- --host <h> (--url|--html|--image) <src>   # manual import (blocked stores, saved pages, screenshots)
+npm run mutation:capture                  # breaks each capture rule in a scratch copy; every mutation must go red
+#   how-to for a new store: docs/ADDING-A-STORE.md. Every capture path feeds extractAllSizeCharts()
+#   (the shared parser, scanner/size-chart-parser.js) -> buildRecords() -> saveSizeChartRecords(); none has its own parser.
+node scanner/scan-store.js --size-charts --save <store-url>   # capture into store_size_charts (needs v15 + Supabase env)
+```
+
+`test:api` still **does not exist** in `package.json` — there is no API-health
+script. Don't re-add that dead line; if you want a real API target, add the script
+first.
+
+**`test:e2e` is also deliberately still absent, and that is not an oversight.** The
+browser suite is `test:visual`, under a different name on purpose: `.husky/pre-commit`
+stage 4 turns blocking the moment a script called `test:e2e` exists, and a 30-second
+Chromium run on *every commit* is how a mandatory check gets commented out. The visual
+suite runs once per **push** instead — see §8. If you ever do want it on every commit,
+rename it knowingly rather than by accident.
+
+The widget is exercised from inside `test:unit`: `widget-dom`, `widget-combined`,
+`stock-dom-scrape` and `size-chart-scrape` load `pear-widget.js` into jsdom and
+drive a real injection + modal open.
+
+`npm run trace:prompt` before and after any Layer-A edit. If the output is
+byte-identical, the edit changed nothing on the wire — say so.
+
+---
+
+## 5. Definition of done for a fit/back-view change
+
+- [ ] Layer (A/B/C/D) stated
+- [ ] If Layer A: `trace:prompt` output differs, and the char total is quoted
+- [ ] `npm run test:unit` green
+- [ ] Cross-file copies from §3 updated together, if touched
+- [ ] Any restored clause is **one** clause
+- [ ] The comment block above the edited function is updated to record *why* —
+      that block is the only record of what already failed
+
+---
+
+## 6. Style
+
+- Never delete a "THE BUG THIS CLOSES" / "THE ROOT CAUSE" comment. Update it.
+- Prefer abstaining over guessing. An unconfident verdict must not outrank a
+  downstream classifier.
+- `console.log("[PEAR] ...")` is the debugging contract with live merchants; keep
+  the prefix and keep messages findable. The production build strips log/warn/group
+  lines, so on a live store that contract is served by the support view (§2.11).
+- Never log a raw `data:` URL — use `abbrevImg()` / `abbrevUrl()`.
+
+---
+
+## 7. Self-check before reporting anything done
+
+Do this yourself, unprompted, every time — not only at commit time:
+
+- touched app.js in a way that could affect rendering (Layer A/B/C per §1)?
+  run `npm run trace:prompt` yourself and read the reachability audit before
+  telling me the change is done. If the branch you edited is still marked
+  DEAD, say so instead of reporting success.
+- touched anything covered by test/run.mjs? run `npm run test:unit` yourself
+  before reporting done. Don't wait for the git hook to catch it.
+- touched pear-widget.js or app.js copies listed in §3? check the other
+  file's copy yourself and flag it if it's now out of sync, even if I didn't
+  ask you to look.
+- touched anything that changes what the shopper SEES — the reference that
+  reaches the wire (Layer B), the orientation that selects it (Layer C), the
+  reveal gate, any overlay over `#aiVideo`, the recorder? run
+  `npm run qa:visual` yourself and read the findings. §8 is the full protocol.
+
+If any of these come back red, say so plainly and stop — don't fix it by
+silently loosening the check.
+
 
 ### 7.1 THE OWNER'S RULE - every change to the room is measured on the real engine, frame by frame (2026-10-15)
 "Every time something in the interface changes, Claude has to measure, go frame by frame and make sure everything
@@ -1735,6 +1735,16 @@ the view/crop, the reveal), before reporting it done:
 
 Credits: a real session spends the owner's render credits. Measure within what the owner approved; if nothing is
 approved, say the change is NOT yet verified and ask for the credits - never report it done without the measurement.
+
+### 7.2 polish/view-color, 2026-10-12..15 - tried on this line and taken out (the owner: "go back to the version that worked")
+This tree is def1a2b again (main a38357f + the three classify/verdict fixes measured clean in p5). What the week on this branch
+tried, so it is not re-tried blind: a portrait view (no giant shirt - measured 0 of 4 vs 3 of 3 wide), a full look's prompt
+naming the bottom (l2: the shorts from frame 0), a cold-start nudge as a re-encoded copy, the reveal waiting out a slow nudge,
+a fresh session for a slow engine, references downscaled to 640px (g7: faster acks on a weak uplink), a 60-degree early turn,
+a head-room presence gate, lag compensation. Measured worse and reverted: a back->front cycle in the reveal hold (l1), no
+cold-start re-assert (g1, the print never drew), a prompt-only nudge (g3). The failure behind most lost backs: some engine
+sessions accept references slowly once generating (1.9s+ for the first) and then lose the turn's back - see that branch's
+history (commits through 82bcadf) and its CLAUDE.md §2.47-§2.55 before changing any of it again.
 
 ---
 

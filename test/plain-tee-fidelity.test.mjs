@@ -83,11 +83,7 @@ const sandbox = {
 const api = new Function(...Object.keys(sandbox),
   code + "\nreturn { isBottomsGarment, isPlainKnitTop, imageOnlyPrompt, fitPrompt, P };")(...Object.values(sandbox));
 
-const { isPlainKnitTop } = api;
-/* ADD NOTHING ELSE (2026-10-14) - the P.LOW operator imageOnlyPrompt() appends last on every branch with room - is not
-   part of the anchor this suite measures; image-first and garment-category-prompt own it. */
-const ADD = (SRC.match(/const ADD_NOTHING_ELSE = "([^"]+)";/) || [])[1];
-const imageOnlyPrompt = (...a) => { const s = api.imageOnlyPrompt(...a); return ADD && s.endsWith(" " + ADD) ? s.slice(0, -(ADD.length + 1)) : s; };
+const { isPlainKnitTop, imageOnlyPrompt } = api;
 
 /* The reported product, in the shape the catalog actually delivers it. `type: "shirt"`
    is NOT incidental - every top in this catalog carries it (see the ITEMS table in

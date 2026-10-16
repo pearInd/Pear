@@ -60,12 +60,6 @@ const api = new Function(
    const FABRIC_COLOR_MIN_MARGIN = ${constBlock("FABRIC_COLOR_MIN_MARGIN")};
    const FABRIC_NEUTRAL_CHROMA_MAX = ${constBlock("FABRIC_NEUTRAL_CHROMA_MAX")};
    const FABRIC_NEUTRAL_NAMES = ${constBlock("FABRIC_NEUTRAL_NAMES")};
-   const FABRIC_DARK_BROWN = ${constBlock("FABRIC_DARK_BROWN")};
-   const FABRIC_DARK_MAX = ${constBlock("FABRIC_DARK_MAX")};
-   const FABRIC_DARK_REL_CHROMA_MIN = ${constBlock("FABRIC_DARK_REL_CHROMA_MIN")};
-   const FABRIC_DARK_MIN = ${constBlock("FABRIC_DARK_MIN")};
-   const FABRIC_WARM_NAMES = ${constBlock("FABRIC_WARM_NAMES")};
-   const FABRIC_NEUTRAL_CHROMA_CEILING = ${constBlock("FABRIC_NEUTRAL_CHROMA_CEILING")};
    const IDENTITY_LOCK_MAX_CHARS = ${constBlock("IDENTITY_LOCK_MAX_CHARS")};
    const PRINT_TEXT_MAX_CHARS = ${constBlock("PRINT_TEXT_MAX_CHARS")};
    ${functionSource("colorNameFromHex")}
@@ -100,29 +94,6 @@ console.log("── §1 IT NAMES A COLOUR, NOT A HEX TRIPLET ──");
     api.identityLockSentence({ colorHex: "#ffffff" }, "front") === "Fabric: white." &&
     !/#/.test(api.identityLockSentence({ colorHex: "#ffffff" }, "front")),
     api.identityLockSentence({ colorHex: "#ffffff" }, "front"));
-}
-
-console.log("\n── §1c THE COLOURS THE GATE COULD NEVER NAME (2026-10-14) ──");
-{
-  /* FOX's PEAK tee: an espresso brown, absolute chroma 22 - "charcoal" pushed it to grey/black in the owner's clips. */
-  is(api.colorNameFromHex("#4e3b38"), "dark brown", "a dark warm colour is a colour: the PEAK tee is dark brown, not charcoal");
-  is(api.colorNameFromHex("#3a3a3e"), "charcoal", "...and a real charcoal is still charcoal");
-  /* beige and cream were held to chroma 25 while the palette's own beige has 56 - unreachable, even for themselves. */
-  is(api.colorNameFromHex("#d8c4a0"), "beige", "the palette's beige names itself");
-  is(api.colorNameFromHex("#dcc6b5"), "beige", "the FOX beige shorts' rear photo is beige (silver, which it can never be, is no coin toss)");
-  is(api.colorNameFromHex("#ead6c7"), "cream", "...and their front photo cream");
-  /* What must NOT move: the abstains the gates exist for. */
-  is(api.colorNameFromHex("#9b7fa8"), "", "a dusty mauve nearest to grey still abstains (never 'purple')");
-  is(api.colorNameFromHex("#6b8f7a"), "", "a sage still abstains");
-  is(api.colorNameFromHex("#8a7f6d"), "", "a taupe still abstains");
-  is(api.colorNameFromHex("#c3a27a"), "", "a tan past beige's ceiling abstains");
-  /* Measured over the 4,096-colour grid against the previous gates: only WARM colours move. */
-  is(api.colorNameFromHex("#ccddee"), "", "a pale blue is not cream (the warm names need a warm colour)");
-  is(api.colorNameFromHex("#99cc88"), "", "a pale green is not beige");
-  is(api.colorNameFromHex("#445533"), "", "a dark olive green is not dark brown");
-  is(api.colorNameFromHex("#444444"), "charcoal", "a dark grey stays charcoal - the new dark brown is no runner-up for it");
-  is(api.colorNameFromHex("#445544"), "charcoal", "...and a greenish dark grey too (dark brown is only in the palette for a warm colour)");
-  is(api.colorNameFromHex("#110000"), "black", "a near-black stays black (the dark-colour rule starts at a visible brightness)");
 }
 
 console.log("\n── §1b THE PRINT HALF - measured text, and FRONT ONLY ──");
@@ -263,10 +234,8 @@ console.log("\n── §4 IT RIDES AT P.CORE - PROMOTED, AND THAT REVERSES AN EA
     /\[P\.MED, fitSentence\(/.test(resolver) &&
     resolver.indexOf("P.CORE, identityLockSentence") < resolver.indexOf("P.MED, fitSentence"),
     "fitPrompt() breaks priority ties by array position, so the order is part of the guarantee");
-  /* 2026-10-14: ADD NOTHING ELSE rides at P.LOW on purpose (the first clause shed) - it is the only part there, and it is
-     not the identity lock, so the promotion is still whole. */
-  check("...and nothing was left at P.LOW or P.TRIM on this branch but ADD NOTHING ELSE",
-    (resolver.match(/\[P\.LOW,/g) || []).length === 1 && /\[P\.LOW, ADD_NOTHING_ELSE\]/.test(resolver) && !/\[P\.TRIM,/.test(resolver),
+  check("...and nothing was left at P.LOW or P.TRIM on this branch",
+    !/\[P\.LOW,/.test(resolver) && !/\[P\.TRIM,/.test(resolver),
     "a leftover lower tier would mean the promotion was partial");
 }
 

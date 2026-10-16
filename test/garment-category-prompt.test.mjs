@@ -183,15 +183,8 @@ const PANTS = { garmentType: "lower_body", name: "Glide Slim" };
    otherwise these assertions keep passing against a string nobody ships any more. The tee
    branch is owned by plain-tee-fidelity.test.mjs and by image-first.test.mjs §1. */
 const SHIRT = { garmentType: "upper_body", name: "Oxford Button-Down Shirt" };
-/* ADD NOTHING ELSE (2026-10-14) rides last at P.LOW on every branch with room - asserted in its own check below; the
-   anchor checks here read the anchor-and-closure body it follows. */
-const ADD = (SRC.match(/const ADD_NOTHING_ELSE = "([^"]+)";/) || [])[1];
-const untail = (s) => (ADD && s.endsWith(" " + ADD) ? s.slice(0, -(ADD.length + 1)) : s);
-const bottomsFull = imageOnlyPrompt(PANTS), topsFull = imageOnlyPrompt(SHIRT);
-const bottomsPrompt = untail(bottomsFull);
-const topsPrompt    = untail(topsFull);
-check("ADD NOTHING ELSE closes both branches, an operator naming no object", !!ADD &&
-  bottomsFull.endsWith(" " + ADD) && topsFull.endsWith(" " + ADD) && !/\b(jewel|necklace|chain|accessor)/i.test(ADD), ADD);
+const bottomsPrompt = imageOnlyPrompt(PANTS);
+const topsPrompt    = imageOnlyPrompt(SHIRT);
 
 console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserve the live top ──");
 {
@@ -395,9 +388,7 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      permitted between entries (each clause carries its rationale inline), hence [\s\S]*?
      rather than \s* - the ORDER and the PRIORITIES are pinned, not the whitespace. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /* SHED IN LOCKSTEP (2026-10-14, prompt-lockstep.test.mjs): the list is built once as `parts` and goes through
-       fitPrompt() after the clauses both angles carry are matched to the other angle's dispatch. */
-    /const parts = \[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\[P\.CORE, identityLockSentence\(item, angle\)\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n\s*\[P\.LOW, ADD_NOTHING_ELSE\],\s*\n\s*\];\s*\n\s*if \(partsOnly\) return parts;[\s\S]*?return fitPrompt\(shedInLockstep\(parts, imageOnlyPrompt\(item, angle === "back" \? "front" : "back", true\)\)\);/.test(SRC),
+    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\[P\.CORE, identityLockSentence\(item, angle\)\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
      Whichever of the three the construction/category/angle axes select, it rides at

@@ -264,12 +264,10 @@ console.log("\n── §4 THE UN-MIRRORING LOCKSTEP ──");
   /* drawImage reads DECODED frames and ignores CSS, so anything baking pixels has to
      apply the flip itself or it ships reversed. */
   check("the recorder bakes NO flip - the saved clip keeps readable garment text",
-    /* since 2026-10-14 the clip records the camera's rectangle of the render (THE CLIP IS WHAT THE CARD SHOWED) - a crop,
-       still identity-oriented */
-    /ctx\.setTransform\(1, 0, 0, 1, 0, 0\);\s*\n\s*ctx\.drawImage\(video, sx, sy, cr\.w \* vw0, cr\.h \* vh0, 0, 0, w, h\);/.test(APP),
+    /ctx\.setTransform\(1, 0, 0, 1, 0, 0\);\s*\n\s*ctx\.drawImage\(video, 0, 0, w, h\);/.test(APP),
     "a baked flip makes the downloaded file show the garment's text backwards");
   check("...and the frozen-hold branch matches it, so the clip's tail cannot disagree",
-    /NO FLIP HERE[\s\S]{0,1000}?ctx\.drawImage\(recordHoldSrc,/.test(APP),
+    /NO FLIP HERE[\s\S]{0,600}?ctx\.drawImage\(recordHoldSrc,/.test(APP),
     "recordHoldSrc comes from captureHoldFrame, which uses the same capture convention");
   /* NOT ONE capture helper may bake a flip. Asserted as a count of zero rather than per
      helper, so a fourth capture surface added later is caught by the same line. */

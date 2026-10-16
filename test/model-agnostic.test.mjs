@@ -210,12 +210,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      garment-category-prompt.test.mjs §2-§3 and image-first.test.mjs §1 own the wording.
      Bounded on both sides here, so neither branch can creep back toward the assembly this
      whole sequence undid. */
-  /* ADD NOTHING ELSE (2026-10-14, the P.LOW tail on every branch with room) is not part of the anchor arithmetic below -
-     image-first and garment-category-prompt own it. */
-  const ADD = (SRC.match(/const ADD_NOTHING_ELSE = "([^"]+)";/) || [])[1];
-  const untail = (s) => (ADD && s.endsWith(" " + ADD) ? s.slice(0, -(ADD.length + 1)) : s);
-  const tops = untail(api.imageOnlyPrompt(TEE));
-  const bottoms = untail(api.imageOnlyPrompt(JEANS));
+  const tops = api.imageOnlyPrompt(TEE);
+  const bottoms = api.imageOnlyPrompt(JEANS);
   /* The tops branch now carries a SECOND part - FRONT_CLOSURE_LOCK, bought back against
      the button-down-rendered-open report - so a flat "both branches are within 40 of each
      other" no longer describes the code. Loosening the constant to fit would give up the

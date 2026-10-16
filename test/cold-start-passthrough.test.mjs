@@ -550,16 +550,10 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
      before the shopper sees anything. Driven here on a fake clock. */
   const code = extract("function armFirstFrameBilling(video, gen) {",
                        "/* ═══════════════════════════════════════════════════════════════════════════\n   FRAME-FREEZE WATCHDOG");
-  const WIRE_BLOB = new Blob(["front-on-the-wire"], { type: "image/jpeg" });
-  const mk = ({ holdMs, search = "", primedGen = -1, wirePrompt = "P", wireRef = WIRE_BLOB, copyFails = false, nudgedGen = -1 }) => {
+  const mk = ({ holdMs, search = "" }) => {
     let now = 5_000_000, fired = false, frameCb = null;
-    const applies = [], sets = [], acked = [], traced = [];
+    const applies = [];
     const sandbox = {
-      _primedBackAckedGen: primedGen, _freshNudgeGen: nudgedGen, traceOrient: (k) => traced.push(k),
-      freshImageCopy: async (b) => (copyFails ? null : new Blob([b, "+"], { type: "image/jpeg" })),
-      rtClient: { set: (p) => { sets.push(p); return Promise.resolve(); } },
-      sendCondition: (label, send) => Promise.resolve(send()).then(() => true),
-      noteImageUploadAcked: (w) => acked.push(w),
       video: { videoWidth: 1000, videoHeight: 1800, requestVideoFrameCallback: (cb) => { frameCb = cb; } },
       gen: 1, sessionGen: 1, billingStarted: false, isGarmentApplied: true, dressedFrameReady: false,
       sampleVideoLuma: () => ({ ready: true, avgLuma: 120, blackFrac: 0 }),
@@ -576,7 +570,7 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
       MODEL_READY_STABLE_FRAMES: 1, MODEL_READY_STABLE_MS: 0,
       isLive: () => true, wireBusy: () => false,
       applyActive: () => { applies.push(now); return Promise.resolve(); },
-      lastSentImageRef: wireRef, rtImageOnWire: true, lastSentPrompt: wirePrompt,
+      lastSentImageRef: "REF", rtImageOnWire: true, lastSentPrompt: "P",
       startBillingWindow: () => { fired = true; },
       watchPostFireLuma: () => {}, requestAnimationFrame: (cb) => { frameCb = cb; return 1; },
       console: { log() {}, warn() {} }, window: {}, Date: { now: () => now },
@@ -585,7 +579,7 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
       code + "\nreturn { arm: () => armFirstFrameBilling(video, gen) };")(...Object.values(sandbox));
     api.arm();
     return { tick: () => { const cb = frameCb; frameCb = null; if (cb) cb(); },
-             advance: (ms) => { now += ms; }, fired: () => fired, applies, sets, acked, traced };
+             advance: (ms) => { now += ms; }, fired: () => fired, applies };
   };
 
   {
@@ -605,38 +599,6 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
     h.advance(CONFIG.COLD_START_MIN_HOLD_MS); h.tick();
     check("and once the hold is over, the feed is revealed",
       h.fired() === true, "the hold is a fixed moment, never a verdict");
-  }
-  {
-    /* THE NUDGE, A FRESH COPY (2026-10-15): on a session whose back prime was acknowledged the hold's re-assert is the
-       front on the wire re-encoded - the same picture under new bytes. A byte-identical repeat once the engine generates
-       can have its ack held 5.4-5.7s (g2); the prompt alone does not draw the print (g3). */
-    const settle = () => new Promise((r) => setTimeout(r, 0));
-    const h = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1 });
-    h.tick(); h.advance(CONFIG.COLD_START_REASSERT_MS); h.tick(); await settle(); await settle(); h.advance(50); h.tick();
-    check("a primed session re-sends a FRESH COPY of the front - a new Blob, the wire prompt, enhance off - and no applyActive",
-      h.applies.length === 0 && h.sets.length === 1 && h.sets[0].image instanceof Blob && h.sets[0].image !== WIRE_BLOB &&
-      h.sets[0].prompt === "P" && h.sets[0].enhance === false && h.traced.includes("reassert-fresh"),
-      JSON.stringify({ applies: h.applies.length, sets: h.sets.length, traced: h.traced }));
-    check("...acknowledged like any upload, so the settle hold waits out its render", h.acked.join() === "coldStartFresh");
-    h.advance(CONFIG.COLD_START_MIN_HOLD_MS + CONFIG.REFERENCE_RENDER_SETTLE_MS); h.tick();
-    check("...and the reveal still comes", h.fired() === true);
-    const twice = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1, nudgedGen: 1 });
-    twice.tick(); twice.advance(CONFIG.COLD_START_REASSERT_MS); twice.tick(); await settle(); await settle();
-    check("one copy per session: a second arm of the same session sends nothing (g4 sent two identical copies)",
-      twice.sets.length === 0 && twice.applies.length === 0, JSON.stringify({ sets: twice.sets.length, applies: twice.applies.length }));
-    const img = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1, search: "?reassert=image" });
-    img.tick(); img.advance(CONFIG.COLD_START_REASSERT_MS); img.tick();
-    check("?reassert=image re-sends the image as before", img.applies.length === 1 && img.sets.length === 0);
-    const other = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 0 });
-    other.tick(); other.advance(CONFIG.COLD_START_REASSERT_MS); other.tick();
-    check("an unprimed session (or another session's prime) re-sends the image as before", other.applies.length === 1 && other.sets.length === 0);
-    const noBlob = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1, wireRef: "https://cdn.test/front.jpg" });
-    noBlob.tick(); noBlob.advance(CONFIG.COLD_START_REASSERT_MS); noBlob.tick();
-    check("no Blob on the wire to copy: the image re-assert as before", noBlob.applies.length === 1 && noBlob.sets.length === 0);
-    const fail = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, primedGen: 1, copyFails: true });
-    fail.tick(); fail.advance(CONFIG.COLD_START_REASSERT_MS); fail.tick(); await settle(); await settle();
-    check("a copy that fails falls back to the image re-assert - the print is never left without its nudge",
-      fail.applies.length === 1 && fail.sets.length === 0, JSON.stringify({ applies: fail.applies.length, sets: fail.sets.length }));
   }
   {
     /* The escape hatch has to restore the previous behaviour EXACTLY, or it is not an A/B. */

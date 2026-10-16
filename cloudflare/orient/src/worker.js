@@ -31,7 +31,7 @@
    ============================================================================= */
 import { createOrientSession } from "../../../lib/orient-protocol.js";
 import { computeSizeVerdict, sanitizeSizeEvidence } from "../../../lib/sizing.js";
-import { promptAnswerFor, sanitizePromptRequest } from "../../../lib/prompts.js";
+import { promptForRequest, sanitizePromptRequest } from "../../../lib/prompts.js";
 /* The fingerprint of the two modules above - stamped on every /size and /prompt answer so the room
    can tell an edge running an older deploy from one running its own code (scripts/sync-api-version.mjs). */
 import { API_VERSION } from "../../../lib/api-version.js";
@@ -100,7 +100,7 @@ export async function handleApi(request, env, route) {
     if (route === "/size") {
       return json(computeSizeVerdict(sanitizeSizeEvidence(body), { diag: keyMatches(body && body.dk, env.PEAR_DEBUG_TOKEN) }));
     }
-    return json(promptAnswerFor(sanitizePromptRequest(body)));
+    return json({ prompt: promptForRequest(sanitizePromptRequest(body)) });
   } catch {
     return json({ error: route === "/size" ? "size_failed" : route === "/trace" ? "trace_failed" : "prompt_failed" }, 500);
   }

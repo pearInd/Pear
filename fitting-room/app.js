@@ -236,58 +236,6 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of
    pixels, so this lowers visual quality + pipeline cost, not the token count itself. */
 const LIVE_W = 512, LIVE_H = 288;
 
-/* ── THE WHOLE CAMERA, NOT A STRIP OF IT (2026-10-14) - "the camera is too close, zoom out" ──
-   Three crops stacked between the camera and the shopper's eye:
-     1. buildVideoConstraints() called any window under 769px wide a PHONE - and the widget's
-        room is a ~480px-wide frame on a desktop page - so it asked a landscape webcam for 9:16,
-        and Chrome cropped it (measured: a 640x480 camera delivered 270x480, 42% of its width);
-     2. drawFrame() COVER-fitted that portrait frame into the engine's 16:9 input: a horizontal
-        strip of ~32% of its height reached the engine (the owner's PEAK clips: the face cut off,
-        only the torso dressed);
-     3. the card then cover-cropped the 16:9 render into a portrait box (42% of its width).
-   Now: a phone (a coarse pointer with touch, not a narrow window) asks for its sensor's full
-   4:3 field in the orientation it is held, a desktop for the width alone; the WHOLE camera
-   frame is fitted into the engine's 16:9 input (contained - black bands either side, never
-   shown; stretched edge columns were read as fabric, see drawFrame); the card takes the camera's exact
-   shape, so the cover-fit that shows the render crops exactly those bands away; the recorder
-   saves that same rectangle. A 16:9 camera is unchanged at the engine - same frame, same pixels.
-   ?wide=0 is the room before this. liveContentRect() is where the camera sits in the engine's
-   frame (fractions; all of it with ?wide=0 or before the first frame). */
-function liveWideView() {
-  try { return new URLSearchParams(location.search).get("wide") !== "0"; } catch (_) { return false; }
-}
-let _liveContentRect = null;
-/** Called by the input stream's drawFrame() with the rectangle the camera fills - fractions of the engine frame. */
-function noteLiveContentRect(x, y, w, h) {
-  const r = _liveContentRect;
-  if (r && Math.abs(r.x - x) < 1e-3 && Math.abs(r.y - y) < 1e-3 && Math.abs(r.w - w) < 1e-3 && Math.abs(r.h - h) < 1e-3) return;
-  _liveContentRect = { x, y, w, h };
-}
-/** Where the camera sits in the engine's frame (fractions), the whole frame when nothing was noted. */
-function liveContentRect() {
-  return _liveContentRect || { x: 0, y: 0, w: 1, h: 1 };
-}
-/* ── THE SIDES CUT, THE HEIGHT KEPT (2026-10-15) - "don't zoom in; just take off the sides, so the view is still the most
-   zoomed-out, but portrait" ──────────────────────────────────────────────────────────────────────────────────────────────
-   The night before (CLAUDE.md §2.49): with the whole 16:9 room in the engine's frame, the engine painted a giant shirt over
-   the room's empty, dark side before the turn - 3 of 3 sessions with the wide view, 0 of 1 with ?wide=0. So the camera's
-   full HEIGHT still reaches the engine (head to feet - not one row closer than the wide view), and a landscape frame keeps
-   only its centre LIVE_PORTRAIT_ASPECT: the shopper, not the room either side. A portrait camera (a phone held upright) is
-   whole. Every surface reads the one rectangle: the engine input (drawFrame), the card's shape, the continuity layer and,
-   through liveContentRect(), the recorder. ?portrait=0 keeps the whole width (2026-10-14's wide view); ?wide=0 the room
-   before both. */
-const LIVE_PORTRAIT_ASPECT = 3 / 4;
-function livePortraitView() {
-  try { return new URLSearchParams(location.search).get("portrait") !== "0"; } catch (_) { return true; }
-}
-/** The part of a vw x vh camera frame the engine and the shopper see: {sx, sy, sw, sh} in camera pixels. */
-function liveSourceRect(vw, vh) {
-  const wide = typeof liveWideView === "function" && liveWideView();
-  if (!wide || !livePortraitView() || !(vw > 0 && vh > 0) || vw / vh <= LIVE_PORTRAIT_ASPECT) return { sx: 0, sy: 0, sw: vw, sh: vh };
-  const sw = Math.round(vh * LIVE_PORTRAIT_ASPECT);
-  return { sx: Math.round((vw - sw) / 2), sy: 0, sw, sh: vh };
-}
-
 /* Mobile detection (Feature 2 / mobile download fix). Drives the SAVE PATH only:
    iOS Safari ignores <a download>, so on mobile we hand the clip to the native
    share sheet ("Save Video" → gallery) instead of trusting the anchor.
@@ -4084,16 +4032,6 @@ window.addEventListener("message", (e) => {
      delivery of garment_composite - and the old guard discarded it, unread, before this
      line. The chip (and the model's actual reference) then stayed on the single front
      photo for the entire session, every time DOM detection happened to be right. */
-  /* THE GARMENT'S FACTS ARE KEPT EVEN WHEN ITS PHOTOS DID NOT CHANGE (2026-10-14, every session - measured TEST-only on the
-     sides branch since 2026-10-12). The classifier's message is the only delivery of the main fabric's colour, the printed
-     text and the plain-rear verdict, and the unchanged return below dropped all three whenever the room had opened on the
-     right front and back already - FOX's PEAK tee (#4e3b38) and CHICAGO shorts (#000000) went out with no "Fabric:" and no
-     "Print:" in every prompt, and the owner's clips show a brown tee rendered near-black. The same fields as below. */
-  if (typeof e.data.garment_color_hex === "string" && e.data.garment_color_hex) target.colorHex = e.data.garment_color_hex;
-  if (typeof e.data.garment_text_ocr === "string") target.textOcr = e.data.garment_text_ocr;
-  if (typeof e.data.garment_back_is_plain === "boolean") target.backIsPlain = e.data.garment_back_is_plain;
-  /* The front's own plain verdict (2026-10-14) - read only by ONE GARMENT, ONE REFERENCE, never by the prompt. */
-  if (typeof e.data.garment_front_is_plain === "boolean") target.frontIsPlain = e.data.garment_front_is_plain;
   const unchanged = target.img === front && target.imgBack === back &&
     (composite === undefined || target.composite === composite);
   if (unchanged) {
@@ -4475,29 +4413,19 @@ function hidePearLoader() {
    - Desktop: keep the compact landscape hint (512×288) - desktop webcams are landscape.
    `aspectRatio` is an *ideal* (best-effort); whatever the browser actually returns is then
    measured in loadedmetadata and the stage adapts. createThrottledInputStream() still
-   downscales to LIVE_W×LIVE_H before Decart, so the billed input is never affected.
-   WIDE VIEW (THE WHOLE CAMERA, NOT A STRIP OF IT, by LIVE_W): a phone is a touch device with a
-   coarse pointer - never a narrow window, which on a desktop page is the widget's ~480px frame
-   (it asked the webcam for 9:16 and got a crop) - and it asks for the full 4:3 sensor (3:4 held
-   upright), where 9:16 cropped a quarter of its width; a desktop asks for the width alone, so the webcam keeps its shape.
-   ?wide=0 is the width test, 9:16 and 512x288. */
+   downscales to LIVE_W×LIVE_H before Decart, so the billed input is never affected. */
 function buildVideoConstraints(facing) {
-  const wide = typeof liveWideView === "function" && liveWideView();
-  let touch = false;
-  try { touch = navigator.maxTouchPoints > 0 && window.matchMedia("(pointer: coarse)").matches; } catch (_) {}
-  const isPhone  = wide ? touch : window.matchMedia("(max-width: 768px)").matches;
+  const isPhone  = window.matchMedia("(max-width: 768px)").matches;
   const portrait = window.matchMedia("(orientation: portrait)").matches;
   const video = {
     facingMode: facing,
     frameRate: { ideal: LIVE_FPS, max: LIVE_FPS },
   };
   if (isPhone) {
-    video.aspectRatio = { ideal: wide ? (portrait ? 3 / 4 : 4 / 3) : (portrait ? 9 / 16 : 16 / 9) };
+    video.aspectRatio = { ideal: portrait ? 9 / 16 : 16 / 9 };
   } else {
     video.width  = { ideal: LIVE_W };
-    /* WIDE VIEW: the width alone, so the webcam keeps its own shape - a 16:9 camera is the 512x288 it always was, a 4:3
-       one arrives whole (a height asked with it made Chrome crop a 640x480 camera to 512x288, its top and bottom gone). */
-    if (!wide) video.height = { ideal: LIVE_H };
+    video.height = { ideal: LIVE_H };
   }
   return video;
 }
@@ -4534,16 +4462,6 @@ async function startCamera(facing = cameraFacing) {
         if (!vw || !vh) return;
         cameraOrientation = vw < vh ? "portrait" : "landscape";
         card().dataset.orientation = cameraOrientation;
-        /* WIDE VIEW: the card takes the camera's exact shape, so the render's cover-fit crops away only the bands the
-           engine input added beside it - the shopper sees the whole camera (THE WHOLE CAMERA, NOT A STRIP OF IT). */
-        if (typeof liveWideView === "function" && liveWideView()) {
-          /* ...cut to its centre (THE SIDES CUT, THE HEIGHT KEPT): the card is the rectangle the engine gets. */
-          const r = typeof liveSourceRect === "function" ? liveSourceRect(vw, vh) : { sw: vw, sh: vh };
-          card().style.aspectRatio = `${r.sw} / ${r.sh}`;
-          /* ...and a card whose height is capped (style.css: min(78vh, 640px) - a short window, the expanded room) narrows to
-             keep that shape, instead of widening past it and showing the engine input's black bands beside the shopper. */
-          if (r.sw < r.sh) card().style.maxWidth = `min(100%, calc(min(78vh, 640px) * ${(r.sw / r.sh).toFixed(4)}))`;
-        }
         console.log(`Camera orientation: ${cameraOrientation} (${vw}×${vh}) · facing: ${facing}`);
       };
       await v.play().catch(() => {});
@@ -5894,30 +5812,12 @@ function createThrottledInputStream(srcStream, {
        · The lower-body guard and the orientation watcher's 96px sampler read #webcam,
          which was never flipped at source and is unaffected.
      If you re-add a flip here, all of the above have to come back with it. */
-  /* WIDE VIEW (THE WHOLE CAMERA, NOT A STRIP OF IT, by LIVE_W): the camera frame is CONTAINED, not cover-cropped - a
-     portrait or 4:3 camera reaches the engine whole, beside black bands (never shown: the card crops them). A 16:9 camera
-     is the same frame either way. Resolved once per stream; typeof: the suites run this standalone, as the room before it. */
-  const wide = typeof liveWideView === "function" && liveWideView();
   const drawFrame = () => {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return;
-    /* THE SIDES CUT, THE HEIGHT KEPT: under the wide view the source is the camera's centre (liveSourceRect). */
-    const src = wide && typeof liveSourceRect === "function" ? liveSourceRect(vw, vh) : { sx: 0, sy: 0, sw: vw, sh: vh };
-    const scale = wide ? Math.min(width / src.sw, height / src.sh) : Math.max(width / vw, height / vh);
-    const dw = src.sw * scale, dh = src.sh * scale;
+    const scale = Math.max(width / vw, height / vh);
+    const dw = vw * scale, dh = vh * scale;
     const dx = (width - dw) / 2, dy = (height - dh) / 2;
-    if (wide) {
-      /* BLACK BANDS - a letterboxed video, which the engine leaves alone. The first cut stretched the frame's own edge
-         columns into them: vertical streaks the engine read as fabric, and with a pinstripe reference it painted giant
-         shorts across the band and into the shopper's view for 1.4s (real session q2, 2026-10-14). */
-      if (dx >= 1 || dy >= 1) {
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.fillStyle = "#000";
-        if (dx >= 1) { ctx.fillRect(0, 0, Math.ceil(dx), height); ctx.fillRect(Math.floor(dx + dw), 0, Math.ceil(dx) + 1, height); }
-        else { ctx.fillRect(0, 0, width, Math.ceil(dy)); ctx.fillRect(0, Math.floor(dy + dh), width, Math.ceil(dy) + 1); }
-      }
-      if (typeof noteLiveContentRect === "function") noteLiveContentRect(dx / width, dy / height, dw / width, dh / height);
-    }
     /* IDENTITY, ASSERTED RATHER THAN ASSUMED. This loop applies no transform of its own,
        so the reset looks redundant - and it is, today, which is exactly why it is cheap
        enough to keep. This canvas is the ONE surface whose contents become the payload
@@ -5927,8 +5827,7 @@ function createThrottledInputStream(srcStream, {
        un-mirroring refactor above exists to have fixed. One call per frame to make that
        unrepresentable is a good trade. */
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    if (wide) ctx.drawImage(video, src.sx, src.sy, src.sw, src.sh, dx, dy, dw, dh);
-    else ctx.drawImage(video, dx, dy, dw, dh);
+    ctx.drawImage(video, dx, dy, dw, dh);
   };
 
   const tick = () => {
@@ -7303,84 +7202,6 @@ async function blobLooksFlat(blob) {
   return flat;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   ONE GARMENT, ONE REFERENCE - a top plain on both sides is sent once (2026-10-14, CLAUDE.md §2.48)
-   ══════════════════════════════════════════════════════════════════════════════
-   REPORTED with a clip (FOX V-neck tee 1919148300, orange, plain front and back): "it jumped - I want it to stay one
-   shirt, not go up and down while I measure". Its TEST record: the shirt changed cut when the BACK photo went out
-   (acknowledged 2.12s) and again when the FRONT came back (3.71s) - wider, dropped shoulders, the hem down the shorts on
-   the store's back photo. The fit sentence flipping between the two angles was half of it (SHED IN LOCKSTEP,
-   lib/prompts.js). The other half is the photo, and it predates that: OASIS on 2026-09-27 and the 09-29 session both ran
-   the hem down the thighs "for exactly as long as the back reference was on the wire", the second one with the front's
-   lower-body sentence on the back anchor as well. The engine re-fits the garment to every new reference.
-   A garment plain on both sides gains nothing from its back photo - the back of a plain tee is the same fabric - so it is
-   sent as ONE reference for the whole measurement: the front-only path every product without a back photo already takes
-   (no swap, the front anchor throughout), and no re-drape (a full re-upload on movement - AI Auto stopped those on
-   2026-10-06 for the same reason). POSITIVE EVIDENCE ON EVERY COUNT, or the swap stays:
-     · one garment (not a look), a top, and a PLAIN KNIT one by the prompt engine's own construction verdict (plainKnit,
-       promptAnswerFor - no buttons, zip, placket or hood: a front closure sent over a back-facing body is drawn on the back);
-     · the classifier saw no graphic on the front (frontIsPlain) nor on the back (backIsPlain), and no lettering on the
-       front (textOcr "");
-     · the pixels agree: neither photo measures a graphic (blobLooksPrinted) and both are the same fabric colour.
-   ?one_view=0 keeps the swap. A TEST record carries the verdict and its reason ("one-view"). */
-const ONE_VIEW_COLOUR_MAX_L1 = 60;   // |dR|+|dG|+|dB| of the two photos' central medians - the fabric-colour agreement bar
-let _oneViewItem = null;              // the garment the live session sends as one reference (set at go-live)
-
-/** Per-channel median of a relative box of a Blob's bitmap, or null when it cannot be read. */
-async function blobBoxColour(blob, x0, y0, x1, y1) {
-  let bmp = null;
-  try {
-    bmp = await createImageBitmap(blob);
-    const W = 48, H = 48;
-    const off = typeof OffscreenCanvas !== "undefined"
-      ? new OffscreenCanvas(W, H)
-      : Object.assign(document.createElement("canvas"), { width: W, height: H });
-    const ctx = off.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(bmp, x0 * bmp.width, y0 * bmp.height, (x1 - x0) * bmp.width, (y1 - y0) * bmp.height, 0, 0, W, H);
-    const d = ctx.getImageData(0, 0, W, H).data;
-    return [0, 1, 2].map((k) => {
-      const v = [];
-      for (let i = k; i < d.length; i += 4) v.push(d[i]);
-      v.sort((a, z) => a - z);
-      return v[v.length >> 1];
-    });
-  } catch (_) {
-    return null;
-  } finally {
-    try { bmp && bmp.close && bmp.close(); } catch (_) { /* closed */ }
-  }
-}
-
-/** Can this garment go as one reference for the whole measurement? Never rejects.
-    @returns {Promise<{ok: boolean, why: string}>} why: "plain-both" or the first count that failed */
-async function oneReferenceWillDo(item, frontBlob, backBlob) {
-  try { if (new URLSearchParams(location.search).get("one_view") === "0") return { ok: false, why: "off" }; } catch (_) { /* no location */ }
-  try {
-    if (!item || !frontBlob || !backBlob) return { ok: false, why: "no-pair" };
-    if (typeof resolveLook === "function" && resolveLook()) return { ok: false, why: "look" };
-    if (isBottomsGarment(item)) return { ok: false, why: "bottoms" };
-    if (item.frontIsPlain !== true) return { ok: false, why: "front-unproven" };
-    if (item.backIsPlain !== true) return { ok: false, why: "back-unproven" };
-    if (typeof item.textOcr === "string" && item.textOcr.trim()) return { ok: false, why: "front-text" };
-    if (item._backLooksPrinted === true) return { ok: false, why: "back-pixels" };
-    /* The construction verdict rides the prompt reply - memoised, so the dispatch's own front prompt is this request. */
-    let knit;
-    try {
-      await wirePrompt(item, "front", "oneView");
-      knit = _plainKnitVerdicts.get(JSON.stringify(promptFactsOf(item)));
-    } catch (_) { /* no verdict - abstain */ }
-    if (knit !== true) return { ok: false, why: knit === false ? "construction" : "no-verdict" };
-    if (await blobLooksPrinted(frontBlob)) return { ok: false, why: "front-pixels" };
-    const a = await blobBoxColour(frontBlob, 0.38, 0.45, 0.62, 0.7), b = await blobBoxColour(backBlob, 0.38, 0.45, 0.62, 0.7);
-    if (!a || !b) return { ok: false, why: "colour-unread" };
-    const dist = Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
-    if (dist > ONE_VIEW_COLOUR_MAX_L1) return { ok: false, why: `colour-${dist}` };
-    return { ok: true, why: "plain-both" };
-  } catch (e) {
-    return { ok: false, why: "failed" };
-  }
-}
-
 /* ── Context-Aware Asset Switching - pre-cached per-orientation Blobs ─────────
    The instant-swap guarantee: rtClient.set({ image }) accepts a Blob directly, and a Blob
    ships the bytes over the already-open session - Decart never has to fetch a URL server-
@@ -7518,14 +7339,7 @@ const PEAR_EXP = (() => {
     return v === "small" || v === "ref" || v === "small-ref" || v === "notel" ? v : "";
   } catch (_) { return ""; }
 })();
-/* THE SMALL REFERENCE IS EVERY SESSION'S (2026-10-15, g5-g7). A reference sent once the engine is generating shares the uplink
-   with the camera, and on a weak one it was the whole delay: with ~500 kbps available (g5, g6 - 1,700 in the sessions that
-   worked) a 1000px reference (~100 KB on the wire) was acknowledged in 2.5-6s or never - the turn's BACK queued behind it,
-   the front's print across the back, then the back on the chest. g7, the same weak uplink (485 kbps) with the reference
-   downscaled to EXP_SMALL_W: the nudge 1.05s, the BACK 349ms, the FRONT 411ms, PEAK from the first frame, the print as
-   sharp. Every session sends it now; ?ref_full=1 sends the full photo (an A/B). */
-const REF_FULL_SIZE = (() => { try { return new URLSearchParams(location.search).get("ref_full") === "1"; } catch (_) { return false; } })();
-const EXP_SMALL = !REF_FULL_SIZE || PEAR_EXP === "small" || PEAR_EXP === "small-ref";
+const EXP_SMALL = PEAR_EXP === "small" || PEAR_EXP === "small-ref";
 const EXP_REF = PEAR_EXP === "ref" || PEAR_EXP === "small-ref";
 const EXP_NOTEL = PEAR_EXP === "notel";
 const EXP_SMALL_W = 640;
@@ -7608,7 +7422,7 @@ function garmentBlobCached(url) {
       if (normalized && bandJob && typeof maskReferenceBand === "function") {
         normalized = await maskReferenceBand(normalized, url, await bandJob);
       }
-      /* THE SMALL REFERENCE (every session since 2026-10-15 - see EXP_SMALL). typeof-guarded: suites run this standalone. */
+      /* THE ENGINE-SPEED EXPERIMENT's "small" mode (TEST sessions only). typeof-guarded: suites run this standalone. */
       const blob = typeof EXP_SMALL !== "undefined" && EXP_SMALL && typeof expDownscale === "function" ? await expDownscale(normalized) : normalized;
       /* Encoded NOW, while nothing is waiting on it, so a swap that sends this Blob later does no
          encoding at all - see preEncodeReference(). Fire-and-forget; a failure costs nothing. */
@@ -7779,57 +7593,6 @@ function referenceBackBand(url) {
   return job;
 }
 
-/* ── THE FABRIC'S OWN COLOUR, MEASURED FROM ITS REAR PHOTO (2026-10-14) - "the colours come out faded" ──
-   The prompt names a garment's colour ("Fabric: dark brown." - identityLockSentence, lib/prompts.js) only when the
-   classifier sent one, and for a cached product it often sends none: the FOX beige shorts 1154009415 went out with
-   "Strictly preserve original pattern and color" and no colour at all. Where the classifier gave nothing, the room
-   measures the main fabric itself, on the one photo it already holds a garment band for - the rear reference this mask
-   paints (the back is the largest plain area of most garments). Two flank patches either side of where a print sits
-   (a top: the lower back, between the arms; a bottom: the seat, either leg), the per-channel median, and an abstain
-   unless most of the patch agrees with it (a print or a seam under it) - a wrong colour named is worse than none. The
-   classifier's colour always wins (promptFactsOf). ?fabric_measure=0 turns it off. */
-const _refFabricColors = new Map();   // canonical rear-photo URL -> "#rrggbb"
-function noteReferenceFabricColor(url, ctx, W, H, band, region) {
-  try { if (new URLSearchParams(location.search).get("fabric_measure") === "0") return null; } catch (_) { /* no location */ }
-  if (!ctx || !band || !(W > 0) || !(H > 0)) return null;
-  const x0 = typeof band.x0 === "number" ? band.x0 : 0.2, x1 = typeof band.x1 === "number" ? band.x1 : 0.8;
-  const gw = (x1 - x0) * W, gh = (band.y1 - band.y0) * H;
-  if (!(gw > 24 && gh > 24)) return null;
-  const top = region === "top";
-  const rows = top ? [0.55, 0.85] : [0.2, 0.55];
-  const cols = top ? [[0.2, 0.32], [0.68, 0.8]] : [[0.18, 0.38], [0.62, 0.82]];
-  const px = [];
-  for (const [c0, c1] of cols) {
-    const sx = Math.round(x0 * W + c0 * gw), sy = Math.round(band.y0 * H + rows[0] * gh);
-    const sw = Math.max(1, Math.round((c1 - c0) * gw)), sh = Math.max(1, Math.round((rows[1] - rows[0]) * gh));
-    const d = ctx.getImageData(sx, sy, sw, sh).data;
-    const step = Math.max(1, Math.floor(Math.sqrt((sw * sh) / 1500)));   // ~1.5k samples a patch
-    for (let y = 0; y < sh; y += step) for (let x = 0; x < sw; x += step) {
-      const i = (y * sw + x) * 4;
-      if (d[i + 3] < 200) continue;
-      px.push([d[i], d[i + 1], d[i + 2]]);
-    }
-  }
-  if (px.length < 200) return null;
-  const med = [0, 1, 2].map((k) => { const v = px.map((p) => p[k]).sort((a, z) => a - z); return v[v.length >> 1]; });
-  const agree = px.filter((p) => Math.abs(p[0] - med[0]) + Math.abs(p[1] - med[1]) + Math.abs(p[2] - med[2]) <= 60).length / px.length;
-  if (agree < 0.6) {
-    console.log(`[PEAR] fabric colour: abstained (${Math.round(agree * 100)}% of the patch agrees) -`, abbrevImg(url));
-    return null;
-  }
-  const hex = "#" + med.map((v) => v.toString(16).padStart(2, "0")).join("");
-  _refFabricColors.set((typeof canonicalImageUrl === "function" && canonicalImageUrl(url)) || url, hex);
-  console.log(`[PEAR] fabric colour measured from the rear photo: ${hex} (${Math.round(agree * 100)}% agree) -`, abbrevImg(url));
-  return hex;
-}
-/** The fabric colour measured for this item's rear photo, or null. */
-function measuredFabricColorOf(item) {
-  if (!item) return null;
-  const back = typeof distinctBackOf === "function" ? distinctBackOf(item) : null;
-  if (!back) return null;
-  return _refFabricColors.get((typeof canonicalImageUrl === "function" && canonicalImageUrl(back)) || back) || null;
-}
-
 /** The rows to paint on an image `h` tall - [0, top) and [bottom, h) - or null when there is
     nothing worth painting. Pure. */
 function refMaskRows(band, h) {
@@ -7858,10 +7621,6 @@ async function maskReferenceBand(blob, url, band) {
       : Object.assign(document.createElement("canvas"), { width: W, height: H });
     const ctx = off.getContext("2d", { alpha: png, willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0);
-    /* Measured before anything is painted (THE FABRIC'S OWN COLOUR). typeof: suites run this standalone. */
-    if (typeof noteReferenceFabricColor === "function" && typeof referenceBackHint === "function") {
-      try { const h = referenceBackHint(url); noteReferenceFabricColor(url, ctx, W, H, band, h && h.region); } catch (_) { /* a measurement, never a failure */ }
-    }
     /* The backdrop just inside the painted side of the band's edge, at the photo's own left and right
        margins - where a studio photo has nothing but backdrop - and, when the garment's width is
        known, right beside it too (a studio light leaves the backdrop lighter there; edge colours
@@ -8244,13 +8003,11 @@ function syncAssetPrep() {
  * preload-composite.test.mjs executes this function standalone with no module scope
  * (CLAUDE.md §2.7). This function deliberately stops at PREP_PRELOAD_CEIL; goLive()
  * writes the 100 once it has seen the {ok, hasBack} verdict.
- * @returns {Promise<{ ok: boolean, hasBack: boolean, oneView: boolean }>}
+ * @returns {Promise<{ ok: boolean, hasBack: boolean }>}
  *   ok=false      → at least one item's FRONT is unusable - goLive() must abort entirely
  *                    (there is no reasonable fallback for a missing front).
  *   hasBack=false → at least one item's BACK is missing/broken - goLive() should proceed
  *                    FRONT-ONLY rather than arm AI Auto with a known-bad asset.
- *   oneView=true  → hasBack is false by CHOICE: the garment is plain on both sides and goes as
- *                    one reference (ONE GARMENT, ONE REFERENCE) - nothing to announce to the shopper.
  */
 /* ── IS THE REFERENCE BIG ENOUGH TO CARRY THE ARTWORK? ─────────────────────────────
    ══════════════════════════════════════════════════════════════════════════════
@@ -8361,7 +8118,7 @@ async function preloadGarmentAssets() {
   };
   if (typeof assetPrepStep === "function") assetPrepStep(0, prepTotal);
 
-  let ok = true, hasBack = true, oneView = false;
+  let ok = true, hasBack = true;
   for (const item of items) {
     const g = galleryOf(item);
     const front = g.front || item.img;
@@ -8416,19 +8173,6 @@ async function preloadGarmentAssets() {
       hasBack = false;
       continue;   // no point validating a composite built from a back we already rejected
     }
-    /* ONE GARMENT, ONE REFERENCE (CLAUDE.md §2.48): a top plain on both sides goes as its front alone - the same
-       front-only run, chosen rather than fallen into, so no toast. typeof: this function runs standalone in suites. */
-    if (typeof oneReferenceWillDo === "function" && items.length === 1) {
-      const one = await oneReferenceWillDo(item, frontBlob, backBlob);
-      if (typeof traceOrient === "function") traceOrient("one-view", { on: one.ok, why: one.why });
-      if (one.ok) {
-        console.log("[PEAR] one reference for the whole measurement - plain on both sides, the back photo adds nothing -", label);
-        oneView = true;
-        hasBack = false;
-        continue;
-      }
-      console.log(`[PEAR] front and back both go on the wire (${one.why}) -`, label);
-    }
 
     /* THE GAP THIS CLOSES. This gate's entire job is "block go-live until every
        asset THIS RUN NEEDS is ready" - but until now it validated the plain
@@ -8468,7 +8212,7 @@ async function preloadGarmentAssets() {
       }
     }
   }
-  return { ok, hasBack, oneView };
+  return { ok, hasBack };
 }
 
 /* ── Context-Aware Asset Switching - OrientationWatcher ───────────────────────
@@ -9316,8 +9060,7 @@ function continuityEl() {
   return c;
 }
 
-/* The camera, fitted to #aiVideo's aspect exactly as drawFrame() sends it - cover-cropped, or contained under the WIDE
-   VIEW (THE WHOLE CAMERA, NOT A STRIP OF IT, by LIVE_W) - so the layer lands on the render's own body. */
+/* The camera, cover-cropped to #aiVideo's aspect - the same centre crop drawFrame() sends. */
 function drawContinuityFrame(c, cam, ai) {
   const vw = cam.videoWidth, vh = cam.videoHeight;
   if (!vw || !vh) return false;
@@ -9325,13 +9068,10 @@ function drawContinuityFrame(c, cam, ai) {
   const W = Math.min(LIVE_CONTINUITY_MAX_W, aw), H = Math.round(W * ah / aw);
   if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
   const g = c.getContext("2d", { alpha: false });
-  const wide = typeof liveWideView === "function" && liveWideView();
-  const src = wide && typeof liveSourceRect === "function" ? liveSourceRect(vw, vh) : { sx: 0, sy: 0, sw: vw, sh: vh };   // THE SIDES CUT
-  const scale = wide ? Math.min(W / src.sw, H / src.sh) : Math.max(W / vw, H / vh);
-  const dw = src.sw * scale, dh = src.sh * scale;
+  const scale = Math.max(W / vw, H / vh);
+  const dw = vw * scale, dh = vh * scale;
   g.setTransform(1, 0, 0, 1, 0, 0);   // reality in, like every other video surface here
-  if (wide) g.drawImage(cam, src.sx, src.sy, src.sw, src.sh, (W - dw) / 2, (H - dh) / 2, dw, dh);
-  else g.drawImage(cam, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  g.drawImage(cam, (W - dw) / 2, (H - dh) / 2, dw, dh);
   return true;
 }
 
@@ -11142,15 +10882,8 @@ function orientLinkUrl() {
   try { return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/orient"; } catch (_) { return null; }
 }
 
-/* THE BACK GOES OUT NEAR THE SIDE (2026-10-15, g8). A swap lands on about the body angle it was sent at (the engine's own
-   finding, THE FOLD HANDSHAKE) - and with the small reference (§2.53) acknowledged in ~0.4s that is closer than ever. The
-   early turn fires on the first reading past 40 degrees, and the readings come every ~250ms: m2, n2, g4, g7 happened to read
-   64-88 and the back landed at the side; g8 read 43 and the mountain print sat on a chest still three-quarters to the lens
-   (2.12-2.48s). So the room asks the engine for 60 (its ceiling) on both early-turn paths; a URL value still wins
-   (?early_turn=40&early_turn_slow=40 is the engine's own default). */
-const ORIENT_KNOB_DEFAULTS = { early_turn: "60", early_turn_slow: "60" };
 function orientKnobs() {
-  const out = { ...ORIENT_KNOB_DEFAULTS };
+  const out = {};
   try {
     const q = new URLSearchParams(location.search);
     for (const k of ORIENT_KNOB_KEYS) { const v = q.get(k); if (v !== null) out[k] = v; }
@@ -12837,8 +12570,6 @@ function promptFactsOf(item) {
   if (!item) return f;
   for (const k of PROMPT_FACT_STRINGS) if (typeof item[k] === "string") f[k] = item[k];
   for (const k of PROMPT_FACT_BOOLS) if (typeof item[k] === "boolean") f[k] = item[k];
-  /* The classifier's colour wins; without one, the colour the room measured on the rear photo (THE FABRIC'S OWN COLOUR). */
-  if (!f.colorHex && typeof measuredFabricColorOf === "function") { const m = measuredFabricColorOf(item); if (m) f.colorHex = m; }
   f.__bottoms = isBottomsGarment(item);
   return f;
 }
@@ -12848,9 +12579,6 @@ function promptFactsOf(item) {
    common case: front -> back -> front - is answered without a request. Values are the
    text or the in-flight Promise for it, so concurrent asks share one request. */
 const _wirePrompts = new Map();
-/* The plain-knit verdict the prompt service answers beside each single-garment prompt (promptAnswerFor, lib/prompts.js),
-   keyed by the facts it was asked about. Read only by ONE GARMENT, ONE REFERENCE - a yes/no, never wording. */
-const _plainKnitVerdicts = new Map();   // JSON of promptFactsOf(item) -> boolean
 
 /**
  * The single-garment prompt for one dispatch - what imageOnlyPrompt(item, angle) returned
@@ -12928,9 +12656,6 @@ async function fetchWirePrompt(body) {
       if (!resp.ok) throw new Error(`prompt service HTTP ${resp.status}`);
       const data = await resp.json();
       if (!data || typeof data.prompt !== "string" || !data.prompt) throw new Error("malformed prompt response");
-      if (body && body.kind === "single" && typeof data.plainKnit === "boolean" && typeof _plainKnitVerdicts !== "undefined") {
-        _plainKnitVerdicts.set(JSON.stringify(body.item), data.plainKnit);
-      }
       return data.prompt;
     } catch (e) {
       lastErr = e;
@@ -16221,12 +15946,6 @@ const MODEL_READY_STABLE_MS     = 300;   // ...spanning at least this many ms
    applyLook() sends on the turn - with the look's wire prompt (angle-free, the same string). A look whose halves have
    no back of their own has a back composite that IS the front one: nothing to prime. */
 let _primedBackGen = -1;
-/* The session whose back prime was ACKNOWLEDGED - read by the reveal gate (armFirstFrameBilling): on such a session the
-   hold's re-assert is a PROMPT-ONLY nudge, not a second copy of the image (see "THE NUDGE WITHOUT THE IMAGE"). */
-let _primedBackAckedGen = -1;
-/* The session whose fresh-copy nudge already went out: the reveal gate can be armed twice per session (onRemoteStream fires
-   more than once), and a second copy is byte-identical to the first - the very repeat the copy exists to avoid (g4). */
-let _freshNudgeGen = -1;
 async function primeBackReference(gen) {
   if (_primedBackGen === gen) return false;
   _primedBackGen = gen;
@@ -16267,7 +15986,6 @@ async function primeBackReference(gen) {
   lastSentPrompt = null;
   console.log(`[PEAR] back reference primed before the reveal (${Date.now() - t0}ms) - the turn's swap is now a repeat`);
   if (typeof traceOrient === "function") traceOrient("prime-acked", { ms: Date.now() - t0 });
-  _primedBackAckedGen = gen;
   return true;
 }
 
@@ -16287,27 +16005,6 @@ function primeAtConnect(gen) {
     lastSentPrompt = null;
     return applyActive().then(() => true);
   }).catch((e) => { console.warn("[PEAR] back prime at connect failed:", e?.message || e); return false; });
-}
-
-/* THE SAME PICTURE, OTHER BYTES (2026-10-15) - the reveal hold's nudge on a primed session. Decoded and re-encoded, so the
-   engine receives the front it already renders, pixel for pixel, as a file it has not seen: every logged image the engine
-   had not been sent before was acknowledged in 0.26-1.8s once generating (0 stalls in ~40), while a byte-identical repeat
-   was held 5.4-5.7s in 4 of ~27 (m1, p2, p4, g2). null on any failure - the caller then re-asserts the image as before. */
-/* How long the reveal waits on the cold-start nudge's acknowledgement (THE NUDGE IS WAITED OUT): the stalls measured 5.4-6.0s;
-   with the render after it, the reveal still lands well inside FIRST_FRAME_TIMEOUT_MS. */
-const NUDGE_HOLD_MAX_MS = 8000;
-async function freshImageCopy(blob) {
-  try {
-    if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas === "undefined") return null;
-    const bmp = await createImageBitmap(blob);
-    const c = new OffscreenCanvas(bmp.width, bmp.height);
-    const g = c.getContext("2d");
-    if (!g) return null;
-    g.drawImage(bmp, 0, 0);
-    if (typeof bmp.close === "function") bmp.close();
-    const out = await c.convertToBlob({ type: "image/jpeg", quality: 0.9 });
-    return out && out.size > 0 ? out : null;
-  } catch (_) { return null; }
 }
 
 function armFirstFrameBilling(video, gen) {
@@ -16346,17 +16043,6 @@ function armFirstFrameBilling(video, gen) {
      hold measured from arming would be spent on the handshake. See CONFIG.COLD_START_MIN_HOLD_MS. */
   let firstQualifyingAt = null;
   let reasserted = false;
-  /* THE NUDGE IS WAITED OUT UNDER THE LOADING SCREEN (2026-10-15) - see NUDGE_HOLD_MAX_MS. */
-  let nudgeSentAt = null, nudgeAckedAt = null, nudgeExpiryLogged = false, slowEngineAsked = false;
-  const trackNudge = (p) => {
-    if (!p || typeof p.then !== "function") return;
-    nudgeSentAt = Date.now();
-    p.then((ok) => {
-      if (ok === false) { nudgeSentAt = null; return; }
-      nudgeAckedAt = Date.now();
-      if (typeof traceOrient === "function") traceOrient("nudge-acked", { ms: nudgeAckedAt - nudgeSentAt });
-    }, () => { nudgeSentAt = null; });
-  };
   /* ?cold_hold=<ms> - tune the hold live, 0 restores the pre-2026-09-16 behaviour exactly. */
   const minHoldMs = (() => {
     let raw = null;
@@ -16381,28 +16067,8 @@ function armFirstFrameBilling(video, gen) {
   })();
   const settleMaxMs = typeof REVEAL_SETTLE_MAX_MS === "number" ? REVEAL_SETTLE_MAX_MS : 6000;
   let settleExpiryLogged = false;
-  /* THE NUDGE IS WAITED OUT UNDER THE LOADING SCREEN (2026-10-15). The first image the engine gets once it is generating -
-     the cold-start re-assert, a fresh copy or the image itself - is what draws the print (g1, g3: without it, a plain tee),
-     and the engine sometimes holds its acknowledgement 5.4-6.0s (m1, p2, p4, g2; g5 with a fresh copy - so not the bytes).
-     Revealed inside that, the shopper turns and the BACK queues behind it: the front's print across the back, then the back
-     on the chest. The settle hold already waits while a write is in flight and REFERENCE_RENDER_SETTLE_MS after its ack;
-     its ceiling (settleMaxMs from arming) is what revealed g5 mid-stall. While the nudge is unacknowledged the ceiling moves
-     to NUDGE_HOLD_MAX_MS after the nudge went out. An ack in 0.3-0.9s - every other session - changes nothing. */
-  const nudgePending = () => {
-    if (nudgeSentAt === null) return false;
-    if (nudgeAckedAt !== null) {   // acknowledged: its render still has to land (REFERENCE_RENDER_SETTLE_MS)
-      return Date.now() - nudgeAckedAt < (typeof REFERENCE_RENDER_SETTLE_MS === "number" ? REFERENCE_RENDER_SETTLE_MS : 1400);
-    }
-    const max = typeof NUDGE_HOLD_MAX_MS === "number" ? NUDGE_HOLD_MAX_MS : 8000;
-    const open = Date.now() - nudgeSentAt < max;
-    if (!open && !nudgeExpiryLogged) {
-      nudgeExpiryLogged = true;
-      if (typeof traceOrient === "function") traceOrient("nudge-hold-expired", { ms: Date.now() - nudgeSentAt });
-    }
-    return open;
-  };
   const settleGateExpired = () => {
-    const expired = Date.now() - armedAt >= settleMaxMs && !nudgePending();
+    const expired = Date.now() - armedAt >= settleMaxMs;
     if (expired && !settleExpiryLogged) {
       settleExpiryLogged = true;
       console.warn(`[PEAR] render-settle hold expired after ${settleMaxMs}ms - revealing anyway.`,
@@ -16499,10 +16165,8 @@ function armFirstFrameBilling(video, gen) {
     lastSentImageRef = null;
     rtImageOnWire = false;
     lastSentPrompt = null;
-    return applyActive().then(() => true, (e) => {
-      console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e);
-      return false;
-    });
+    applyActive().catch((e) =>
+      console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e));
   };
 
   const fire = () => {
@@ -16609,34 +16273,7 @@ function armFirstFrameBilling(video, gen) {
          decline it, and a re-assert marked sent but never sent is the one-shot lost for good. */
       if (!renderSettling()) {
         reasserted = true;
-        /* THE NUDGE, A FRESH COPY (2026-10-15). The re-assert is what draws the print: without it (g1), and with the wire
-           prompt alone in its place (g3), the front stayed a plain tee until the return re-sent the front. But it repeats
-           the image the engine holds, byte for byte, once it is generating, and the engine sometimes holds that
-           acknowledgement 5.4-5.7s (m1, p2, p4, g2) - the turn's BACK then waits behind it and lands on the chest (g2).
-           On a session whose back prime was acknowledged the nudge is freshImageCopy() of the front on the wire: the same
-           picture under new bytes, with the same wire prompt. Any failure re-asserts the image as before; ?reassert=image
-           forces that. A session without a prime re-asserts as before. */
-        const primedSession = typeof _primedBackAckedGen !== "undefined" && _primedBackAckedGen === gen;
-        let reassertMode = null;
-        try { reassertMode = new URLSearchParams(location.search).get("reassert"); } catch (_) { reassertMode = null; }
-        const nudgePrompt = typeof lastSentPrompt === "string" && lastSentPrompt ? lastSentPrompt : null;
-        const wireBlob = typeof Blob !== "undefined" && typeof lastSentImageRef !== "undefined" && lastSentImageRef instanceof Blob
-          ? lastSentImageRef : null;
-        const nudgedAlready = typeof _freshNudgeGen !== "undefined" && _freshNudgeGen === gen;
-        if (primedSession && nudgedAlready) {
-          /* the other arm of this session sent it - one copy per session */
-        } else if (primedSession && reassertMode !== "image" && nudgePrompt && wireBlob && typeof freshImageCopy === "function" &&
-            typeof rtClient !== "undefined" && rtClient && typeof sendCondition === "function") {
-          if (typeof _freshNudgeGen !== "undefined") _freshNudgeGen = gen;
-          trackNudge(freshImageCopy(wireBlob).then((copy) => {
-            if (!copy || gen !== sessionGen || !rtClient) return redispatchColdStart(gen, NaN, "cold-start re-assert") || false;
-            if (typeof traceOrient === "function") traceOrient("reassert-fresh", { at: sinceQualified, kb: Math.round(copy.size / 1024) });
-            return sendCondition("coldStartFresh", () => rtClient.set({ image: copy, prompt: nudgePrompt, enhance: false }))
-              .then((sent) => { if (sent && typeof noteImageUploadAcked === "function") noteImageUploadAcked("coldStartFresh"); return !!sent; });
-          }).catch((e) => { console.warn("[PEAR] cold-start fresh copy failed:", e?.message || e); return false; }));
-        } else {
-          trackNudge(redispatchColdStart(gen, NaN, "cold-start re-assert"));
-        }
+        redispatchColdStart(gen, NaN, "cold-start re-assert");
       }
     }
     const unconditioned = (probe.ready && probe.passthrough) || noReference || withinMinHold;
@@ -16650,17 +16287,6 @@ function armFirstFrameBilling(video, gen) {
        (wireGarmentId vs selectedGarmentId). A mismatch - a garment tapped while its
        predecessor's upload was in flight - holds and re-dispatches the selection, through the
        same bounded redispatchColdStart(). Both yield to REVEAL_SETTLE_MAX_MS. */
-    /* A SLOW ENGINE IS LEFT BEFORE THE SHOPPER SEES IT (2026-10-15). The nudge is the first image this engine takes once it
-       is generating, and how long it takes answers for the whole session: acknowledged in 0.29-1.08s, the turn's BACK landed
-       (m2, m4, g4, g7, l2, ...); in 1.9s or more, the BACK was late or never acknowledged at all - not the bytes (a fresh
-       copy, g5), not the size (the small reference, the owner's 19:47) and not a wait (g6 waited 3s after it). So past
-       SLOW_ENGINE_ACK_MS the room opens a fresh session once (reconnectForSlowEngine), under the loading screen. */
-    if (!slowEngineAsked && nudgeSentAt !== null && nudgeAckedAt === null &&
-        Date.now() - nudgeSentAt >= (typeof SLOW_ENGINE_ACK_MS === "number" ? SLOW_ENGINE_ACK_MS : 1500) &&
-        typeof reconnectForSlowEngine === "function") {
-      slowEngineAsked = true;
-      reconnectForSlowEngine(gen, Date.now() - nudgeSentAt);
-    }
     const settleHold = renderSettling() && !settleGateExpired();
     const garmentMismatch = settleHoldEnabled && wireGarmentId !== null && wireGarmentId !== selectedGarmentId();
     const wrongGarmentHold = garmentMismatch && !settleGateExpired();
@@ -17177,48 +16803,6 @@ async function applyConditioningWithRecovery() {
  * bookkeeping stays true and the next apply can take its usual fast path.
  * @returns {Promise<void>}
  */
-/* ── A SLOW ENGINE IS LEFT BEFORE THE SHOPPER SEES IT (2026-10-15) - see the reveal gate's note. Once per go-live: the
-   cold-start recovery's own reconnect (connectRealtime force - a new session, the floor in its join), the conditioning
-   marked applied (applyFallbackConditioning - the floor already holds it), the back primed again, and a first-frame guard
-   for the new session (goLive's guard belongs to the old one). The new session's own reveal gate - armed by its stream -
-   holds, nudges and reveals as any session does. The cost is the loading screen: ~4-6s more, in the sessions that would
-   otherwise lose the turn's back. */
-const SLOW_ENGINE_ACK_MS = 1500;
-let _slowEngineRetried = false;
-async function reconnectForSlowEngine(fromGen, ms) {
-  if (_slowEngineRetried || fromGen !== sessionGen || billingStarted) return false;
-  _slowEngineRetried = true;
-  if (typeof traceOrient === "function") traceOrient("slow-engine", { ms: Math.round(ms) });
-  console.warn(`[PEAR] the render engine took ${Math.round(ms)}ms and counting to accept the first reference -`,
-    "opening a fresh session before the reveal (a slow engine loses the turn's back)");
-  try {
-    resetConditionWire();
-    await connectRealtime({ force: true });
-    await waitConnected(CONNECT_TIMEOUT_MS);
-    const g = sessionGen;
-    await applyFallbackConditioning();
-    if (g !== sessionGen) return false;
-    if (typeof primeAtConnect === "function") primeAtConnect(g);
-    if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
-    firstFrameGuardTimer = setTimeout(() => {
-      firstFrameGuardTimer = null;
-      if (sessionGen !== g || billingStarted) return;
-      console.warn("[PEAR] No first frame within " + FIRST_FRAME_TIMEOUT_MS + "ms of the fresh session - tearing down (no idle billing)");
-      stopScanTimer();
-      $("scanOverlay").hidden = true;
-      stopLive();
-      showCamError("החיבור לא הניב תמונה - נסה שוב.");
-      setConn("error");
-    }, FIRST_FRAME_TIMEOUT_MS);
-    if (typeof traceOrient === "function") traceOrient("slow-engine-reconnected", {});
-    return true;
-  } catch (e) {
-    console.warn("[PEAR] fresh session for a slow engine failed:", e?.message || e);
-    if (typeof traceOrient === "function") traceOrient("slow-engine-failed", { m: String(e?.message || e).slice(0, 100) });
-    return false;
-  }
-}
-
 async function applyFallbackConditioning() {
   const look = resolveLook();
   const item = look ? look.top : activeItem;
@@ -17371,9 +16955,6 @@ async function goLive() {
       exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP ? PEAR_EXP : undefined,
       /* What the rear reference's mask did before go-live (maskReferenceBand) - numbers and reasons only. */
       ref: typeof _refMaskLog !== "undefined" && _refMaskLog.length ? _refMaskLog.slice(-3) : undefined,
-      /* The size chosen against the recommended one - the fit sentence's rung (§2.48: the 2026-10-14 clip could only be
-         read as "two up" from its frames). */
-      size: typeof getSizeDelta === "function" ? getSizeDelta() : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the
@@ -17527,11 +17108,8 @@ async function goLive() {
          unavailable to a shopper who was never offered one - a new false alarm created
          purely by widening the gate. Only a run that genuinely intended AI Auto has
          lost something worth reporting. */
-      /* ...and not when the front-only run was CHOSEN (ONE GARMENT, ONE REFERENCE): nothing was lost. */
-      if (wantedAutoView && !preload.oneView) toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
+      if (wantedAutoView) toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
     }
-    /* The garment this session sends as one reference - reconditionForTopology() reads it (no re-drape). */
-    _oneViewItem = preload.oneView ? activeItem : null;
     /* Every asset this run needs is now fetched, decoded and validated - so the prep
        overlay can retire and hand over the finalized card in one step. Guarded: this
        is the only caller that can settle the PRELOADING_BLOBS phase, since the preload
@@ -17650,7 +17228,6 @@ async function goLive() {
     // cancelled the moment billing actually starts. Guard against the fast-frame race where
     // the first frame already armed billing before we got here.
     const guardGen = sessionGen;
-    _slowEngineRetried = false;        // a fresh go-live may leave a slow engine once (reconnectForSlowEngine)
     if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
     if (!billingStarted) {
       firstFrameGuardTimer = setTimeout(() => {
@@ -18669,9 +18246,6 @@ async function nativePresenceFallback(video, category) {
  * @param {boolean} isBottoms - drives which landmarks are required
  * @returns {Promise<"present"|"timeout"|"skipped">}
  */
-/* The shoulder line's distance below the frame's top edge, in torso heights, a top's gate waits for - see THE WHOLE HEAD
-   IN THE FRAME. 0.5: the 18:11 framing read 0.42, every framing whose front/back worked 0.60 or more. */
-const GATE_HEAD_ROOM = 0.5;
 async function awaitBodyPresence(isBottoms) {
   if (!POSE_GATE_ENABLED) return "skipped";
   const video = $("webcam");
@@ -18692,7 +18266,6 @@ async function awaitBodyPresence(isBottoms) {
   ]);
   const gate = makePresenceGate();
   let shownOverlay = false;
-  let headRoomTraced = false;
 
   try {
     while (Date.now() - startedAt < POSE_GATE_TIMEOUT_MS) {
@@ -18701,20 +18274,6 @@ async function awaitBodyPresence(isBottoms) {
         try {
           const poseResult = detectPoseFrame(detector, video);
           verdict = presenceFromPoseResult(poseResult, category);
-          /* THE WHOLE HEAD IN THE FRAME BEFORE A TOP GOES LIVE (2026-10-15). The owner's 18:11 session stood with the head
-             touching the frame's top edge (the shoulder line 0.42 torso heights below it): the pose model read the body
-             mirrored on the way back to the lens (BACK at 3.0-3.25s while facing it), the shoulder baseline re-learned from a
-             back-view reading, and FRONT never went out - the back print on the chest to the end. Measured through the
-             room's lite model: that framing 0.42; three sessions whose front/back worked 0.60, 0.82, 1.10. So a top waits
-             for GATE_HEAD_ROOM; the step-back overlay shows meanwhile and the gate's own timeout still proceeds (§2.5). */
-          if (verdict === true && category === "top" && typeof poseTorsoWidths === "function") {
-            const w = poseTorsoWidths(poseResult, 1);
-            const room = w && w.th > 0 && typeof w.top === "number" ? w.top / w.th : null;
-            if (room !== null && room < GATE_HEAD_ROOM) {
-              verdict = false;
-              if (typeof traceOrient === "function" && !headRoomTraced) { headRoomTraced = true; traceOrient("gate-headroom", { room: Math.round(room * 100) / 100 }); }
-            }
-          }
           /* The shopper stands square-on here, before the fitting: the torso-only turn and THE YAW
              GUARD learn their square-on widths from these readings, so both are ready from the
              fitting's first second (the live pose loop only starts at the reveal). Learning only -
@@ -19171,12 +18730,6 @@ async function reconditionForTopology(step) {
      on the uplink the camera rides, for a fit the two swaps re-condition anyway. A single-view garment re-drapes as before. */
   if (step && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE) {
     if (typeof traceOrient === "function") traceOrient("redrape-skip", { reason: step.reason });
-    return;
-  }
-  /* ...AND NONE FOR A GARMENT SENT AS ONE REFERENCE (2026-10-14, ONE GARMENT, ONE REFERENCE): every re-upload makes the
-     engine fit the garment afresh, and holding one fit through the turn is that mode's whole point. typeof: suites. */
-  if (step && typeof _oneViewItem !== "undefined" && _oneViewItem && typeof activeItem !== "undefined" && _oneViewItem === activeItem) {
-    if (typeof traceOrient === "function") traceOrient("redrape-skip", { reason: step.reason, one: true });
     return;
   }
   if (typeof traceOrient === "function") traceOrient("redrape", { reason: step && step.reason });
@@ -19684,24 +19237,10 @@ function startRecording() {
          the selfie flip in - flipping again would mirror the frozen tail of the clip
          against the live portion that precedes it. The two branches differ on purpose:
          one draws an already-oriented canvas, the other draws raw decoded video. */
-      /* The same camera rectangle as the live branch below (THE CLIP IS WHAT THE CARD SHOWED); centred, so the
-         flip baked into the captured frame does not move it. */
-      try {
-        const hr = typeof liveContentRect === "function" ? liveContentRect() : { x: 0, y: 0, w: 1, h: 1 };
-        const HW = recordHoldSrc.width, HH = recordHoldSrc.height;
-        ctx.drawImage(recordHoldSrc, hr.x * HW, hr.y * HH, hr.w * HW, hr.h * HH, 0, 0, recordCanvas.width, recordCanvas.height);
-        beginRecorder();
-      } catch (_) {}
+      try { ctx.drawImage(recordHoldSrc, 0, 0, recordCanvas.width, recordCanvas.height); beginRecorder(); } catch (_) {}
     } else {
-      /* ── THE CLIP IS WHAT THE CARD SHOWED (2026-10-14, THE WHOLE CAMERA, NOT A STRIP OF IT by LIVE_W) ──
-         Under the wide view the engine's frame carries the camera in a rectangle with bands beside it, and the card
-         crops the bands away; the clip records that rectangle - liveContentRect(), the whole frame otherwise - at even
-         dimensions (an H.264 encoder wants them). */
-      const vw0 = video.videoWidth, vh0 = video.videoHeight;
-      const cr = typeof liveContentRect === "function" ? liveContentRect() : { x: 0, y: 0, w: 1, h: 1 };
-      const sx = cr.x * vw0, sy = cr.y * vh0;
-      const w = Math.max(2, Math.round(cr.w * vw0) & ~1), h = Math.max(2, Math.round(cr.h * vh0) & ~1);
-      if (vw0 && vh0) {
+      const w = video.videoWidth, h = video.videoHeight;
+      if (w && h) {
         if (recordCanvas.width !== w || recordCanvas.height !== h) {
           recordCanvas.width = w; recordCanvas.height = h;
         }
@@ -19737,7 +19276,7 @@ function startRecording() {
                matrix, so this frame cannot inherit anything from the previous one even if
                a restore were ever missed. Absolute by construction. */
             ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.drawImage(video, sx, sy, cr.w * vw0, cr.h * vh0, 0, 0, w, h);
+            ctx.drawImage(video, 0, 0, w, h);
             /* ── THE CLIP RECORDS WHAT THE SHOPPER SAW ─────────────────────────────────
                While LIVE CONTINUITY bridges a Decart stall, #aiVideo is one repeated frame
                and the screen shows the live camera over it. Drawing only #aiVideo baked
@@ -19749,8 +19288,7 @@ function startRecording() {
             if (typeof liveContinuityAlpha === "number" && liveContinuityAlpha > 0 &&
                 _continuityCanvas && _continuityCanvas.width) {
               ctx.globalAlpha = liveContinuityAlpha;
-              const CW = _continuityCanvas.width, CH = _continuityCanvas.height;
-              ctx.drawImage(_continuityCanvas, cr.x * CW, cr.y * CH, cr.w * CW, cr.h * CH, 0, 0, w, h);
+              ctx.drawImage(_continuityCanvas, 0, 0, w, h);
             }
           } finally { ctx.restore(); }
           beginRecorder();

@@ -124,7 +124,7 @@ const { value: PROMPT_MAX_CHARS, source: PROMPT_MAX_CHARS_SOURCE, kind: PROMPT_M
 const NEEDED = [
   "STRICT_REFERENCE_LOCK", "PLAIN_TEE_ANCHOR", "FRONT_CLOSURE_LOCK",
   "CATEGORY_ANCHOR", "BACK_CATEGORY_ANCHOR", "PLAIN_BACK_ANCHOR", "LOOK_ANCHOR",
-  "VOLUME_PERSISTENCE", "CLOSED_BACK_HEM", "ADD_NOTHING_ELSE",
+  "VOLUME_PERSISTENCE", "CLOSED_BACK_HEM",
 ];
 
 const scope = {};
@@ -239,8 +239,6 @@ if (colorSrc && printSrc && colorNameSrc && colorNamesBlock) {
        instead of quietly disabling the row. */
     const deps = ["FABRIC_COLOR_MAX_DIST", "FABRIC_COLOR_MIN_MARGIN",
                   "FABRIC_NEUTRAL_CHROMA_MAX", "FABRIC_NEUTRAL_NAMES",
-                  "FABRIC_DARK_BROWN", "FABRIC_DARK_MAX", "FABRIC_DARK_MIN", "FABRIC_DARK_REL_CHROMA_MIN", "FABRIC_WARM_NAMES",
-                  "FABRIC_NEUTRAL_CHROMA_CEILING",
                   "IDENTITY_LOCK_MAX_CHARS", "PRINT_TEXT_MAX_CHARS"];
     const decls = deps.map((n) => {
       const b = constBlock(n);
@@ -288,7 +286,7 @@ function fitPromptTrace(parts, max = PROMPT_MAX_CHARS) {
   }
   const clamped = out.length > max;
   if (clamped) out = out.slice(0, max).trim();
-  return { wire: out, shed, clamped, kept: keep.map(([, t]) => norm(t)) };
+  return { wire: out, shed, clamped };
 }
 
 /* Each branch is the part list imageOnlyPrompt() assembles for it, as
@@ -324,8 +322,7 @@ const branches = [
     parts: [[P.CORE, scope.LOOK_ANCHOR, "LOOK_ANCHOR"],
             [P.HIGH, scope.STRICT_REFERENCE_LOCK, "STRICT_REFERENCE_LOCK"],
             [P.HIGH, scope.VOLUME_PERSISTENCE, "VOLUME_PERSISTENCE"],
-            [P.MED,  scope.CLOSED_BACK_HEM, "CLOSED_BACK_HEM"],
-            [P.LOW,  scope.ADD_NOTHING_ELSE, "ADD_NOTHING_ELSE"]] },
+            [P.MED,  scope.CLOSED_BACK_HEM, "CLOSED_BACK_HEM"]] },
 ];
 
 /* Render every branch across the whole size ladder. `rows` is the per-delta detail;
@@ -343,33 +340,14 @@ for (const b of branches) {
     if (lock) b.parts = [b.parts[0], [P.CORE, lock, "identityLock"], ...b.parts.slice(1)];
   }
   b.base = norm(b.parts.map(([, t]) => t).filter(Boolean).join(" "));
-}
-const branchParts = (b, d) => (b.fit
-  ? [...b.parts,
-     [P.MED, fitSentence(b.fit, d), "fitSentence"],
-     [P.LOW, scope.ADD_NOTHING_ELSE, "ADD_NOTHING_ELSE"],   // imageOnlyPrompt()'s last part (ADD NOTHING ELSE)
-     ]
-  : b.parts);
-/* SHED IN LOCKSTEP (imageOnlyPrompt): a clause both angles carry ships only if the other angle's dispatch keeps it too.
-   A branch's partners are the reachable branches of the same region on the other angle; a trace has no single product,
-   so a clause is dropped here when ANY partner sheds it - the worst pairing, the one to budget against. Recorded in
-   `shed` as "<clause> (lockstep)". */
-const angleOf = (b) => (/\bback\b/.test(b.id) ? "back" : "front");
-for (const b of branches) {
-  const partners = b.fit ? branches.filter((o) => o.fit === b.fit && !o.synthetic && angleOf(o) !== angleOf(b)) : [];
   b.rows = (b.fit ? DELTAS : [0]).map((d) => {
-    let parts = branchParts(b, d);
-    const lockstep = [];
-    for (const o of partners) {
-      const op = branchParts(o, d), kept = new Set(fitPromptTrace(op).kept), has = new Set(op.map(([, t]) => norm(t)));
-      parts = parts.filter(([p, t, name]) => {
-        const drop = p !== P.CORE && norm(t) && has.has(norm(t)) && !kept.has(norm(t));
-        if (drop && !lockstep.includes(`${name} (lockstep)`)) lockstep.push(`${name} (lockstep)`);
-        return !drop;
-      });
-    }
-    const { kept: _kept, ...r } = fitPromptTrace(parts);
-    return { delta: d, label: b.fit ? deltaLabel(d) : "n/a", ...r, shed: [...r.shed, ...lockstep], len: r.wire.length };
+    const parts = b.fit
+      ? [...b.parts,
+         [P.MED, fitSentence(b.fit, d), "fitSentence"],
+         ]
+      : b.parts;
+    const r = fitPromptTrace(parts);
+    return { delta: d, label: b.fit ? deltaLabel(d) : "n/a", ...r, len: r.wire.length };
   });
   /* The headline string is the DEFAULT dispatch: the shopper who never touches the
      size picker. Deliberately not the worst case - the worst case is in the table. */
@@ -482,10 +460,6 @@ for (const b of branches) {
   if (b.rows.length > 1) {
     const anyShed = b.rows.some((r) => r.shed.length);
     console.log(`  ── size ladder (fitSentence @ P.MED) ${anyShed ? "──  ⚠ sheds on some rungs" : "──  all rungs fit"}`);
-    if (b.rows.some((r) => r.shed.some((s) => /\(lockstep\)/.test(s)))) {
-      console.log("     (lockstep) = shed because the other angle's dispatch sheds it, against that angle's WORST" +
-        " reachable branch for this trace item - a garment with a shorter partner keeps more");
-    }
     for (const r of b.rows) {
       const mark = r.shed.length ? `✖ SHED ${r.shed.join(",")}` : "✓";
       if (r.shed.length) shedding++;

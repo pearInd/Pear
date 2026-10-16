@@ -78,7 +78,7 @@ function fakeTime(start = 10_000_000) {
    applyActive() models a full upload: the wire is busy until the ack lands ackMs later, and the
    ack is stamped through the real noteImageUploadAcked() - exactly what applyGarment() does. */
 function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_HOLD_MS,
-                       selectedId = "G1", floorId = "G1", floorAckAgoMs = 3000, ackResolves = false, reconnects = null } = {}) {
+                       selectedId = "G1", floorId = "G1", floorAckAgoMs = 3000 } = {}) {
   const T = fakeTime();
   let frameCb = null, firedAt = null, busy = false;
   const acks = [];
@@ -112,7 +112,6 @@ function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_
     console: { log: (...a) => logs.push(a.join(" ")), warn: (...a) => logs.push(a.join(" ")) },
     window: {},
     Date: T.Date,
-    ...(reconnects ? { SLOW_ENGINE_ACK_MS: 1500, reconnectForSlowEngine: (g, ms) => { reconnects.push({ g, ms, at: T.now() }); return Promise.resolve(true); } } : {}),
   };
   const body = SETTLE + "\n" + ARM +
     "\nreturn {" +
@@ -122,11 +121,8 @@ function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_
   let api;
   sandbox.applyActive = () => {
     busy = true;
-    /* ackResolves: the promise settles at the ack, as rtClient.set() does - what THE NUDGE IS WAITED OUT reads. */
-    let settle = null;
-    const p = ackResolves ? new Promise((r) => { settle = r; }) : Promise.resolve();
-    T.setTimeout(() => { busy = false; acks.push(T.now()); api.note("applyGarment", selectedId); if (settle) settle(); }, ackMs);
-    return p;
+    T.setTimeout(() => { busy = false; acks.push(T.now()); api.note("applyGarment", selectedId); }, ackMs);
+    return Promise.resolve();
   };
   api = new Function(...Object.keys(sandbox), body)(...Object.values(sandbox));
   // The floor, acknowledged at connect - long before the first frame, as on the real path.
@@ -141,11 +137,7 @@ function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_
   const run = (maxMs = 8000, frameMs = 66) => {
     for (let t = 0; t <= maxMs && firedAt === null; t += frameMs) { tick(); T.advance(frameMs); }
   };
-  /** run() with the microtasks flushed between frames - an ack that settles a promise is seen on the next frame. */
-  const runAsync = async (maxMs = 16000, frameMs = 66) => {
-    for (let t = 0; t <= maxMs && firedAt === null; t += frameMs) { tick(); T.advance(frameMs); await Promise.resolve(); await Promise.resolve(); }
-  };
-  return { run, runAsync, tick, T, acks, logs, armedAt, connectAt, firedAt: () => firedAt, wireId: api.wireId };
+  return { run, tick, T, acks, logs, armedAt, connectAt, firedAt: () => firedAt, wireId: api.wireId };
 }
 
 console.log("── §1 THE REPORTED TIMELINE, replayed against the REAL gate ──");
@@ -524,55 +516,6 @@ console.log("\n── §8 THE MOCK SPEAKS THE SDK'S initialState ──");
     iInit !== -1 && iAwait > iInit && iConnected > iAwait, `init@${iInit} await@${iAwait} connected@${iConnected}`);
   check("the simulated render wait is OFF unless asked for - the standard visual gate is unchanged",
     /return Number\.isFinite\(n\) && n > 0 && n <= 5000 \? n : 0;/.test(APP) && /\? n : 0;/.test(extract("function mockPriorMs()", "\n}")));
-}
-
-console.log("\n── §9 THE NUDGE IS WAITED OUT UNDER THE LOADING SCREEN (2026-10-15) ──");
-{
-  /* g5: the cold-start nudge's ack held 6.0s; revealed at the settle ceiling mid-stall, the turn's back queued behind it and
-     was never acknowledged. Now the ceiling waits for the nudge, then its render. */
-  const R = CONFIG.REFERENCE_RENDER_SETTLE_MS;
-  const stall = liveHarness({ ackMs: 6000, ackResolves: true });
-  await stall.runAsync(16000);
-  const ackAt = stall.acks[0];
-  check("a nudge held 6s: the reveal waits for its ack and its render, past the old 7s ceiling",
-    stall.firedAt() !== null && ackAt !== undefined && stall.firedAt() >= ackAt + R &&
-    stall.firedAt() - stall.armedAt > CONFIG.REVEAL_SETTLE_MAX_MS,
-    `revealed ${stall.firedAt() - stall.armedAt}ms after arming, ack at ${ackAt - stall.armedAt}ms`);
-  const never = liveHarness({ ackMs: 60000, ackResolves: true });
-  await never.runAsync(20000);
-  check("...and a nudge never acknowledged is waited at most NUDGE_HOLD_MAX_MS - the reveal still comes",
-    never.firedAt() !== null && never.firedAt() - never.armedAt < CONFIG.REVEAL_SETTLE_MAX_MS + 8000 + 500,
-    `revealed ${never.firedAt() === null ? "never" : never.firedAt() - never.armedAt + "ms"} after arming`);
-  const quick = liveHarness({ ackMs: 400, ackResolves: true });
-  await quick.runAsync(16000);
-  const base = liveHarness({ ackMs: 400 });
-  base.run(16000);
-  check("an ack in 400ms - every other session - reveals exactly when it did",
-    quick.firedAt() !== null && base.firedAt() !== null && quick.firedAt() - quick.armedAt === base.firedAt() - base.armedAt,
-    `${quick.firedAt() - quick.armedAt} vs ${base.firedAt() - base.armedAt}ms`);
-}
-
-console.log("\n── §10 A SLOW ENGINE IS LEFT BEFORE THE SHOPPER SEES IT (2026-10-15) ──");
-{
-  const slow = [];
-  const h = liveHarness({ ackMs: 6000, ackResolves: true, reconnects: slow });
-  await h.runAsync(4000);
-  check("a nudge unacknowledged at SLOW_ENGINE_ACK_MS asks for a fresh session - once, before any reveal",
-    slow.length === 1 && slow[0].ms >= 1500 && slow[0].ms < 1700 && h.firedAt() === null, JSON.stringify(slow));
-  const fast = [];
-  const f = liveHarness({ ackMs: 1000, ackResolves: true, reconnects: fast });
-  await f.runAsync(16000);
-  check("...and a nudge acknowledged in 1.0s (a healthy engine, g7) never does", fast.length === 0 && f.firedAt() !== null, JSON.stringify(fast));
-}
-{
-  const APPSRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8");
-  const fn = APPSRC.slice(APPSRC.indexOf("async function reconnectForSlowEngine("), APPSRC.indexOf("\nasync function applyFallbackConditioning()"));
-  check("the fresh session is the cold-start recovery's reconnect, the floor marked applied, the back primed, a guard of its own",
-    /if \(_slowEngineRetried \|\| fromGen !== sessionGen \|\| billingStarted\) return false;/.test(fn) &&
-    /resetConditionWire\(\);\s*await connectRealtime\(\{ force: true \}\);\s*await waitConnected\(CONNECT_TIMEOUT_MS\);/.test(fn) &&
-    /await applyFallbackConditioning\(\);/.test(fn) && /primeAtConnect\(g\)/.test(fn) && /firstFrameGuardTimer = setTimeout\(/.test(fn));
-  check("...once per go-live: goLive resets the flag where it arms its own guard",
-    /const guardGen = sessionGen;\s*_slowEngineRetried = false;/.test(APPSRC));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

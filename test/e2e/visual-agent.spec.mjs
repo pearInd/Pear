@@ -317,14 +317,7 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
     () => document.getElementById("cameraCard")?.classList.contains("show-live") === true &&
           document.getElementById("scanOverlay")?.hidden === true, 90_000);
 
-  /* THE FRONT HAS SEVERAL SPELLINGS since 2026-10-15: a primed session's cold-start nudge is a FRESH COPY of the front -
-     the same picture re-encoded (freshImageCopy) - so at the reveal the wire holds the copy, while the floor went out as a
-     Blob and every later FRONT swap sends the pre-encoded original. The back was primed before the reveal too. So: the
-     back is whatever the turn puts on the wire (it must differ from the key at the reveal), and the front is every key
-     dispatched before the reveal that is not the back's. */
   const frontKey = await page.evaluate(() => window.__pearMockDecart.wire.imageKey);
-  const preRevealKeys = await page.evaluate(() =>
-    [...new Set(window.__pearMockDecart.dispatches.map((x) => x.imageKey).filter(Boolean))]);
   await shoot("00-front", 0);
 
   /* ── 90 degrees: edge-on, still live, still dressed ─────────────────────── */
@@ -356,7 +349,6 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
     45_000, frontKey);
   await page.waitForTimeout(600);
   const backKey = await page.evaluate(() => window.__pearMockDecart.wire.imageKey);
-  const frontKeys = preRevealKeys.filter((k) => k !== backKey);
   await shoot("02-back", 180);
 
   /* ── and home again: 180 -> 360, which is 0 ─────────────────────────────── */
@@ -365,7 +357,7 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
   await until(page, "the pose sensor to complete the revolution",
     () => window.__pearMockPose.angle >= 359.5);
   await until(page, "the FRONT asset to return after a full 360",
-    (ks) => ks.includes(window.__pearMockDecart?.wire?.imageKey), 45_000, frontKeys);
+    (k) => window.__pearMockDecart?.wire?.imageKey === k, 45_000, frontKey);
   await shoot("03-return-front", 360);
 
   /* ── the evidence file ──────────────────────────────────────────────────────
@@ -404,7 +396,6 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
     tokenMintAttempts: server.tokenMintAttempts(),
     keys: {
       front: frontKey,
-      frontKeys,
       back: backKey,
       frontBytes: statSync(join(GARMENT_DIR, "front.png")).size,
       backBytes: statSync(join(GARMENT_DIR, "back.png")).size,
@@ -422,7 +413,6 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
   expect(backKey, "the back dispatch carried the same asset as the front - " +
     "either the swap never happened or distinctBackOf() rejected the back photo")
     .not.toBe(frontKey);
-  expect(frontKeys.includes(backKey), "the back dispatch carried one of the front's keys").toBe(false);
 
   // 2. Nothing was billed. ?mock_decart=1 is supposed to short-circuit above the mint.
   expect(server.tokenMintAttempts(),

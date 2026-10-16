@@ -177,10 +177,8 @@ console.log("\n── goLive(): the gate is no longer scoped to AI Auto ──")
     "validating after connect would bill for a session conditioned on nothing");
   check("a missing front still aborts the whole run", /if \(!preload\.ok\)/.test(gate) && /return;/.test(gate));
   check("the front-only DOWNGRADE stays unconditional", /if \(!preload\.hasBack\) \{[\s\S]*currentAngle = "front";/.test(gate));
-  /* ...and, since 2026-10-14 (ONE GARMENT, ONE REFERENCE), to a front-only run the gate did not CHOOSE: a garment plain
-     on both sides sent as one reference has lost nothing worth announcing (one-view §3). */
   check("...but its toast is scoped to a run that actually wanted AI Auto",
-    /if \(wantedAutoView && !preload\.oneView\) toast\(/.test(gate),
+    /if \(wantedAutoView\) toast\(/.test(gate),
     "a garment that never had a back must not announce that its back view is unavailable");
 }
 
