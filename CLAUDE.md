@@ -1756,6 +1756,13 @@ back in both. `EXP_REF` is now every session's; `?ref_upload=0` sends the bytes;
 the prime) sends the bytes. `engine-exp` §1.5. Left open from r1/r2: the return's FRONT goes out on the first reading at or
 past the side (SIDE_FIRE 0, lib/orient-engine.js) - one reading late at a normal turn, so a thin strip of the back panel shows
 on the side for ~0.15-0.3s (r1 4.21-4.53s, r2 4.42-4.56s); -0.25 landed the front too early on fast acks (7187b26).
+
+### 7.4 The back goes out near the side - the room asks the engine for a 60-degree early turn (2026-10-17)
+r1/r2 (references uploaded, the back acked in ~0.29s, the output 1.2-1.4s behind the camera): the early turn fired on the first
+reading past 40 (49, 41) and the front print left a chest still three-quarters to the lens (r1 2.51s, r2 2.62s). Replaying the
+recorded readings through lib/orient-engine.js: with `early_turn=60&early_turn_slow=60` the back goes out at 87 / 89 (r1, r2),
+77 (g8, the back print on a chest at 40), and h2 - the clean session - is unchanged at 77. `ORIENT_KNOB_DEFAULTS` in the room
+(no Worker deploy; a URL value still wins). `orient-link` pins it. Not yet measured live.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL

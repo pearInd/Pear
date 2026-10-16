@@ -10889,8 +10889,15 @@ function orientLinkUrl() {
   try { return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/orient"; } catch (_) { return null; }
 }
 
+/* THE BACK GOES OUT NEAR THE SIDE (2026-10-17, r1/r2; g8 before them). With the references uploaded ahead (§7.3) the back is
+   acknowledged in ~0.29s, and with the output ~1.2-1.4s behind the camera it lands on the body as it was ~0.3s BEFORE the send.
+   The early turn fires on the first reading past 40 degrees: r1 read 49, r2 41, and the front print left a chest still
+   three-quarters to the lens (r1 2.51s, r2 2.62s - a plain tee). The next reading in both was 85-89. So the room asks the
+   engine for 60 (its ceiling) on both early-turn paths; a URL value still wins (?early_turn=40&early_turn_slow=40 is the
+   engine's own default). */
+const ORIENT_KNOB_DEFAULTS = { early_turn: "60", early_turn_slow: "60" };
 function orientKnobs() {
-  const out = {};
+  const out = { ...ORIENT_KNOB_DEFAULTS };
   try {
     const q = new URLSearchParams(location.search);
     for (const k of ORIENT_KNOB_KEYS) { const v = q.get(k); if (v !== null) out[k] = v; }
