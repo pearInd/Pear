@@ -1763,6 +1763,18 @@ reading past 40 (49, 41) and the front print left a chest still three-quarters t
 recorded readings through lib/orient-engine.js: with `early_turn=60&early_turn_slow=60` the back goes out at 87 / 89 (r1, r2),
 77 (g8, the back print on a chest at 40), and h2 - the clean session - is unchanged at 77. `ORIENT_KNOB_DEFAULTS` in the room
 (no Worker deploy; a URL value still wins). `orient-link` pins it. Not yet measured live.
+
+### 7.5 The return's pace in a pre-upload session (2026-10-17, s1)
+s1 (60-degree early turn, references uploaded): the outbound right (PEAK through the 3/4 view, the back print from the side),
+the return late - the back panel on a chest already facing the lens at 4.05-4.28s. Its record, and r1/r2/g9: the order read
+-0.03..-0.05 at the side, and the engine's landing projection HELD the front there (an id's ~0.29s ack read as "lands ~240ms
+before its send" - LAND_BASE_MS was calibrated when the turn uploaded the image), FRONT went out a reading later on 0.75-0.77.
+In those sessions the front landed about where it was sent (s1 +0.01s, r1 0.00s, r2 -0.17s). The room now floors `lat` at
+`REF_LAT_FLOOR_MS` (530 - the model's neutral point) only when the session's references went up as ids. Replayed through the
+DEPLOYED engine: FRONT at 3.08 / 3.17 / 2.98s (s1 / r1 / r2) instead of 3.42 / 3.52 / 3.48 - scheduled from the reading before
+the side, landing just before it rather than on the chest. Tried and taken out the same day: SIDE_FIRE -0.1 with the projection
+off (the side reading itself) - return-side's clip landings put two fast turns later (294->299, 305->309); a 450ms schedule
+window - one session later (r2). Not yet measured live.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL

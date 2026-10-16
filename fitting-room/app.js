@@ -7369,6 +7369,10 @@ async function expDownscale(blob) {
 }
 /* The "ref" mode: Blob -> the engine's file id, once uploaded. withPreEncodedReferences() sends the id in its place. */
 const _expFileIds = new WeakMap();
+/* The session whose references went up as ids, and the latency the engine's landing model is then sent at least (see the
+   orientation tick's `lat`): the swap's landing is what the model reads, not an id's fast acknowledgement. */
+let _refUploadedGen = -1;
+const REF_LAT_FLOOR_MS = 530;
 let _expFilesClient = null;
 /** The edge's file route for the render client (`baseUrl`) - our host, never the engine's. The edge's ORIGIN + /f:
  *  the realtime URL carries its own path (`wss://<edge>/v`), and the first real "ref" session posted to /v/f/... - a
@@ -7393,7 +7397,7 @@ async function expUploadReferences(gen) {
     try {
       const r = await _expFilesClient.upload(blob, { ttlSeconds: 3600 });
       const id = r && (r.id || r.file_id);
-      if (typeof id === "string" && id.startsWith("file_")) _expFileIds.set(blob, id);
+      if (typeof id === "string" && id.startsWith("file_")) { _expFileIds.set(blob, id); _refUploadedGen = gen; }
       if (typeof traceOrient === "function") traceOrient("exp-upload", { which, ms: Date.now() - t0, ok: !!id, kb: Math.round(blob.size / 1024) });
     } catch (e) {
       if (typeof traceOrient === "function") traceOrient("exp-upload", { which, ms: Date.now() - t0, ok: false, m: String(e?.message || e).slice(0, 120) });
@@ -10779,7 +10783,16 @@ function createOrientationWatcher() {
         /* THE HEAD OUT OF FRAME: the engine counts the side instead of reading the order's sign. Sent only when true. */
         ...(typeof _poseHeadOut !== "undefined" && _poseHeadOut === true ? { headOut: true } : {}),
         /* The engine's pace (THE ENGINE'S PACE): the return to the front goes out earlier on a slow engine. */
-        lat: typeof engineAckEstimate === "function" ? engineAckEstimate() : null,
+        /* ...floored at REF_LAT_FLOOR_MS when this session's references went up before it (THE REFERENCES GO UP BEFORE THE
+           SESSION): the engine's landing model reads `lat` as the time a swap takes to land, calibrated when the turn uploaded
+           the image; an id is acknowledged in ~0.29s while the swap still lands about where it was sent (s1, r1), and read
+           raw the model held every return at the side reading and sent FRONT a reading late (s1, r1, g9: the back panel on a
+           chest at 4.05-4.28s). */
+        lat: typeof engineAckEstimate === "function" ? (() => {
+          const a = engineAckEstimate();
+          const refs = typeof _refUploadedGen !== "undefined" && _refUploadedGen === sessionGen;
+          return a !== null && refs ? Math.max(a, typeof REF_LAT_FLOOR_MS === "number" ? REF_LAT_FLOOR_MS : 530) : a;
+        })() : null,
         latHi: typeof engineAckHigh === "function" ? engineAckHigh() : null,
         lock: autoOrientation, profile: autoProfile, dualView: currentAngle === AUTO_ANGLE,
         dbg: ORIENT_DEBUG ? orientDebugFacts(vote) : undefined,
