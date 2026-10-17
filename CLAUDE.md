@@ -1840,6 +1840,12 @@ every FRONT queued behind it, and the engine rendered the front reference throug
   (the negative control reveals on the back at 6s; the fix after the front's ack + settle); a front in time reveals as before.
 - **Not fixed - the stuck acknowledgement:** an engine that stops answering set_image (1 of 16 pre-upload sessions) leaves the
   wire busy; re-sending into a control channel that answers nothing was not tried blind.
+- **Measured (9a69687), x3 (1.6x):** the prime and the front acknowledged in time - no hold, the reveal as before, PEAK from the
+  first frame; no snap. The back print on the back 2.77-2.89s, then the back PLAIN 3.01-3.23s - the return's FRONT (decided at
+  order -0.44, ~244 degrees, +50ms; lag 1.14s) landed ~0.3s early. At 1.6x the back's visible span (~0.4s) is no wider than the
+  engine's session-to-session landing spread: of the three 1.6x sessions on the 700 floor, u4 and v1 were clean and x3 lost
+  three frames. Every 1.0x session since the floor (u3, v2, w3, x1) is clean frame by frame. A faster-turn tuning trades this
+  against the back print riding a chest coming round - measured, not guessed, before any change.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
