@@ -1812,7 +1812,20 @@ beside v1's 479. The "chain" the render draws after a turn is the camera clip's 
   PEAK left a three-quarter chest for a frame (2.40s; no back print on it). The 200ms delay ran (1.33 -> 1.54); it cannot repair
   a decision taken on a wrong reading. Across 48 recorded outbound backs, two fired on a one-reading jump of ~340 deg/s (u1,
   w3); a real turn's steepest was ~230 (w2), but the engine records a real ~305 deg/s RETURN step (sideJump) - so a rate bar
-  alone would also drop real readings. Not fixed; a guard needs a measured session.
+  alone would also drop real readings. Fixed in §7.8.
+
+### 7.8 The snap guard - one mirrored reading is not a turn (2026-10-17, w3)
+`poseSnapStep()` (the torso-twist block, measurement only - no Worker deploy): a pose reading whose shoulder order swings from
+a chest to the lens (`SNAP_FROM_ORDER` 0.5+) toward the back faster than `SNAP_DEG_PER_S` (260, over at least 200ms, from the
+last kept reading) is DROPPED - no order, no |yaw|, no shoulder vote from that inference (`torsoTwistObserve()` answers null;
+the pose loop publishes nothing). Never two in a row. The bar sits in the measured gap: of 635 readings in every TEST record
+that left a chest to the lens, the real swings topped at 226 deg/s (m1; w2 218, a 1.6x turn 215), the snaps were 299 (u1) and
+374 (w3). Only from the front half: the back leg's real 250-300 deg/s steps (the n* fast turns) and the return are never
+dropped - a first cut without that bar delayed four fast sessions' FRONT by 0.5-0.6s in the replay. Replayed through the
+deployed engine: w3's BACK 1.33 -> 1.98s and u1's 1.34 -> 1.86s, on real readings; the other 46 records and the 13 recorded
+360s (4 tick phases) decide exactly as before. `?snap_guard=0` is the old measurement; a TEST record logs `pose-snap`.
+`torso-twist` §7. A snap is rare (2 of 48 sessions): a live measurement shows the guard harmless on a clean turn and, when one
+occurs, the `pose-snap` event and where the back went out.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL

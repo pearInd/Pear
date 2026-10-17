@@ -303,6 +303,59 @@ console.log("\n── §6 THE BASELINE RE-LEARNS (2026-10-05) - a square-on widt
     typeof X.poseTorsoWidths === "function" && /\(ls\.x - rs\.x\) \* k \/ th/.test(BLOCK) && /function poseTorsoWidths\(result, aspect = 1\)/.test(BLOCK));
 }
 
+console.log("\n── §7 THE SNAP GUARD (2026-10-17, w3) - one mirrored reading is not a turn ──");
+{
+  const load = (search = "") => new Function("location", "ORIENT_POSE_FACING_MARGIN",
+    BLOCK + "\nreturn { makeTwistState, torsoTwistStep, torsoOrder, torsoYawGuard, poseSnapStep, SNAP_GUARD_ENABLED, SNAP_DEG_PER_S };")({ search }, 0.25);
+  const X = load();
+  /* w3's three readings: 0.9, the snap -0.31 (one reading "past the side"), 0.46 - 240ms apart. */
+  const s = X.makeTwistState();
+  const w3 = [X.poseSnapStep(s, 0.9, 1090), X.poseSnapStep(s, -0.31, 1330), X.poseSnapStep(s, 0.46, 1570), X.poseSnapStep(s, -0.19, 1980)];
+  check("§7.1 w3: the snap (0.9 -> -0.31 in 240ms, ~340 deg/s) is dropped; the readings around it are kept",
+    JSON.stringify(w3) === JSON.stringify([false, true, false, false]), JSON.stringify(w3));
+  const s2 = X.makeTwistState();
+  const twice = [X.poseSnapStep(s2, 1.0, 0), X.poseSnapStep(s2, 0.0, 240), X.poseSnapStep(s2, -0.9, 480)];
+  check("§7.2 never two in a row: the reading after a drop is kept even when it is measured from the last kept one",
+    JSON.stringify(twice) === JSON.stringify([false, true, false]), JSON.stringify(twice));
+  const keep = (a, b, dt = 240) => { const t = X.makeTwistState(); X.poseSnapStep(t, a, 0); return X.poseSnapStep(t, b, dt) === false; };
+  check("§7.3 the fastest real swings in the TEST records are kept: m1 0.99 -> 0.39, w2 0.81 -> -0.01, a 1.6x turn 0.91 -> 0.2",
+    keep(0.99, 0.39) && keep(0.81, -0.01) && keep(0.91, 0.2));
+  check("§7.4 only from a chest to the lens: a fast step deeper into the back (-0.1 -> -0.95) is kept",
+    keep(-0.1, -0.95) && keep(0.3, -0.9));
+  check("§7.5 the return is never dropped: -0.9 -> 0.5 in one reading", keep(-0.9, 0.5));
+  check("§7.6 readings far apart are not compared (a gap is not a speed)", keep(0.9, -0.31, 900));
+  const OFF = load("?snap_guard=0"), so = OFF.makeTwistState(); OFF.poseSnapStep(so, 0.9, 1090);
+  check("§7.7 ?snap_guard=0 drops nothing (the old measurement)", OFF.SNAP_GUARD_ENABLED === false && OFF.poseSnapStep(so, -0.31, 1330) === false);
+  /* The thirteen recorded 360s read as the room reads them (a pose every ~240ms, four phases): nothing is dropped, so no
+     decision can move. The TEST records' replay through the deployed engine (w3/u1 moved, 46 others identical) is in CLAUDE.md. */
+  let drops = 0, reads = 0;
+  for (const rows of Object.values(DATA.clips)) {
+    for (const phase of [0, 60, 120, 180]) {
+      const st = X.makeTwistState(); let next = phase;
+      for (const [rt, sh, hip, th] of rows) {
+        if (sh === null || rt < next) continue;
+        next = rt + 240;
+        const w = { sh, hip, th }, o = X.torsoOrder(st, w);
+        if (o !== null) { reads++; if (X.poseSnapStep(st, o, rt)) { drops++; continue; } }
+        X.torsoTwistStep(st, w, null, rt);
+      }
+    }
+  }
+  check(`§7.8 the thirteen recorded 360s at the room's reading rate, four phases: no reading dropped (${drops} of ${reads})`, reads > 400 && drops === 0);
+  const tight = load(), tt = tight.makeTwistState(); tight.poseSnapStep(tt, 0.9, 0);
+  check("§7.9 NEGATIVE CONTROL: the w3 jump at the threshold's own speed is dropped, just under it is kept",
+    (() => { const a = X.makeTwistState(); X.poseSnapStep(a, 1, 0); return X.poseSnapStep(a, Math.cos((X.SNAP_DEG_PER_S * 0.24 + 2) * Math.PI / 180), 240); })() === true &&
+    (() => { const a = X.makeTwistState(); X.poseSnapStep(a, 1, 0); return X.poseSnapStep(a, Math.cos((X.SNAP_DEG_PER_S * 0.24 - 2) * Math.PI / 180), 240); })() === false);
+  /* Wiring: the hook checks before the reading reaches any state, and a drop publishes nothing in the pose loop. */
+  const hook = between(APP, "function torsoTwistObserve(result, worldYawAbs, now) {", "\n/** \"back\" while a fresh torso-only turn holds");
+  check("§7.10 the hook drops a snap before torsoTwistStep sees it, and answers null",
+    hook.indexOf("poseSnapStep(_poseTwist, ordIn, now)") > 0 && hook.indexOf("poseSnapStep(_poseTwist, ordIn, now)") < hook.indexOf("torsoTwistStep(_poseTwist") &&
+    /traceOrient\("pose-snap"/.test(hook) && /return null;\s*\n\s*\}\s*\n\s*const on = torsoTwistStep/.test(hook));
+  check("§7.11 ...and the pose loop publishes no vote, |yaw| or order from that inference",
+    /const snapped = !!\(sig && Number\.isFinite\(sig\.yaw\)\) && yawAbsNow === null;\s*\n\s*if \(!snapped\) \{\s*\n\s*if \(facingSep !== null\)/.test(APP) &&
+    /if \(sig && Number\.isFinite\(sig\.yaw\) && !snapped\) \{/.test(APP));
+}
+
 console.log("");
 if (fails) { console.log(`${fails} check(s) FAILED`); process.exit(1); }
 console.log("torso-twist: all checks passed.");

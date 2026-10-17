@@ -8678,13 +8678,50 @@ function headRoomStep(s, w) {
   else { s.hiN = room > HEAD_ROOM_IN ? (s.hiN || 0) + 1 : 0; if (s.hiN >= HEAD_IN_READINGS) { s.headOut = false; s.hoN = 0; } }
   return s.headOut === true;
 }
+/* ── THE SNAP GUARD - one mirrored reading is not a turn (2026-10-17, w3) ─────────────────────────────────────────
+   The w3 session, frame by frame: PEAK left a chest still three-quarters to the lens for a frame (2.40s). Its TEST record:
+   the shoulder order read 0.9 -> -0.31 -> 0.46 across three readings - the shoulders "past the side" for ONE reading, at a
+   body of ~55 degrees - and the world |yaw| of that same inference 4 -> 64; the engine's early turn fired on it, so the
+   back went out a turn's worth early. The pose model mirrored the skeleton for one inference. Across every TEST record
+   (635 readings that left a chest clearly to the lens, order 0.5+), the fastest real swing toward the back was 226 deg/s
+   (m1; w2 218, a 1.6x turn 215); the two snaps were 374 (w3) and 299 (u1 - the session whose early back was withdrawn
+   mid-turn). So a reading that swings from a chest at SNAP_FROM_ORDER or more toward the back faster than SNAP_DEG_PER_S
+   (over at least SNAP_DT_FLOOR_MS) is DROPPED: no order, no |yaw|, no shoulder vote from that inference - it reads as an
+   unreadable frame. Never two in a row (a turn that really is that fast reads the next inference); the next is measured
+   from the last kept one. Only from a chest to the lens: the back leg's fast real steps (the n* 1.6-1.8x turns read
+   250-300 deg/s going deeper into the back) are never dropped, nor is the return. Replayed through the deployed engine:
+   w3's back 1.33 -> 1.98s and u1's 1.34 -> 1.86s, on real readings; the other 46 records and the 13 recorded 360s (4 tick
+   phases each) decide exactly as before. ?snap_guard=0 is the old measurement; a TEST record logs every drop (pose-snap). */
+const SNAP_DEG_PER_S = 260;
+const SNAP_FROM_ORDER = 0.5;
+const SNAP_DT_FLOOR_MS = 200, SNAP_DT_MAX_MS = 700;
+const SNAP_GUARD_ENABLED = (() => {
+  try { return new URLSearchParams(location.search).get("snap_guard") !== "0"; } catch (_) { return true; }
+})();
+/** One order reading into the guard. Pure over (state, reading) - torso-twist drives it with literals.
+ *  @returns {boolean} true when this reading is a snap and must not be published */
+function poseSnapStep(s, ord, now, enabled = SNAP_GUARD_ENABLED) {
+  if (!enabled || ord === null || !Number.isFinite(ord)) return false;
+  const deg = (o) => Math.acos(Math.max(-1, Math.min(1, o))) * 180 / Math.PI;
+  const p = s.snapPrev;
+  if (p && !s.snapLast && p.o >= SNAP_FROM_ORDER) {
+    const dt = now - p.at;
+    if (dt > 0 && dt <= SNAP_DT_MAX_MS && (deg(ord) - deg(p.o)) / Math.max(dt, SNAP_DT_FLOOR_MS) * 1000 > SNAP_DEG_PER_S) {
+      s.snapLast = true;
+      return true;
+    }
+  }
+  s.snapPrev = { o: ord, at: now };
+  s.snapLast = false;
+  return false;
+}
 let _poseTwist = makeTwistState();
 /* The latest shoulder order as a share of square-on (torsoOrder) and when it was read - the sample carries both. */
 let _poseOrd = null, _poseOrdAt = 0;
 /* Whether the head is out of the frame (headRoomStep), sent with the order (THE HEAD OUT OF FRAME). */
 let _poseHeadOut = false;
 /** The pose loop's hook: one inference in, the published |yaw| out (the world one unless a torso-only
- *  turn is being read). Logs and records the on/off edges. */
+ *  turn is being read) - or null for a reading THE SNAP GUARD drops. Logs and records the on/off edges. */
 function torsoTwistObserve(result, worldYawAbs, now) {
   const aspect = typeof _poseAspect === "number" && _poseAspect > 0 ? _poseAspect : 1;
   /* A FRAME OF ANOTHER SHAPE IS ANOTHER PICTURE (2026-10-05, 18:22): in a portrait room the camera opened 9:16 and turned
@@ -8700,6 +8737,14 @@ function torsoTwistObserve(result, worldYawAbs, now) {
   const was = _poseTwist.active;
   const relearnedBefore = _poseTwist.relearned || 0;
   const widths = poseTorsoWidths(result, aspect);
+  /* THE SNAP GUARD, before the reading reaches any state: a dropped inference teaches and publishes nothing. */
+  const ordIn = torsoOrder(_poseTwist, widths);
+  if (ordIn !== null && poseSnapStep(_poseTwist, ordIn, now)) {
+    if (ORIENT_DEBUG) console.log(`[PEAR][ORIENT] snap guard: shoulder order ${ordIn.toFixed(2)} one reading after ${_poseTwist.snapPrev.o.toFixed(2)} - dropped`);
+    if (typeof traceOrient === "function") traceOrient("pose-snap", { o: Math.round(ordIn * 100) / 100, prev: Math.round(_poseTwist.snapPrev.o * 100) / 100,
+      dt: Math.round(now - _poseTwist.snapPrev.at), y: Number.isFinite(worldYawAbs) ? Math.round(worldYawAbs) : null });
+    return null;
+  }
   const on = torsoTwistStep(_poseTwist, widths, worldYawAbs, now);
   if ((_poseTwist.relearned || 0) !== relearnedBefore && typeof traceOrient === "function") {
     traceOrient("baseline-relearn", { sh: widths ? Math.round(Math.abs(widths.sh) * 100) / 100 : null });
@@ -18654,14 +18699,19 @@ function startPresenceWatcher() {
          Published only when the torso was readable, so an unreadable frame goes stale rather than
          reading as edge-on. */
       const facingSep = poseShoulderFacing(result);
-      if (facingSep !== null) { _poseFacingSep = facingSep; _poseFacingAt = now; }
-      else _poseTorsoLostAt = now;   // the turn window reads the gap from this - the side-view pass, lib/orient-engine.js
       /* A torso turned over planted legs publishes the image angle when it exceeds the world one
          (THE TORSO-ONLY TURN); every other reading publishes exactly what it always did. */
       const yawAbsNow = sig && Number.isFinite(sig.yaw)
         ? (typeof torsoTwistObserve === "function" ? torsoTwistObserve(result, Math.abs(sig.yaw), now) : Math.abs(sig.yaw))
         : null;
-      if (sig && Number.isFinite(sig.yaw)) {
+      /* THE SNAP GUARD (torsoTwistObserve answers null for a readable yaw): a mirrored inference publishes nothing at all -
+         no vote, no |yaw|, no order - and the last kept reading simply ages, as after an unreadable frame. */
+      const snapped = !!(sig && Number.isFinite(sig.yaw)) && yawAbsNow === null;
+      if (!snapped) {
+      if (facingSep !== null) { _poseFacingSep = facingSep; _poseFacingAt = now; }
+      else _poseTorsoLostAt = now;   // the turn window reads the gap from this - the side-view pass, lib/orient-engine.js
+      }
+      if (sig && Number.isFinite(sig.yaw) && !snapped) {
         _torsoYawRise = orientYawRise(_torsoYawAbs, _torsoYawAt, yawAbsNow, now);   // before the publish overwrites the previous reading
         _torsoYawAbs = yawAbsNow;
         _torsoYawAt  = now;
