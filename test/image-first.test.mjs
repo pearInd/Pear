@@ -557,8 +557,15 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
   check("no colour word or subtype noun reaches any prompt",
     !/colorName\(activeColorOf\(/.test(codeOnly) &&
     !/SHIRT_NOUN\[/.test(codeOnly) && !/SUBTYPE_PROMPT\[/.test(codeOnly));
-  check("no DENSE clause is assembled by any builder",
-    !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeOnly),
+  /* ...with ONE exception, an experiment (2026-10-17, "there's a chain there"): imageOnlyPrompt's PASSTHROUGH restores
+     DENSE.inpaintLock by the restore path (CLAUDE.md §0) - only for a request carrying exp "pass", a TEST session's
+     ?pear_exp=pass, so every other prompt is main's (prompt-engine's pin). Exactly that gated form, once; any other
+     DENSE clause, or this one ungated, still fails here. */
+  const gatedPass = /\.\.\.\(passthrough \? \[\[P\.HIGH, DENSE\.inpaintLock\]\] : \[\]\),/g;
+  check("no DENSE clause is assembled by any builder - but the passthrough experiment, gated on its request",
+    !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeOnly.replace(gatedPass, "")) &&
+    (codeOnly.match(gatedPass) || []).length === 1 &&
+    /const passthrough = typeof _requestExp !== "undefined" && _requestExp === "pass";/.test(codeOnly),
     "the DENSE table is a restore library now, not an assembly source");
   /* RESTORED - "I sized down a tee and it rendered exactly like true-to-size". The size
      picker (setSizeOverride()) always worked; fitSentence() was the only route its choice
