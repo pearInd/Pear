@@ -885,6 +885,11 @@ function referenceOnWire() { return !!rtImageOnWire; }
    Reset per session in connectRealtime(). */
 let lastImageUploadAckAt = 0;
 let wireGarmentId = null;
+/* THE WIRE HOLDS THE PRIMED BACK (2026-10-17, x2): true from the prime's acknowledged BACK (primeBackReference) until the
+   next acknowledged image upload - the front that primeAtConnect sends after it. The garment id cannot say this (the back
+   and the front are one garment), and in x2 the front's acknowledgement came 5.3s late: the settle ceiling expired and the
+   room revealed on the back - its print on the chest for 0.9s. armFirstFrameBilling holds the reveal while this is true. */
+let _wireHoldsPrimedBack = false;
 
 /** Stamp an ACKNOWLEDGED full image upload. Only after the ack resolves - a send that failed
  *  never reached the model and opened no render window.
@@ -894,6 +899,7 @@ let wireGarmentId = null;
 function noteImageUploadAcked(where, garmentId) {
   lastImageUploadAckAt = Date.now();
   if (garmentId !== undefined) wireGarmentId = garmentId;
+  _wireHoldsPrimedBack = where === "primeBack";
   if (typeof window !== "undefined" && window.__pearDebugFrameTiming) {
     console.log(`[PEAR][DEBUG] image upload acknowledged (${where}) - garment on the wire: ${wireGarmentId};`,
       `the reveal holds ${REFERENCE_RENDER_SETTLE_MS}ms for Decart's render to switch to it`);
@@ -6541,7 +6547,7 @@ async function connectRealtime({ force = false } = {}) {
   /* ...nor any render window, nor any garment identity - a stamp left by the last session
      would let this session's reveal gate judge its first frame against the wrong upload.
      typeof-guarded: signaling-retry.test.mjs runs this function standalone. */
-  if (typeof lastImageUploadAckAt !== "undefined") { lastImageUploadAckAt = 0; wireGarmentId = null; }
+  if (typeof lastImageUploadAckAt !== "undefined") { lastImageUploadAckAt = 0; wireGarmentId = null; if (typeof _wireHoldsPrimedBack !== "undefined") _wireHoldsPrimedBack = false; }
   /* ...and the QUEUE with them. A write left pending against the client we just
      disconnected would otherwise make this session's very first apply see wireBusy() and
      wait behind a promise that can no longer settle - the go-live hang, reintroduced by
@@ -16049,6 +16055,10 @@ const MODEL_READY_STABLE_MS     = 300;   // ...spanning at least this many ms
    applyLook() sends on the turn - with the look's wire prompt (angle-free, the same string). A look whose halves have
    no back of their own has a back composite that IS the front one: nothing to prime. */
 let _primedBackGen = -1;
+/* How long, from the reveal gate's arming, the reveal may wait for the front to replace the primed back (armFirstFrameBilling,
+   NEVER ON THE PRIMED BACK) - past REVEAL_SETTLE_MAX_MS (6s), 4s+ under FIRST_FRAME_TIMEOUT_MS's teardown. x2's front landed
+   7.3s after arming. */
+const PRIME_BACK_HOLD_MAX_MS = 11000;
 async function primeBackReference(gen) {
   if (_primedBackGen === gen) return false;
   _primedBackGen = gen;
@@ -16146,6 +16156,7 @@ function armFirstFrameBilling(video, gen) {
      hold measured from arming would be spent on the handshake. See CONFIG.COLD_START_MIN_HOLD_MS. */
   let firstQualifyingAt = null;
   let reasserted = false;
+  let heldForPrimedBack = false;   // (6) NEVER ON THE PRIMED BACK - this gate has waited on the prime's back
   /* ?cold_hold=<ms> - tune the hold live, 0 restores the pre-2026-09-16 behaviour exactly. */
   const minHoldMs = (() => {
     let raw = null;
@@ -16394,7 +16405,21 @@ function armFirstFrameBilling(video, gen) {
     const garmentMismatch = settleHoldEnabled && wireGarmentId !== null && wireGarmentId !== selectedGarmentId();
     const wrongGarmentHold = garmentMismatch && !settleGateExpired();
     if (wrongGarmentHold && !settleHold) redispatchColdStart(gen, NaN, "wrong-garment");
-    const qualifies = isGarmentApplied && dressed && !stillRaw && !settleHold && !wrongGarmentHold;
+    /* ── (6) NEVER ON THE PRIMED BACK (2026-10-17, x2) ────────────────────────────────────────────────────────────
+       The prime sends the BACK at connect and the front after it (primeAtConnect). x2's front was acknowledged 5.3s late - it
+       was in flight as the engine started generating - so REVEAL_SETTLE_MAX_MS expired and the reveal opened on the back:
+       its print on a chest facing the lens for 0.9s. While the engine's last acknowledged image is that back
+       (_wireHoldsPrimedBack), and then REFERENCE_RENDER_SETTLE_MS more for the front's render to switch, the reveal waits -
+       past REVEAL_SETTLE_MAX_MS, up to PRIME_BACK_HOLD_MAX_MS from arming, under FIRST_FRAME_TIMEOUT_MS's teardown. Past that
+       it reveals as before (a torn-down session is worse). typeof-guarded: this function runs standalone in its suites. */
+    const primeBackOnWire = settleHoldEnabled && typeof _wireHoldsPrimedBack !== "undefined" && _wireHoldsPrimedBack === true;
+    if (primeBackOnWire && !heldForPrimedBack) {
+      heldForPrimedBack = true;
+      if (typeof traceOrient === "function") traceOrient("reveal-hold-prime", { ms: Date.now() - armedAt });
+    }
+    const primeBackHold = (primeBackOnWire || (heldForPrimedBack && renderSettling())) &&
+      Date.now() - armedAt < (typeof PRIME_BACK_HOLD_MAX_MS === "number" ? PRIME_BACK_HOLD_MAX_MS : 11000);
+    const qualifies = isGarmentApplied && dressed && !stillRaw && !settleHold && !wrongGarmentHold && !primeBackHold;
     if (!qualifies) {
       stableSinceMs = null;
       stableFrameCount = 0;

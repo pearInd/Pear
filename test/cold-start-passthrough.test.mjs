@@ -625,7 +625,8 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
      §1 replays the timeline against the real gate) - and this check asserts that wiring. */
   check("...and the reveal cannot land inside the re-assert's own render wait",
     CONFIG.COLD_START_REASSERT_MS < CONFIG.COLD_START_MIN_HOLD_MS &&
-    /const qualifies = isGarmentApplied && dressed && !stillRaw && !settleHold && !wrongGarmentHold;/.test(APP) &&
+    /* (6) NEVER ON THE PRIMED BACK (2026-10-17) joins the same line - the settle hold is still in it. */
+    /const qualifies = isGarmentApplied && dressed && !stillRaw && !settleHold && !wrongGarmentHold && !primeBackHold;/.test(APP) &&
     CONFIG.REFERENCE_RENDER_SETTLE_MS >= 1100,
     "a fixed hold cannot cover a render that finishes after it; the settle hold waits for it");
   check("the config states the cost in billed seconds, because there is none",

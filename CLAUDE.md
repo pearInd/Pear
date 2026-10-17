@@ -1825,7 +1825,21 @@ dropped - a first cut without that bar delayed four fast sessions' FRONT by 0.5-
 deployed engine: w3's BACK 1.33 -> 1.98s and u1's 1.34 -> 1.86s, on real readings; the other 46 records and the 13 recorded
 360s (4 tick phases) decide exactly as before. `?snap_guard=0` is the old measurement; a TEST record logs `pose-snap`.
 `torso-twist` §7. A snap is rare (2 of 48 sessions): a live measurement shows the guard harmless on a clean turn and, when one
-occurs, the `pose-snap` event and where the back went out.
+occurs, the `pose-snap` event and where the back went out. **Measured (3f37551):** x1 (the w3 setup, normal turn) - no snap, no
+reading dropped, clean frame by frame (PEAK through the 3/4 front where w3 lost it). x2 (1.6x) - no snap either, but see §7.9.
+
+### 7.9 Never reveal on the primed back; an engine that stops acknowledging (2026-10-17, x2)
+x2 (1.6x turn, no snap): the back print on a chest facing the lens for the first 0.9s, and the back view drawn with the FRONT's
+lettering. Its socket log: the prime's back acknowledged in 0.35s, the front sent right after it was in flight as the engine
+started generating and was acknowledged **5.3s** later (+0.17s, after the reveal); REVEAL_SETTLE_MAX_MS (6s) had expired, so the
+room revealed on the back. Then the turn's BACK (+1.64s) was never acknowledged at all ("Control channel closed" at the end),
+every FRONT queued behind it, and the engine rendered the front reference throughout. x1, minutes earlier: every ack 0.26-0.28s.
+- **Fixed - the reveal:** `_wireHoldsPrimedBack` (true from the prime's acknowledged back to the next acknowledged image) holds
+  the reveal (armFirstFrameBilling's gate (6)) past the settle ceiling, then REFERENCE_RENDER_SETTLE_MS for the front's render,
+  up to `PRIME_BACK_HOLD_MAX_MS` (11s from arming, under FIRST_FRAME_TIMEOUT_MS's 15s teardown). `reveal-settle` §1c replays x2
+  (the negative control reveals on the back at 6s; the fix after the front's ack + settle); a front in time reveals as before.
+- **Not fixed - the stuck acknowledgement:** an engine that stops answering set_image (1 of 16 pre-upload sessions) leaves the
+  wire busy; re-sending into a control channel that answers nothing was not tried blind.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL

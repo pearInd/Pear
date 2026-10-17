@@ -78,7 +78,7 @@ function fakeTime(start = 10_000_000) {
    applyActive() models a full upload: the wire is busy until the ack lands ackMs later, and the
    ack is stamped through the real noteImageUploadAcked() - exactly what applyGarment() does. */
 function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_HOLD_MS,
-                       selectedId = "G1", floorId = "G1", floorAckAgoMs = 3000 } = {}) {
+                       selectedId = "G1", floorId = "G1", floorAckAgoMs = 3000, primeFrontAckMs = null, arm = ARM } = {}) {
   const T = fakeTime();
   let frameCb = null, firedAt = null, busy = false;
   const acks = [];
@@ -113,7 +113,7 @@ function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_
     window: {},
     Date: T.Date,
   };
-  const body = SETTLE + "\n" + ARM +
+  const body = SETTLE + "\n" + arm +
     "\nreturn {" +
     " arm: () => armFirstFrameBilling(video, gen)," +
     " note: (w, id) => noteImageUploadAcked(w, id)," +
@@ -130,6 +130,12 @@ function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_
   const connectAt = T.now();
   api.note("connect", floorId);
   T.advance(floorAckAgoMs);
+  /* THE PRIME (primeAtConnect): the BACK acknowledged, then the front in flight until primeFrontAckMs after arming. */
+  if (primeFrontAckMs !== null) {
+    api.note("primeBack");
+    busy = true;
+    T.setTimeout(() => { busy = false; acks.push(T.now()); api.note("applyGarment", selectedId); }, primeFrontAckMs);
+  }
   const armedAt = T.now();
   api.arm();
   const tick = () => { const cb = frameCb; frameCb = null; if (cb) cb(); };
@@ -185,6 +191,35 @@ console.log("── §1 THE REPORTED TIMELINE, replayed against the REAL gate �
       h.firedAt() !== null && h.firedAt() - h.acks[h.acks.length - 1] >= CONFIG.REFERENCE_RENDER_SETTLE_MS,
       `revealed ${h.firedAt() - h.acks[h.acks.length - 1]}ms after the ack`);
   }
+}
+
+console.log("\n── §1c NEVER ON THE PRIMED BACK (2026-10-17, x2) ──");
+{
+  /* x2: the prime's BACK acknowledged at connect, the front after it acknowledged 7.3s after the gate armed - past
+     REVEAL_SETTLE_MAX_MS (6s). The engine renders the back until the front's render switches. */
+  const FRONT = 7300;
+  const neg = liveHarness({ primeFrontAckMs: FRONT, arm: ARM.replace(" && !primeBackHold;", ";") });
+  neg.run(12000);
+  check("negative control: without (6) the reveal opens on the BACK - after the settle ceiling, before the front's ack",
+    neg.firedAt() !== null && neg.firedAt() - neg.armedAt >= CONFIG.REVEAL_SETTLE_MAX_MS && neg.firedAt() - neg.armedAt < FRONT,
+    `revealed ${neg.firedAt() === null ? "never" : neg.firedAt() - neg.armedAt}ms after arming`);
+  const h = liveHarness({ primeFrontAckMs: FRONT });
+  h.run(12000);
+  check("THE FIX: the reveal waits for the front's ack and its render switch - never on the primed back",
+    h.firedAt() !== null && h.firedAt() - (h.armedAt + FRONT) >= CONFIG.REFERENCE_RENDER_SETTLE_MS,
+    `revealed ${h.firedAt() === null ? "never" : h.firedAt() - h.armedAt}ms after arming; front acked at ${FRONT}`);
+  const late = liveHarness({ primeFrontAckMs: 30000 });
+  late.run(16000);
+  check("...and a front that never comes cannot hold it past PRIME_BACK_HOLD_MAX_MS (11s) - under the 15s teardown",
+    late.firedAt() !== null && late.firedAt() - late.armedAt >= 11000 && late.firedAt() - late.armedAt < 12000,
+    `revealed ${late.firedAt() === null ? "never" : late.firedAt() - late.armedAt}ms after arming`);
+  const fast = liveHarness({ primeFrontAckMs: 300 });
+  fast.run(8000);
+  check("...while a front acknowledged in time reveals exactly as before (the prime costs nothing)",
+    fast.firedAt() !== null && fast.firedAt() - fast.armedAt < CONFIG.REVEAL_SETTLE_MAX_MS, `${fast.firedAt() - fast.armedAt}ms`);
+  check("the ceiling sits under the first-frame teardown",
+    /const PRIME_BACK_HOLD_MAX_MS = 11000;/.test(APP) && /const FIRST_FRAME_TIMEOUT_MS = 15000;/.test(APP) &&
+    /_wireHoldsPrimedBack = where === "primeBack";/.test(APP));
 }
 
 console.log("\n── §1b THE OTHER HOLDS THE SETTLE GATE ADDS ──");
