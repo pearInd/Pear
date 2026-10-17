@@ -1796,6 +1796,23 @@ chest comes round - no back print on a chest, no front print on a back. v1's nex
 read the front lock: harmless (the trigger is unarmed after its fire - it can neither fire nor withdraw on that tick). The
 media send estimate (`avail`, ~470 in u4/v1) is the congestion controller's ramp, not the line: a speed test read 31 Mbps up
 beside v1's 479. The "chain" the render draws after a turn is the camera clip's white headset cable.
+
+### 7.7 Pants, the full look, and the chain clause - measured 2026-10-17 (w1-w3, on 6c656e2)
+- **w1, pants** (1154009415, the shorts clip): the shorts from the first frame, the drawstrings on the 3/4 front, the side
+  plain, the back's MIAMI side stripe from 3.00s, the back plain (no crest), the crest on the front of the leg from 3.99s.
+  One faint crest at the side view itself (2.89s), on the swap. Back decided 1.74, sent 1.96 (the delay), lag 0.99s.
+- **w2, full look** (PEAK + Chicago shorts 3108650200): PEAK and CHICAGO on the 3/4 front, the side plain, the back print and
+  the text-less black back of the shorts on the back, PEAK back as the chest comes round. CHICAGO returns only in part after the
+  turn ("CH..") - the engine redrawing the text, not the back (the back has none); l2 (an older look session) ends the same.
+- **w3, the chain clause** (`?pear_exp=pass`, TEST-only: DENSE.inpaintLock restored on request, the engine's prompt_ack carried
+  it): **the chain still came, 4.43s to the end. Reverted (c46bc82).** The render draws the headset cable as a chain whatever
+  the clause; a prompt cannot name it (summoning-tokens). The fix is in the input (the cable behind the back when testing).
+- **w3 also found:** BACK went out on a pose SNAP - the order read 0.9 -> -0.31 -> 0.46 across three readings (the shoulders
+  "past the side" for one reading at a body of ~55 degrees), |yaw| 4 -> 64 on the same reading, the early turn fired on it, and
+  PEAK left a three-quarter chest for a frame (2.40s; no back print on it). The 200ms delay ran (1.33 -> 1.54); it cannot repair
+  a decision taken on a wrong reading. Across 48 recorded outbound backs, two fired on a one-reading jump of ~340 deg/s (u1,
+  w3); a real turn's steepest was ~230 (w2), but the engine records a real ~305 deg/s RETURN step (sideJump) - so a rate bar
+  alone would also drop real readings. Not fixed; a guard needs a measured session.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
