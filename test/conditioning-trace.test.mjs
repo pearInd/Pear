@@ -229,12 +229,9 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
     /identityLockSentence\(item, angle\)/.test(resolverCode) &&
     /angle !== "back"/.test(APP.slice(APP.indexOf("function identityLockSentence"))),
     "the back branch must withhold the print half - see identityLockSentence");
-  /* ...and the PASSTHROUGH experiment (2026-10-17) is the only other P.HIGH part: DENSE.inpaintLock, gated on a request
-     carrying exp "pass" (a TEST session's ?pear_exp=pass) - image-first pins that gated form. */
-  const resolverNoExp = resolverCode.replace(/\.\.\.\(passthrough \? \[\[P\.HIGH, DENSE\.inpaintLock\]\] : \[\]\),/, "");
   check("the one bought-back clause rides at P.HIGH, so it sheds before the anchor does",
-    (resolverNoExp.match(/P\.HIGH/g) || []).length === 1 &&
-    /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverNoExp), resolverCode);
+    (resolverCode.match(/P\.HIGH/g) || []).length === 1 &&
+    /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverCode), resolverCode);
   /* NOW SCOPED THREE WAYS, not two. The closure lock was shipping on plain tees, where
      "buttons / zip / placket" were the only construction words on the wire and the model
      rendered a garment that had them - see PLAIN_TEE_ANCHOR and plain-tee-fidelity.test.mjs.

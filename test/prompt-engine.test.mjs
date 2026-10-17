@@ -156,7 +156,7 @@ console.log("\n── §4 the sanitiser ──");
     !("secret" in s.item) && !("colorHex" in s.item));
   check("the log label is reduced to a safe token", /^[\w.-]+$/.test(s.where));
   check("a body that is not an object is a front, single, no-facts request",
-    JSON.stringify(LIB.sanitizePromptRequest(null)) === JSON.stringify({ kind: "single", angle: "front", inProfile: false, delta: 0, where: "api", exp: "", item: {} }));
+    JSON.stringify(LIB.sanitizePromptRequest(null)) === JSON.stringify({ kind: "single", angle: "front", inProfile: false, delta: 0, where: "api", item: {} }));
 }
 
 console.log("\n── §5 the browser carries no prompt wording ──");

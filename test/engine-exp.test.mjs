@@ -46,25 +46,6 @@ console.log("\n── §1 only a TEST session ──");
     mode("", false)[2] === true && mode("?ref_upload=0", false)[2] === false && mode("?ref_upload=0&pear_exp=ref", true)[2] === true);
   check("§1.3 an unknown mode is no mode", mode("?pear_exp=fast", true)[0] === "");
   check("§1.4 ...and the TEST record carries it", /exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP \? PEAR_EXP : undefined,/.test(APP));
-  /* THE PASSTHROUGH EXPERIMENT (2026-10-17, "there's a chain there"): TEST-only like the others. */
-  check("§1.6 \"pass\" is a TEST session's mode, and no shopper's", mode("?pear_exp=pass", true)[0] === "pass" && mode("?pear_exp=pass", false)[0] === "");
-}
-
-console.log("\n── §1b the passthrough experiment: one clause, only on request ──");
-{
-  const { promptForRequest, sanitizePromptRequest } = await import("../lib/prompts.js");
-  const CLAUSE = "Face, skin, hands and background pass through untouched.";
-  const req = (extra) => promptForRequest(sanitizePromptRequest({ kind: "single", angle: "front", delta: 0,
-    item: { name: "PEAK tee", type: "shirt", __bottoms: false }, ...extra }));
-  const plain = req({}), pass = req({ exp: "pass" });
-  check("§1b.1 the room sends exp \"pass\" with every prompt request in that mode - nothing otherwise",
-    /fetchWirePrompt\(\{ \.\.\.req, where: where \|\| "prompt",\s*\n\s*\.\.\.\(typeof PEAR_EXP !== "undefined" && PEAR_EXP === "pass" \? \{ exp: "pass" \} : \{\}\) \}\)/.test(APP));
-  check("§1b.2 exp \"pass\" adds exactly the passthrough clause; the rest of the prompt is unchanged",
-    !plain.includes(CLAUSE) && pass.includes(CLAUSE) && pass.replace(" " + CLAUSE, "") === plain, pass);
-  check("§1b.3 any other exp is main's wire, byte for byte", req({ exp: "necklace" }) === plain && req({ exp: 1 }) === plain);
-  check("§1b.4 ...and the request state is reset after each prompt (the next request is main's)", req({}) === plain);
-  check("§1b.5 the full look's prompt is untouched by it",
-    promptForRequest(sanitizePromptRequest({ kind: "look", exp: "pass" })) === promptForRequest(sanitizePromptRequest({ kind: "look" })));
 }
 
 console.log("\n── §2 the send ──");

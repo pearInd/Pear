@@ -7330,15 +7330,13 @@ const _assetBlobCache = new Map();   // url → Promise<Blob|null>  (LRU-capped,
    ?pear_exp=:  "small"     - every reference downscaled to EXP_SMALL_W wide before it is sent;
                 "ref"       - both references uploaded ONCE at connect (through our edge, /f) and every later send is the
                               file id the engine already holds;
-                "small-ref" - both;
-                "pass"      - (2026-10-17, "there's a chain there") every prompt request carries exp "pass", and the
-                              server's builder adds its one passthrough clause (lib/prompts.js, imageOnlyPrompt's PASSTHROUGH).
+                "small-ref" - both.
    A shopper's session, or no flag: nothing here runs. The TEST record carries the mode (ctx.exp) and each upload. */
 const PEAR_EXP = (() => {
   try {
     if (!(typeof traceEnabled === "function" && traceEnabled())) return "";
     const v = new URLSearchParams(location.search).get("pear_exp") || "";
-    return v === "small" || v === "ref" || v === "small-ref" || v === "notel" || v === "pass" ? v : "";
+    return v === "small" || v === "ref" || v === "small-ref" || v === "notel" ? v : "";
   } catch (_) { return ""; }
 })();
 const EXP_SMALL = PEAR_EXP === "small" || PEAR_EXP === "small-ref";
@@ -12693,8 +12691,7 @@ function requestWirePrompt(req, where) {
   const known = _wirePrompts.get(key);
   if (typeof known === "string") return Promise.resolve(known);
   if (known) return known;
-  const pending = fetchWirePrompt({ ...req, where: where || "prompt",
-    ...(typeof PEAR_EXP !== "undefined" && PEAR_EXP === "pass" ? { exp: "pass" } : {}) }).then(
+  const pending = fetchWirePrompt({ ...req, where: where || "prompt" }).then(
     (text) => { _wirePrompts.set(key, text); return text; },
     (err) => { _wirePrompts.delete(key); throw err; });
   _wirePrompts.set(key, pending);
