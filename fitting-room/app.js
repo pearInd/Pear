@@ -7386,7 +7386,13 @@ let _refUploadedGen = -1;
    already turning to the lens with the back reference on it (u2 4.30-4.44s, a white panel on the chest). 700 sends it from the
    reading before, landing at ~255-265: replayed, u2 3.41 -> 3.23s, r2 2.98 -> 2.81, g7 3.27 -> 3.14, s1/r1 0.1s sooner, h2/g8/g9
    unchanged. */
-const REF_LAT_FLOOR_MS = 700;
+/* 900, not 700 (2026-10-18, the owner's own sessions mvdue6dq / mvdvbnle: "the angles stronger - it should work at once,
+   without waiting"). At 700 the projection scheduled the FRONT ~200ms after the first reading coming out of the deep back
+   (o -0.76 / -0.67, ~220-228 degrees); in mvdvbnle the front's print then showed only at ~340 degrees, the chest plain from the
+   side round to three-quarters (4.30-4.79s). 900 sends it on that same reading at the engine's minimum (+50ms) - ~150ms sooner,
+   giving the engine that much more time to draw the print before the chest comes round. Replayed through the deployed engine:
+   both sessions' FRONT on the same reading, +201 -> +50ms; the outbound BACK unchanged. */
+const REF_LAT_FLOOR_MS = 900;
 /* THE BACK WAITS FOR THE BODY IT LANDS ON (2026-10-17, u4). The engine paints a new reference onto frames it already holds,
    and an id is acknowledged in ~0.28s where the image bytes every outbound rule was placed for took ~0.43s - so a pre-upload
    session's BACK reaches a body older than the one it was decided on, by as much as the session's render lags. Read frame by
@@ -7395,12 +7401,16 @@ const REF_LAT_FLOOR_MS = 700;
    print on a chest still facing the lens for a frame (2.40s); r2 (1.39s) took PEAK off a three-quarter chest. The engine's
    predictive BACK of such a session goes out this long after it is asked for: u4's lands at the side (~75-80 degrees), a
    low-lag session's ~0.2s later on the back (~120). Under the 250ms tick, so the lock has moved before the next sample;
-   a newer decision supersedes it like any delayed swap. ?ref_back_delay=<ms> (0-220) for an A/B, 0 is the old send. */
+   a newer decision supersedes it like any delayed swap. ?ref_back_delay=<ms> (0-220) for an A/B, 0 is the old send.
+   OFF BY DEFAULT SINCE 2026-10-18: the owner's own turns - slower than the rig's 1.6x one it was placed for - landed the back
+   LATE with it: mvdvbnle's back print showed only at ~145 degrees, a plain three-quarter back before it (2.68-2.88s), where
+   mvdue6dq (same delay) showed it at ~110. "Stronger angles - at once, without waiting": the back goes out as the engine asks.
+   ?ref_back_delay=200 restores it. */
 const REF_BACK_DELAY_MS = (() => {
   let raw = null;
-  try { raw = new URLSearchParams(location.search).get("ref_back_delay"); } catch (_) { return 200; }
+  try { raw = new URLSearchParams(location.search).get("ref_back_delay"); } catch (_) { return 0; }
   const v = raw === null || raw === "" ? NaN : Number(raw);
-  return Number.isFinite(v) ? Math.max(0, Math.min(220, Math.round(v))) : 200;
+  return Number.isFinite(v) ? Math.max(0, Math.min(220, Math.round(v))) : 0;
 })();
 /* ...ONLY WHILE THE ENGINE ACKNOWLEDGES FAST (2026-10-18, x2). The delay exists because an id's ~0.28s acknowledgement lands
    the back early; an engine whose latest image acknowledgement took longer than REF_BACK_DELAY_MAX_ACK_MS lands it late on
@@ -10908,7 +10918,7 @@ function createOrientationWatcher() {
         lat: typeof engineAckEstimate === "function" ? (() => {
           const a = engineAckEstimate();
           const refs = typeof _refUploadedGen !== "undefined" && _refUploadedGen === sessionGen;
-          return a !== null && refs ? Math.max(a, typeof REF_LAT_FLOOR_MS === "number" ? REF_LAT_FLOOR_MS : 700) : a;
+          return a !== null && refs ? Math.max(a, typeof REF_LAT_FLOOR_MS === "number" ? REF_LAT_FLOOR_MS : 900) : a;
         })() : null,
         latHi: typeof engineAckHigh === "function" ? engineAckHigh() : null,
         lock: autoOrientation, profile: autoProfile, dualView: currentAngle === AUTO_ANGLE,

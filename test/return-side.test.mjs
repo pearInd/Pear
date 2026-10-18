@@ -801,7 +801,7 @@ console.log("\n── §5 the wiring ──");
   /* ...floored at REF_LAT_FLOOR_MS when the session's references went up as ids (2026-10-17): an id's ~0.29s ack is not the
      swap's landing time the model reads (s1, r1, g9: FRONT held at the side reading, sent a reading late). */
   check("§5.8 the tick sends the engine's pace, typeof-guarded - floored only when the references went up before the session",
-    /lat: typeof engineAckEstimate === "function" \? \(\(\) => \{\s*const a = engineAckEstimate\(\);\s*const refs = typeof _refUploadedGen !== "undefined" && _refUploadedGen === sessionGen;\s*return a !== null && refs \? Math\.max\(a, typeof REF_LAT_FLOOR_MS === "number" \? REF_LAT_FLOOR_MS : 700\) : a;\s*\}\)\(\) : null,/.test(APP) &&
+    /lat: typeof engineAckEstimate === "function" \? \(\(\) => \{\s*const a = engineAckEstimate\(\);\s*const refs = typeof _refUploadedGen !== "undefined" && _refUploadedGen === sessionGen;\s*return a !== null && refs \? Math\.max\(a, typeof REF_LAT_FLOOR_MS === "number" \? REF_LAT_FLOOR_MS : 900\) : a;\s*\}\)\(\) : null,/.test(APP) &&
     /_expFileIds\.set\(blob, id\); _refUploadedGen = gen;/.test(APP));
   /* THE BACK WAITS FOR THE BODY IT LANDS ON (2026-10-17, u4): a pre-upload session's predictive BACK goes out REF_BACK_DELAY_MS
      late (under the 250ms tick); nothing else moves. Run standalone on the real block. */
@@ -809,10 +809,13 @@ console.log("\n── §5 the wiring ──");
     const blk = between(APP, "const REF_BACK_DELAY_MS = ", "\nlet _expFilesClient = null;");
     const mk = (search, refGen, gen) => new Function("location", "_refUploadedGen", "sessionGen",
       blk + "\nreturn { REF_BACK_DELAY_MS, refBackDelay };")({ search }, refGen, gen);
-    const on = mk("", 3, 3), off = mk("", -1, 3), old = mk("?ref_back_delay=0", 3, 3), big = mk("?ref_back_delay=900", 3, 3);
+    /* OFF BY DEFAULT since 2026-10-18 (the owner's slower turns landed the back late with it); ?ref_back_delay=200 is the delay. */
+    const dflt = mk("", 3, 3);
+    const on = mk("?ref_back_delay=200", 3, 3), off = mk("?ref_back_delay=200", -1, 3), old = mk("?ref_back_delay=0", 3, 3), big = mk("?ref_back_delay=900", 3, 3);
     const back = { do: "swap", next: "back", predictive: true }, vote = { do: "swap", next: "back", predictive: false };
     const front = { do: "swap", next: "front", predictive: false, delay: 120 };
-    check("§5.8b a pre-upload session's predictive BACK goes out 200ms late - under the 250ms tick",
+    check("§5.8a by default the BACK goes out as the engine asks - no delay", dflt.REF_BACK_DELAY_MS === 0 && dflt.refBackDelay(back) === back);
+    check("§5.8b with ?ref_back_delay=200 a pre-upload session's predictive BACK goes out 200ms late - under the 250ms tick",
       on.REF_BACK_DELAY_MS === 200 && on.refBackDelay(back).delay === 200 && on.refBackDelay(back).next === "back" &&
       on.refBackDelay(back).predictive === true && back.delay === undefined);
     check("§5.8c ...and nothing else: a vote's BACK, the FRONT (its own projected delay kept), a session that sent bytes, ?ref_back_delay=0",
@@ -822,7 +825,7 @@ console.log("\n── §5 the wiring ──");
       big.REF_BACK_DELAY_MS === 220 && on.refBackDelay({ ...back, delay: 300 }).delay === 300);
     /* ...only while the engine acknowledges fast (2026-10-18, x2): its latest image acknowledgement decides. */
     const withAcks = (acks) => new Function("location", "_refUploadedGen", "sessionGen", "_engineAckMs",
-      blk + "\nreturn { refBackDelay };")({ search: "" }, 3, 3, acks);
+      blk + "\nreturn { refBackDelay };")({ search: "?ref_back_delay=200" }, 3, 3, acks);
     check("§5.8e a fast engine (latest ack 280ms) gets the delay; a slow one (x2: 5,300ms) sends the back as the engine asks",
       withAcks([380, 280]).refBackDelay(back).delay === 200 && withAcks([300, 5300]).refBackDelay(back) === back &&
       withAcks([5300, 280]).refBackDelay(back).delay === 200 && withAcks([]).refBackDelay(back).delay === 200);
