@@ -7343,13 +7343,15 @@ const _assetBlobCache = new Map();   // url → Promise<Blob|null>  (LRU-capped,
                 "small-ref" - both;
                 "legs"      - (2026-10-18, "the shirt went into the pants" on the return) every prompt request carries exp
                               "legs" and the server's builder names the legs in a front top's lower-body lock (lib/prompts.js,
-                              promptForRequest).
+                              promptForRequest);
+                "nohem"     - (2026-10-18, the A/B for the engine drawing the rear photo into the scene) the request carries
+                              exp "nohem" and the builder leaves HEM_LENGTH_LOCK out - the wire before 8c04543.
    A shopper's session, or no flag: nothing here runs. The TEST record carries the mode (ctx.exp) and each upload. */
 const PEAR_EXP = (() => {
   try {
     if (!(typeof traceEnabled === "function" && traceEnabled())) return "";
     const v = new URLSearchParams(location.search).get("pear_exp") || "";
-    return v === "small" || v === "ref" || v === "small-ref" || v === "notel" || v === "legs" ? v : "";
+    return v === "small" || v === "ref" || v === "small-ref" || v === "notel" || v === "legs" || v === "nohem" ? v : "";
   } catch (_) { return ""; }
 })();
 const EXP_SMALL = PEAR_EXP === "small" || PEAR_EXP === "small-ref";
@@ -12796,7 +12798,7 @@ function requestWirePrompt(req, where) {
   if (typeof known === "string") return Promise.resolve(known);
   if (known) return known;
   const pending = fetchWirePrompt({ ...req, where: where || "prompt",
-    ...(typeof PEAR_EXP !== "undefined" && PEAR_EXP === "legs" ? { exp: "legs" } : {}) }).then(
+    ...(typeof PEAR_EXP !== "undefined" && (PEAR_EXP === "legs" || PEAR_EXP === "nohem") ? { exp: PEAR_EXP } : {}) }).then(
     (text) => { _wirePrompts.set(key, text); return text; },
     (err) => { _wirePrompts.delete(key); throw err; });
   _wirePrompts.set(key, pending);
