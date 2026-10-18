@@ -5383,6 +5383,10 @@ function mockPoseSkeleton(deg, gapDeg) {
   pts[24] = mockLandmark(cx - HIP * cos, yHip,       HIP * sin, vis);  // RIGHT_HIP
   pts[25] = mockLandmark(cx + HIP * cos, yKnee,     -HIP * sin, vis);  // LEFT_KNEE
   pts[26] = mockLandmark(cx - HIP * cos, yKnee,      HIP * sin, vis);  // RIGHT_KNEE
+  /* The head and the ankles where a standing body has them - the go-live gate asks for the whole body (2026-10-18). */
+  pts[0] = mockLandmark(cx, 0.2, 0, vis);                                // NOSE
+  pts[27] = mockLandmark(cx + HIP * cos, 0.95,      -HIP * sin, vis);  // LEFT_ANKLE
+  pts[28] = mockLandmark(cx - HIP * cos, 0.95,       HIP * sin, vis);  // RIGHT_ANKLE
 
   /* worldLandmarks are metric rather than normalised, but every reader treats them as
      "the same skeleton, parallel array" - so the same points, scaled, is the honest
@@ -17228,7 +17232,16 @@ async function goLive() {
        watcher started, so the record could not say which stage held them. */
     const gateAt = Date.now();
     const presence = await awaitBodyPresence(isBottomsGarment(activeItem));
-    if (typeof traceOrient === "function") traceOrient("gate", { v: presence, ms: Date.now() - gateAt });
+    if (typeof traceOrient === "function") traceOrient("gate", { v: presence, ms: Date.now() - gateAt,
+      ...(presence === "not-full" && typeof _presenceGateMiss !== "undefined" ? { miss: _presenceGateMiss } : {}) });
+    /* THE WHOLE BODY WAS NOT IN FRAME (awaitBodyPresence's full-body rule, 2026-10-18): no session opens - nothing was minted
+       or billed - and the shopper is told how to stand, exactly as the black screen above is. */
+    if (presence === "not-full") {
+      showCamError("לא רואים את כל הגוף בפריים. התרחקו מהמצלמה עד שכל הגוף - מהראש ועד כפות הרגליים - נכנס לתמונה, ונסו שוב. " +
+        "(Your whole body isn't in the frame. Step back until you're fully in view, head to feet, and try again.)");
+      toast("המדידה לא הופעלה - צריך לראות את כל הגוף");
+      return;   // finally{} resets busy, the capture button and any self-timer; no billed session opened
+    }
     if (presence !== "present") {
       console.warn(`[go-live] presence gate did not confirm (${presence}) - continuing`);
     }
@@ -17770,6 +17783,39 @@ function presenceFromPoseResult(result, category) {
      bodyContourSignature() measures, by construction. */
   const i = primaryPoseIndex(result.landmarks);
   return i >= 0 && poseFrameQualifies(result.landmarks[i], category, POSE_MIN_CONFIDENCE);
+}
+
+/* ── THE WHOLE BODY, HEAD TO ANKLES, BEFORE THE MEASUREMENT (2026-10-18) ──────────────────────────────────────────────────
+   The owner: "make it so it is impossible to measure unless the whole body is seen". Their last two sessions (records
+   mvdw3304, mvdue6dq) were framed from the head to the thighs - the gate above asks a top for shoulders and hips only, so
+   both opened - and both are where the render invented the lower body: the store model's jeans one session, a tee cut
+   short at the waistband the next. The engine conditions on the frame it is handed; legs it never saw are legs it makes up.
+   THE RULE, for EVERY garment at go-live: the primary skeleton's nose, shoulders, hips, knees and ankles all inside the
+   image (FULL_BODY_EDGE from each edge), the torso at the gate's usual bar (presenceFromPoseResult, POSE_MIN_CONFIDENCE)
+   and the head, knees and ankles at FULL_BODY_MIN_VISIBILITY - BlazePose reads ankles less surely than shoulders even in
+   full view, and the in-frame test is what tells a cut-off foot from a visible one. Measured on the owner's clips before
+   it shipped (CLAUDE.md §7.11). Only the GO-LIVE gate asks this; the mid-session watcher (startPresenceWatcher) keeps the
+   torso rule, so a turn or a step never dims a session already running. `?full_body=0` is the old gate. */
+const FULL_BODY_PARTS = Object.freeze([
+  ["head", [0]], ["shoulders", [11, 12]], ["hips", [23, 24]], ["knees", [25, 26]], ["ankles", [27, 28]],
+]);
+const FULL_BODY_MIN_VISIBILITY = 0.5;
+const FULL_BODY_EDGE = 0.01;
+
+/** @returns {boolean} the go-live gate requires the whole body (the default; ?full_body=0 is the torso gate) */
+function fullBodyGateEnabled() {
+  try { return new URLSearchParams(location.search).get("full_body") !== "0"; } catch (_) { return true; }
+}
+
+/** The body parts of ONE skeleton not visibly inside the frame - [] is the whole body.
+    @param {Array<{x?:number,y?:number,visibility?:number}>|null|undefined} landmarks  @returns {string[]} */
+function fullBodyMiss(landmarks) {
+  if (!Array.isArray(landmarks) || !landmarks.length) return FULL_BODY_PARTS.map(([name]) => name);
+  const inside = (v) => Number.isFinite(v) && v >= FULL_BODY_EDGE && v <= 1 - FULL_BODY_EDGE;
+  return FULL_BODY_PARTS.filter(([, idx]) => !idx.every((i) => {
+    const lm = landmarks[i];
+    return !!lm && Number(lm.visibility ?? 0) >= FULL_BODY_MIN_VISIBILITY && inside(Number(lm.x)) && inside(Number(lm.y));
+  })).map(([name]) => name);
 }
 
 /**
@@ -18436,11 +18482,24 @@ async function nativePresenceFallback(video, category) {
  * @param {boolean} isBottoms - drives which landmarks are required
  * @returns {Promise<"present"|"timeout"|"skipped">}
  */
+let _presenceGateMiss = "";   // the parts the last full-body refusal could not see - read into a TEST record's `gate`
+
 async function awaitBodyPresence(isBottoms) {
   if (!POSE_GATE_ENABLED) return "skipped";
   const video = $("webcam");
   if (!video) return "skipped";
   const category = isBottoms ? "bottom" : "top";
+  /* THE WHOLE BODY (see fullBodyMiss): while the pose model can answer, nothing short of head to ankles opens the gate,
+     and a wait that ends without it REFUSES ("not-full" - goLive() opens no session, bills nothing). The wait is the
+     gate's usual one plus a self-timer's seconds, which are spent walking back. With no pose model at all - it failed to
+     load - nothing here can see legs, and the gate degrades as it always has (§2.5). typeof-guarded: body-presence-gate
+     runs this block standalone. */
+  const fullBody = typeof fullBodyGateEnabled === "function" && fullBodyGateEnabled();
+  const timerMs = fullBody && typeof _liveTimerPlan !== "undefined" && _liveTimerPlan && _liveTimerPlan.seconds > 0
+    ? _liveTimerPlan.seconds * 1000 : 0;
+  const waitMs = POSE_GATE_TIMEOUT_MS + timerMs;
+  let poseAnswered = false;
+  _presenceGateMiss = "";
   /* THE GATE'S WHOLE WAIT IS BOUNDED, the detector's load included (2026-10-04). The gate used to await the
      detector with no limit and only then start its POSE_GATE_TIMEOUT_MS clock. On main the detector comes
      from a CDN the browser has long cached; the hidden build fetches it from our edge (15 MB, scrambled,
@@ -18458,12 +18517,19 @@ async function awaitBodyPresence(isBottoms) {
   let shownOverlay = false;
 
   try {
-    while (Date.now() - startedAt < POSE_GATE_TIMEOUT_MS) {
+    while (Date.now() - startedAt < waitMs) {
       let verdict = null;
       if (detector && video.videoWidth) {
         try {
           const poseResult = detectPoseFrame(detector, video);
           verdict = presenceFromPoseResult(poseResult, category);
+          if (verdict !== null) poseAnswered = true;
+          if (verdict === true && fullBody) {
+            const miss = fullBodyMiss(poseResult.landmarks[primaryPoseIndex(poseResult.landmarks)]);
+            if (miss.length) { verdict = false; _presenceGateMiss = miss.join(","); }
+          } else if (verdict === false && fullBody) {
+            _presenceGateMiss = "body";
+          }
           /* The shopper stands square-on here, before the fitting: the torso-only turn and THE YAW
              GUARD learn their square-on widths from these readings, so both are ready from the
              fitting's first second (the live pose loop only starts at the reveal). Learning only -
@@ -18477,7 +18543,17 @@ async function awaitBodyPresence(isBottoms) {
           verdict = null;
         }
       }
-      if (verdict === null) verdict = await nativePresenceFallback(video, category);
+      /* With a pose model that answers, one frame it could not read is waited out, never handed to the face-only
+         fallback - a face cannot show the legs, and it would open the whole-body gate on a head. */
+      if (verdict === null && fullBody && detector) {
+        await new Promise((r) => setTimeout(r, POSE_SAMPLE_MS));
+        continue;
+      }
+      if (verdict === null) {
+        verdict = await nativePresenceFallback(video, category);
+        /* No pose model: the face-only engine can say nobody is there, never that the whole body is - "cannot judge". */
+        if (verdict === true && fullBody) verdict = null;
+      }
       /* Still unknown after both engines: nothing here can judge this frame, so waiting
          longer cannot help. Proceed immediately rather than burning the full timeout on
          a question no available detector can answer. */
@@ -18493,9 +18569,14 @@ async function awaitBodyPresence(isBottoms) {
       if (!shownOverlay) { showPresenceOverlay(); shownOverlay = true; }
       await new Promise((r) => setTimeout(r, POSE_SAMPLE_MS));
     }
+    /* THE WHOLE BODY WAS NEVER SEEN, by a pose model that was answering: REFUSED (the owner's rule, 2026-10-18). */
+    if (fullBody && poseAnswered) {
+      console.warn(`[PEAR] presence gate: the whole body was not in frame within ${waitMs}ms (missing: ${_presenceGateMiss || "?"}) - not starting`);
+      return "not-full";
+    }
     /* TIMED OUT - and we PROCEED. The shopper asked for a session; a detector that
        cannot find them is not grounds to refuse one. */
-    console.warn(`[PEAR] presence gate: timed out after ${POSE_GATE_TIMEOUT_MS}ms - proceeding anyway`);
+    console.warn(`[PEAR] presence gate: timed out after ${waitMs}ms - proceeding anyway`);
     return "timeout";
   } finally {
     if (shownOverlay) hidePresenceOverlay();

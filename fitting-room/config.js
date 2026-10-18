@@ -381,9 +381,12 @@ export const CONFIG = Object.freeze({
   POSE_MIN_CONFIDENCE:     0.78,  // per-landmark visibility bar; spec floor is 0.75
   POSE_CONSECUTIVE_FRAMES: 4,     // spec range 3-5; one lucky frame is not presence
   POSE_SAMPLE_MS:          120,   // ~8/s - fast enough to feel instant, cheap enough to idle
-  /* PROCEEDS on expiry, never refuses. A detector that cannot see the shopper must not
-     veto a session they explicitly asked for - the gate is an optimisation, the try-on
-     is the product. Sized to cover "walk back to where you were standing". */
+  /* PROCEEDS on expiry when nothing could judge the frame - a detector that cannot see the
+     shopper must not veto a session they explicitly asked for. ONE EXCEPTION since
+     2026-10-18 (the owner's rule, awaitBodyPresence's full-body gate): a pose model that
+     answered and never saw the whole body, head to ankles, REFUSES - nothing is billed and
+     the shopper is told to step back. Sized to cover "walk back to where you were
+     standing"; a self-timer's seconds are added to it. */
   POSE_GATE_TIMEOUT_MS:    12000,
   /* MediaPipe Tasks Vision, pinned. PRELOADED during Screen 2 (see preloadPoseDetector)
      rather than fetched at go-live: this is a multi-MB WASM runtime, and putting that

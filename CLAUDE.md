@@ -177,6 +177,9 @@ Any new fit wording must describe what the **fabric** does over a body whose
 dimensions are fixed. Never the body's outline.
 
 ### 2.5 Never block on ambiguity
+(One rule blocks on EVIDENCE, by the owner's decision: go-live needs the whole body in frame when the pose model can see it -
+§7.11. No evidence still never blocks.)
+
 `isKidsProduct` / `isAdultProduct` (`lib/sizing.js`) / `isCompatibleSizeCategory` /
 `liveBlockReason` all pass when uncertain. A wrong block stops a paying shopper.
 That includes a product verdict still in flight or lost to the network:
@@ -1868,6 +1871,26 @@ does not; a camera hem at the waistband leaves the render the waistband as lower
   /prompt again (until then the API version differs and the room asks the origin - prefetched, off the critical path, §2.15).
 - **Seen in the same clip, not changed:** 2.4-2.8s the back reference landing on a body still 30-80 degrees from the lens drew
   the tee open on a bare chest - the early BACK the owner asked for ("stronger angles, without waiting"), §7.6's trade.
+- **The return's tuck is the camera's, not the clause's** (12 rig sessions on the owner's clip, whose own frames are tucked at
+  that moment): tucked in ~half the sessions with or without the clause (t2/N1/N3/N4 vs t4/t6/t7/D2). `?pear_exp=legs` (the
+  lock names the legs) kept it out in L1 and L2 - two sessions, and it loosens the lower-body lock: not shipped.
+- **The engine drew the rear photo into the scene** (a large back-turned figure at the frame's edge through the back view - the
+  10-08 report's failure, which predates the clause) in t5 and L2: 2 of 8 sessions with the clause, 0 of 4 without (`?pear_exp=
+  nohem`). The back prompt and image are unchanged by it; not distinguishable at this count. If it shows up in the owner's
+  sessions, the clause is the first thing to take out.
+
+### 7.11 The whole body before the measurement (2026-10-18, the owner's rule)
+"Make it impossible to measure unless the whole body is seen." The owner's last sessions were framed head to thighs; the
+go-live gate asked a top for shoulders and hips only. Now `awaitBodyPresence()` asks every garment for the nose, shoulders,
+hips, knees and ankles of the primary skeleton INSIDE the image (`FULL_BODY_EDGE` 0.01) - the torso at POSE_MIN_CONFIDENCE, the
+head/knees/ankles at `FULL_BODY_MIN_VISIBILITY` 0.5 - and a wait that ends without it returns `"not-full"`: goLive() shows "step
+back, head to feet" and opens nothing (nothing minted, nothing billed). The wait is POSE_GATE_TIMEOUT_MS plus a self-timer's
+seconds. With no pose model at all the gate degrades as before (§2.5; a face cannot show legs); a model that never answers is
+waited out and proceeds. The mid-session watcher keeps the torso rule. `?full_body=0` is the old gate. TEST records carry
+`gate.miss`. **Calibrated on the room's lite model** over the clips' first two seconds: shirt1915 and shorts1913 (whole body)
+pass every frame (ankles y 0.87, visibility 0.99); the owner's u20/u21/u22 fail every frame (ankles at y 1.05-1.34, u22's knees
+at 1.03-1.07); vneck fails on ankles at y 1.10-1.15 with visibility up to 0.81 - the case the in-frame test exists for. The rig's
+clips u20/u21/u22/vneck/yellow are cut too: rig runs on them pass `ROOM_PARAMS=full_body=0`. `body-presence-gate` §9 runs it.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL

@@ -28,12 +28,14 @@
      §1  the landmark requirements are CATEGORY-AWARE - shoulders for a top, hips and
          knees for trousers - because that is the whole reason for a pose model;
      §2  confidence AND consecutive frames, so one lucky frame cannot open the gate;
-     §3  the gate degrades on every detector failure path, and never blocks go-live;
+     §3  the gate degrades on every detector failure path, and never blocks go-live on NO evidence;
      §4  it sits before the token mint, after the camera - the credit-saving position;
      §5  late entry re-conditions WITHOUT re-billing, and cannot re-arm the 5s clock;
      §6  the prompt carries the temporal-persistence directive, per category, in budget;
      §7  the overlay is bilingual and is torn down on every exit path - its exit fade
-         starts in the same tick as the verdict, and a re-show during that fade wins. */
+         starts in the same tick as the verdict, and a re-show during that fade wins;
+     §9  (2026-10-18, the owner's rule) go-live needs the WHOLE body, head to ankles: a pose model that sees less refuses
+         the session ("not-full"), no pose model degrades as §3 says. */
 import { readFileSync } from "node:fs";
 import { CONFIG } from "../fitting-room/config.js";
 
@@ -504,6 +506,86 @@ console.log("\n── §8 MID-SESSION ABSENCE NEEDS A RUN OF MISSES - a pose dip
   const cont = extract("function makeStreamContinuity(", "\nlet _continuityCanvas");
   check("the only mid-session camera layer (LIVE CONTINUITY) is timed on Decart's output frames, never on pose",
     !/\bpose|\bpresence|landmark|_torsoYaw/i.test(cont.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));
+}
+
+console.log("\n── §9 THE WHOLE BODY BEFORE THE MEASUREMENT - head to ankles, or no session (2026-10-18) ──");
+{
+  /* The owner: "make it impossible to measure unless the whole body is seen". Their last two sessions were framed head to
+     thighs and the torso gate (§1) opened on both. The REAL gate runs here - awaitBodyPresence() from the extracted block,
+     a scripted detector, a 400ms wait - so what is asserted is what goLive() would be told. */
+  const lm = (x, y, visibility = 0.95) => ({ x, y, z: 0, visibility });
+  /* A standing shopper square-on: nose 0.2, shoulders 0.34, hips 0.62, knees 0.8, ankles 0.95 - the whole body in frame. */
+  const standing = () => {
+    const p = Array.from({ length: 33 }, () => lm(0.5, 0.5));
+    p[0] = lm(0.5, 0.2); p[11] = lm(0.62, 0.34); p[12] = lm(0.38, 0.34); p[23] = lm(0.58, 0.62); p[24] = lm(0.42, 0.62);
+    p[25] = lm(0.58, 0.8); p[26] = lm(0.42, 0.8); p[27] = lm(0.58, 0.95); p[28] = lm(0.42, 0.95);
+    return p;
+  };
+  /* The reported framing: the frame ends at the thighs - knees and ankles are predicted BELOW the image (y > 1), as
+     BlazePose places joints it infers off-frame, and with lower visibility. */
+  const cutAtThighs = () => {
+    const p = standing();
+    p[25] = lm(0.58, 1.12, 0.6); p[26] = lm(0.42, 1.12, 0.6); p[27] = lm(0.58, 1.4, 0.3); p[28] = lm(0.42, 1.4, 0.3);
+    return p;
+  };
+  const headCut = () => { const p = standing(); p[0] = lm(0.5, -0.03, 0.9); return p; };
+
+  const run = async ({ frames, search = "", face = null, timer = null }) => {
+    const video = { videoWidth: 640, videoHeight: 360 };
+    const detector = frames === null ? null : { detectForVideo: () => ({ landmarks: [frames()], worldLandmarks: [frames()] }), close() {} };
+    const sandbox = {
+      POSE_MIN_CONFIDENCE: CONFIG.POSE_MIN_CONFIDENCE, POSE_CONSECUTIVE_FRAMES: CONFIG.POSE_CONSECUTIVE_FRAMES,
+      POSE_GATE_TIMEOUT_MS: 400, POSE_SAMPLE_MS: 10, POSE_GATE_ENABLED: true,
+      POSE_MODEL_URL: "https://cdn.test/pose.task", POSE_WASM_BASE: "https://cdn.test/wasm",
+      console: { warn() {}, log() {}, error() {} }, _testDetector: detector,
+      FaceDetector: face === null ? undefined : class { async detect() { return face ? [{}] : []; } },
+      location: { search, href: "https://x.test/" + search }, $: (id) => (id === "webcam" ? video : null),
+      _liveTimerPlan: timer,
+    };
+    const g = new Function(...Object.keys(sandbox),
+      code + "\nreturn { awaitBodyPresence, fullBodyMiss, miss: () => _presenceGateMiss };")(...Object.values(sandbox));
+    const t0 = Date.now();
+    const v = await g.awaitBodyPresence(false);
+    return { v, miss: g.miss(), ms: Date.now() - t0, g };
+  };
+
+  const ok = await run({ frames: standing });
+  check("§9.1 the whole body in frame opens the gate", ok.v === "present", JSON.stringify(ok));
+  const cut = await run({ frames: cutAtThighs });
+  check("§9.2 the reported framing (head to thighs) is REFUSED - not-full, naming what was missing",
+    cut.v === "not-full" && cut.miss === "knees,ankles", JSON.stringify(cut));
+  const head = await run({ frames: headCut });
+  check("§9.3 a head cut off at the top is refused as well", head.v === "not-full" && head.miss === "head", JSON.stringify(head));
+  check("§9.4 for a BOTTOM too - the rule is the whole body, whatever the garment",
+    (await (async () => { const r = await run({ frames: cutAtThighs }); return r.v; })()) === "not-full");
+  const old = await run({ frames: cutAtThighs, search: "?full_body=0" });
+  check("§9.5 ?full_body=0 is the torso gate: the same framing opens it", old.v === "present", JSON.stringify(old));
+  const noModelFace = await run({ frames: null, face: true });
+  check("§9.6 no pose model at all: a face cannot show the legs, so the gate cannot judge and proceeds (§2.5)",
+    noModelFace.v === "skipped", JSON.stringify(noModelFace));
+  const broken = await run({ frames: () => { throw new Error("gpu lost"); } });
+  check("§9.7 a pose model that never answers is waited out, then proceeds - never a refusal on no evidence",
+    broken.v === "timeout", JSON.stringify(broken));
+  const timed = await run({ frames: cutAtThighs, timer: { seconds: 0.3 } });
+  check("§9.8 a self-timer's seconds are added to the wait - they are spent walking back",
+    timed.v === "not-full" && timed.ms >= 650, JSON.stringify({ v: timed.v, ms: timed.ms }));
+  const fm = ok.g.fullBodyMiss;
+  check("§9.9 fullBodyMiss: in-frame AND visible - a joint inside the image at low visibility, or visible at the edge, is missing",
+    fm(standing()).length === 0 &&
+    fm((() => { const p = standing(); p[27] = lm(0.58, 0.95, 0.2); return p; })()).join() === "ankles" &&
+    fm((() => { const p = standing(); p[28] = lm(0.42, 0.999); return p; })()).join() === "ankles" &&
+    fm([]).length === 5 && fm(null).length === 5);
+
+  /* goLive(): a refusal opens nothing and bills nothing - it returns before the garment pre-load, the token, the connect. */
+  const live = extract("async function goLive()", "\nfunction stopLive()");
+  const refuse = live.indexOf('if (presence === "not-full")');
+  check("§9.10 goLive() refuses on not-full, tells the shopper how to stand, and returns before anything is minted",
+    refuse > live.indexOf("awaitBodyPresence(") && refuse < live.indexOf("await connectRealtime();") &&
+    /if \(presence === "not-full"\) \{[\s\S]{0,500}?showCamError\("לא רואים את כל הגוף[\s\S]{0,400}?return;/.test(live),
+    live.slice(refuse, refuse + 300));
+  check("§9.11 ...and the TEST record carries what was missing", /traceOrient\("gate", \{ v: presence[\s\S]{0,160}?miss: _presenceGateMiss/.test(live));
+  check("§9.12 the mid-session watcher keeps the torso rule - a session already running is never dimmed for its feet",
+    !/fullBodyMiss/.test(extract("function startPresenceWatcher", "\n}\n")));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
