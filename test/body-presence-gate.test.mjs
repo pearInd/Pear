@@ -583,7 +583,9 @@ console.log("\n── §9 THE WHOLE BODY BEFORE THE MEASUREMENT - head to ankles
     refuse > live.indexOf("awaitBodyPresence(") && refuse < live.indexOf("await connectRealtime();") &&
     /if \(presence === "not-full"\) \{[\s\S]{0,500}?showCamError\("לא רואים את כל הגוף[\s\S]{0,400}?return;/.test(live),
     live.slice(refuse, refuse + 300));
-  check("§9.11 ...and the TEST record carries what was missing", /traceOrient\("gate", \{ v: presence[\s\S]{0,160}?miss: _presenceGateMiss/.test(live));
+  check("§9.11 ...and the TEST record carries what was missing, posted with the refusal (no session will end to post it)",
+    /traceOrient\("gate", \{ v: presence[\s\S]{0,160}?miss: _presenceGateMiss/.test(live) &&
+    /if \(presence === "not-full"\) \{[\s\S]{0,800}?traceSessionEnd\("not-full"\);\s*\n\s*return;/.test(live));
   check("§9.12 the mid-session watcher keeps the torso rule - a session already running is never dimmed for its feet",
     !/fullBodyMiss/.test(extract("function startPresenceWatcher", "\n}\n")));
 }

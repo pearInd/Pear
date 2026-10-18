@@ -17240,6 +17240,8 @@ async function goLive() {
       showCamError("לא רואים את כל הגוף בפריים. התרחקו מהמצלמה עד שכל הגוף - מהראש ועד כפות הרגליים - נכנס לתמונה, ונסו שוב. " +
         "(Your whole body isn't in the frame. Step back until you're fully in view, head to feet, and try again.)");
       toast("המדידה לא הופעלה - צריך לראות את כל הגוף");
+      /* A TEST session posts its record now - no session will end to post it, and "it wouldn't let me measure" needs it. */
+      if (typeof traceSessionEnd === "function") traceSessionEnd("not-full");
       return;   // finally{} resets busy, the capture button and any self-timer; no billed session opened
     }
     if (presence !== "present") {
