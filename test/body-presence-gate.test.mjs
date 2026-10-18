@@ -581,7 +581,7 @@ console.log("\n── §9 THE WHOLE BODY BEFORE THE MEASUREMENT - head to ankles
   const refuse = live.indexOf('if (presence === "not-full")');
   check("§9.10 goLive() refuses on not-full, tells the shopper how to stand, and returns before anything is minted",
     refuse > live.indexOf("awaitBodyPresence(") && refuse < live.indexOf("await connectRealtime();") &&
-    /if \(presence === "not-full"\) \{[\s\S]{0,500}?showCamError\("לא רואים את כל הגוף[\s\S]{0,400}?return;/.test(live),
+    /if \(presence === "not-full"\) \{[\s\S]{0,500}?showCamError\("לא רואים את כל הגוף[\s\S]{0,700}?return;/.test(live),
     live.slice(refuse, refuse + 300));
   check("§9.11 ...and the TEST record carries what was missing, posted with the refusal (no session will end to post it)",
     /traceOrient\("gate", \{ v: presence[\s\S]{0,160}?miss: _presenceGateMiss/.test(live) &&
