@@ -7402,11 +7402,19 @@ const REF_BACK_DELAY_MS = (() => {
   const v = raw === null || raw === "" ? NaN : Number(raw);
   return Number.isFinite(v) ? Math.max(0, Math.min(220, Math.round(v))) : 200;
 })();
-/** The swap action as the tick runs it: a predictive BACK, in a session whose references went up as ids, at least
- *  REF_BACK_DELAY_MS late. Anything else unchanged (the same object). */
+/* ...ONLY WHILE THE ENGINE ACKNOWLEDGES FAST (2026-10-18, x2). The delay exists because an id's ~0.28s acknowledgement lands
+   the back early; an engine whose latest image acknowledgement took longer than REF_BACK_DELAY_MAX_ACK_MS lands it late on
+   its own - x2's front took 5.3s at the start and its turn's back was never acknowledged, the back view drawn with the
+   front's lettering. There the delay would only push the back further past the side, so it goes out as the engine asks. */
+const REF_BACK_DELAY_MAX_ACK_MS = 600;
+/** The swap action as the tick runs it: a predictive BACK, in a session whose references went up as ids and whose engine
+ *  acknowledged its latest image within REF_BACK_DELAY_MAX_ACK_MS, at least REF_BACK_DELAY_MS late. Anything else
+ *  unchanged (the same object). */
 function refBackDelay(a) {
   if (!a || a.next !== "back" || a.predictive !== true || !(REF_BACK_DELAY_MS > 0)) return a;
   if (typeof _refUploadedGen === "undefined" || typeof sessionGen === "undefined" || _refUploadedGen !== sessionGen) return a;
+  const acks = typeof _engineAckMs !== "undefined" && Array.isArray(_engineAckMs) ? _engineAckMs : [];
+  if (acks.length && acks[acks.length - 1] > REF_BACK_DELAY_MAX_ACK_MS) return a;
   return (Number(a.delay) || 0) >= REF_BACK_DELAY_MS ? a : { ...a, delay: REF_BACK_DELAY_MS };
 }
 let _expFilesClient = null;

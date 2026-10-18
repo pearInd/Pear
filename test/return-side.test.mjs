@@ -820,6 +820,12 @@ console.log("\n── §5 the wiring ──");
       old.REF_BACK_DELAY_MS === 0 && old.refBackDelay(back) === back);
     check("§5.8d the knob is clamped under the tick, and a longer delay the engine asked for is kept",
       big.REF_BACK_DELAY_MS === 220 && on.refBackDelay({ ...back, delay: 300 }).delay === 300);
+    /* ...only while the engine acknowledges fast (2026-10-18, x2): its latest image acknowledgement decides. */
+    const withAcks = (acks) => new Function("location", "_refUploadedGen", "sessionGen", "_engineAckMs",
+      blk + "\nreturn { refBackDelay };")({ search: "" }, 3, 3, acks);
+    check("§5.8e a fast engine (latest ack 280ms) gets the delay; a slow one (x2: 5,300ms) sends the back as the engine asks",
+      withAcks([380, 280]).refBackDelay(back).delay === 200 && withAcks([300, 5300]).refBackDelay(back) === back &&
+      withAcks([5300, 280]).refBackDelay(back).delay === 200 && withAcks([]).refBackDelay(back).delay === 200);
   }
   check("§5.9 ...measured on every REPEAT image write (never a prompt-only write, nor the back's first send), reset with the wire",
     /const ENGINE_PACE_LABELS = new Set\(\["applyGarment", "applyLook"\]\);/.test(APP) &&
