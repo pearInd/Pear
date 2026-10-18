@@ -7678,7 +7678,8 @@ function referenceBackBand(url) {
       /* A top's FRONT keeps everything above its hem: the band starts at the photo's top (nothing painted there). */
       const y0 = hint.side === "front" ? 0 : b.y0;
       const side = hint.side === "front" ? { side: "front" } : {};
-      return xs ? { y0, y1: b.y1, x0: b.x0, x1: b.x1, ...side } : { y0, y1: b.y1, ...side };
+      /* region: a TOP's hem is found in the photo's own pixels before painting (refMaskHemRow) - a bottom's is not. */
+      return xs ? { y0, y1: b.y1, x0: b.x0, x1: b.x1, region: hint.region, ...side } : { y0, y1: b.y1, region: hint.region, ...side };
     } catch (e) {
       _refBandJobs.delete(key);   // not an answer - the next fetch asks again
       refMaskNote({ did: "whole", why: "no-answer", ...(hint.side ? { side: hint.side } : {}) });
@@ -7701,6 +7702,43 @@ function refMaskRows(band, h) {
   return { top, bottom };
 }
 
+/* ── THE HEM IS FOUND IN THE PHOTO, NOT TAKEN FROM THE BOX (2026-10-18) - "it's a crop top" ──────────────────────────────
+   The owner's session u23 (whole body in frame): the PEAK tee rendered ending above the navel. The FRONT photo's mask painted
+   from the box's bottom edge, y1 = 0.874 - but the tee's hem in that photo is at ~0.91: the bottom ~4% of the SHIRT went to the
+   engine painted over, a tee cut straight across, and the render drew it short (u22's "it got smaller", u23's crop top). The
+   same box asked again answered 0.941 - three points of the model's jeans under the hem; the rear photo's 0.920 leaves ~1% of
+   them (u23's back view rendered light-blue denim). So for a TOP the box only says WHERE TO LOOK: the hem is the row where the
+   garment's own colour stops filling the band's width, searched from 12% above the box's edge to 8% below it. The colour is
+   the median of a strip just above the box's edge in the band's middle columns (below a chest print, above the hands). It
+   ABSTAINS - the box's edge as before - on a strip that is not one colour (stripes, an all-over print), or when the colour
+   never stops in that window (a black tee over black jeans). Pure: the pixels in, a row out. */
+function refMaskHemRow(data, W, H, band) {
+  if (!data || !band || band.region !== "top" || typeof band.x0 !== "number" || typeof band.x1 !== "number" || !(W > 0 && H > 0)) return null;
+  const xa = Math.round((band.x0 + (band.x1 - band.x0) * 0.1) * W), xb = Math.round((band.x1 - (band.x1 - band.x0) * 0.1) * W);
+  const ca = Math.round((band.x0 + (band.x1 - band.x0) * 0.3) * W), cb = Math.round((band.x1 - (band.x1 - band.x0) * 0.3) * W);
+  const sa = Math.round((band.y1 - 0.10) * H), sb = Math.round((band.y1 - 0.05) * H);
+  if (!(xb - xa > 8 && cb - ca > 4 && sa >= 0 && sb > sa)) return null;
+  const px = (x, y) => { const i = (y * W + x) * 4; return [data[i], data[i + 1], data[i + 2]]; };
+  const rs = [], gs = [], bs = [];
+  for (let y = sa; y < sb; y += 2) for (let x = ca; x < cb; x += 2) { const [r, g, b] = px(x, y); rs.push(r); gs.push(g); bs.push(b); }
+  const med = (a) => a.slice().sort((p, q) => p - q)[a.length >> 1];
+  const c = [med(rs), med(gs), med(bs)];
+  const near = (p) => Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]) <= 40;
+  let uniform = 0;
+  for (let k = 0; k < rs.length; k++) if (near([rs[k], gs[k], bs[k]])) uniform++;
+  if (uniform < rs.length * 0.7) return null;                       // not one colour - the box's edge, as before
+  const from = Math.max(0, Math.round((band.y1 - 0.12) * H)), to = Math.min(H - 1, Math.round((band.y1 + 0.08) * H));
+  const filled = (y) => { let n = 0, m = 0; for (let x = xa; x < xb; x += 2) { m++; if (near(px(x, y))) n++; } return n / m; };
+  const run = Math.max(3, Math.round(H * 0.01));
+  for (let y = from; y <= to - run; y++) {
+    if (filled(y) >= 0.35) continue;
+    let gone = true;
+    for (let k = 1; k <= run; k++) if (filled(y + k) >= 0.35) { gone = false; break; }
+    if (gone) return y;                                               // the first row of a run the garment no longer fills
+  }
+  return null;                                                        // the colour never stops - the box's edge, as before
+}
+
 /** The rear reference with the store's model painted out above and below `band`, or the SAME Blob
     untouched. Never rejects. */
 async function maskReferenceBand(blob, url, band) {
@@ -7718,6 +7756,14 @@ async function maskReferenceBand(blob, url, band) {
       : Object.assign(document.createElement("canvas"), { width: W, height: H });
     const ctx = off.getContext("2d", { alpha: png, willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0);
+    /* A TOP: the hem where the photo shows it (refMaskHemRow), the box's edge when it cannot tell. */
+    let hemFrom = "box";
+    if (band.region === "top" && typeof refMaskHemRow === "function") {
+      try {
+        const hem = refMaskHemRow(ctx.getImageData(0, 0, W, H).data, W, H, band);
+        if (hem !== null && hem - rows.top > 0.1 * H) { rows.bottom = hem; hemFrom = "photo"; }
+      } catch (_) { /* the box's edge */ }
+    }
     /* The backdrop just inside the painted side of the band's edge, at the photo's own left and right
        margins - where a studio photo has nothing but backdrop - and, when the garment's width is
        known, right beside it too (a studio light leaves the backdrop lighter there; edge colours
@@ -7757,7 +7803,7 @@ async function maskReferenceBand(blob, url, band) {
     if (!png && out && out.size > blob.size) out = await encode(0.85);
     if (!out || !out.size || out.size > blob.size * 1.25) { refMaskNote({ did: "whole", why: "heavy" }); return blob; }
     const pct = (v) => Math.round(v * 100);
-    refMaskNote({ did: "masked", ...(band.side ? { side: band.side } : {}), top: pct(rows.top / H), bottom: pct((H - rows.bottom) / H),
+    refMaskNote({ did: "masked", ...(band.side ? { side: band.side } : {}), top: pct(rows.top / H), bottom: pct((H - rows.bottom) / H), hem: hemFrom,
       kb: [Math.round(blob.size / 1024), Math.round(out.size / 1024)] });
     console.log(`[PEAR] rear reference: the store's model painted out - ${pct(rows.top / H)}% above the collar,` +
       ` ${pct((H - rows.bottom) / H)}% below the hem (${W}x${H}, ${Math.round(blob.size / 1024)} -> ${Math.round(out.size / 1024)} KB) -`, abbrevImg(url));

@@ -1882,6 +1882,16 @@ does not; a camera hem at the waistband leaves the render the waistband as lower
   nohem`). The back prompt and image are unchanged by it; not distinguishable at this count. If it shows up in the owner's
   sessions, the clause is the first thing to take out.
 
+### 7.12 The hem is found in the photo (2026-10-18, u23 "it's a crop top", Layer B)
+The real cause of u22's "it got smaller" and u23's crop top was the FRONT-photo mask (d8be678): it painted from the garment
+box's bottom edge, 0.874 on PEAK's front, where the tee's hem is at 0.905 - the bottom 3% of the shirt went to the engine
+painted over, cut straight across. Asked again the box said 0.941 (jeans left under the hem); the rear photo's 0.920 left ~1%
+of them (u23's back view drew light-blue denim on the owner's shorts). `refMaskHemRow()` now finds a TOP's hem in the photo's
+pixels - the row where the garment's colour (the median of a strip above the box's edge) stops filling the band's width,
+searched 12% above to 8% below the edge - and paints from there; it abstains (the box's edge, as before) on a strip that is not
+one colour or a colour that never stops. On the real PEAK photos: 0.905 front / 0.911 back from every box answer (0.874, 0.941,
+0.920, 0.895). TEST records' `ctx.ref` carry `hem: "photo" | "box"`. `garment-box` §6h.
+
 ### 7.11 The whole body before the measurement (2026-10-18, the owner's rule)
 "Make it impossible to measure unless the whole body is seen." The owner's last sessions were framed head to thighs; the
 go-live gate asked a top for shoulders and hips only. Now `awaitBodyPresence()` asks every garment for the nose, shoulders,

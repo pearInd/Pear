@@ -212,7 +212,28 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
   const fRows = rowsFn({ y0: 0, y1: 0.8742 }, 1499);
   check("the PEAK FRONT photo: nothing above the hem is painted, the jeans (rows 1310-1499) are", fRows && fRows.top === 0 && fRows.bottom === 1310, JSON.stringify(fRows));
 
+  /* THE HEM IS FOUND IN THE PHOTO (2026-10-18, u23 "it's a crop top"): the box's edge cut the PEAK front 3% above its hem
+     (0.874 vs ~0.905) and, asked again, left 3% of jeans (0.941). On the real photos (1000x1499) the hem is found at 0.905
+     front / 0.911 back from every box answer. Here: a synthetic tee over jeans, and every abstain. */
+  const hemFn = new Function(fnSrc("function refMaskHemRow(data, W, H, band) {") + "\nreturn refMaskHemRow;")();
+  const W = 200, H = 300;
+  const img = (paint) => { const d = new Uint8ClampedArray(W * H * 4); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const [r, g, b] = paint(x, y); const i = (y * W + x) * 4; d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255; } return d; };
+  const BROWN = [85, 50, 45], DENIM = [170, 190, 215], WALL = [225, 215, 210];
+  const tee = img((x, y) => (x < 30 || x > 170 ? WALL : y < 270 ? BROWN : DENIM));   // the hem at row 270 (0.9)
+  const band = (y1) => ({ y0: 0, y1, x0: 0.15, x1: 0.85, region: "top" });
+  check("§6h.1 the hem is the row the garment stops, whether the box's edge is above it (0.86) or below it (0.94)",
+    hemFn(tee, W, H, band(0.86)) === 270 && hemFn(tee, W, H, band(0.94)) === 270, `${hemFn(tee, W, H, band(0.86))} ${hemFn(tee, W, H, band(0.94))}`);
+  const stripes = img((x, y) => (x < 30 || x > 170 ? WALL : y >= 270 ? DENIM : (y >> 2) % 2 ? BROWN : WALL));
+  check("§6h.2 a garment that is not one colour (stripes) abstains - the box's edge, as before", hemFn(stripes, W, H, band(0.9)) === null);
+  const blackOnBlack = img((x) => (x < 30 || x > 170 ? WALL : [20, 20, 22]));
+  check("§6h.3 a colour that never stops (a black tee over black jeans) abstains", hemFn(blackOnBlack, W, H, band(0.9)) === null);
+  check("§6h.4 a bottom, or a band with no width, is never searched",
+    hemFn(tee, W, H, { ...band(0.9), region: "bottom" }) === null && hemFn(tee, W, H, { y0: 0, y1: 0.9, region: "top" }) === null);
   const maskFn = fnSrc("async function maskReferenceBand(blob, url, band) {");
+  check("§6h.5 the mask paints from the found hem for a top, the box's edge otherwise, and the TEST record says which",
+    /if \(band\.region === "top" && typeof refMaskHemRow === "function"\)[\s\S]{0,260}?if \(hem !== null && hem - rows\.top > 0\.1 \* H\) \{ rows\.bottom = hem; hemFrom = "photo"; \}/.test(maskFn) &&
+    /hem: hemFrom,/.test(maskFn) && /region: hint\.region/.test(APP));
   check("every abstain and every failure returns the ORIGINAL Blob",
     (maskFn.match(/return blob;/g) || []).length >= 3 && /catch \(e\) \{[\s\S]*?return blob;/.test(maskFn));
   check("the picture keeps its size - a mask, never a crop (new canvas W x H, drawn at 0,0)",
