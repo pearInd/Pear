@@ -234,11 +234,8 @@ console.log("\n── §4 IT RIDES AT P.CORE - PROMOTED, AND THAT REVERSES AN EA
     /\[P\.MED, fitSentence\(/.test(resolver) &&
     resolver.indexOf("P.CORE, identityLockSentence") < resolver.indexOf("P.MED, fitSentence"),
     "fitPrompt() breaks priority ties by array position, so the order is part of the guarantee");
-  /* The one P.LOW part is the HEM LENGTH (2026-10-18, front tops), added on its own - not a leftover of this promotion:
-     it is the only lower tier, exactly in that form, and the identity lock is not it. */
-  const resolverNoHem = resolver.replace(/\.\.\.\(hemLength \? \[\[P\.LOW, HEM_LENGTH_LOCK\]\] : \[\]\),/, "");
   check("...and nothing was left at P.LOW or P.TRIM on this branch",
-    !/\[P\.LOW,/.test(resolverNoHem) && !/\[P\.TRIM,/.test(resolverNoHem) && resolverNoHem !== resolver,
+    !/\[P\.LOW,/.test(resolver) && !/\[P\.TRIM,/.test(resolver),
     "a leftover lower tier would mean the promotion was partial");
 }
 

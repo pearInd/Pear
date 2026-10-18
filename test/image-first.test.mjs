@@ -202,12 +202,8 @@ const BACK_BOTTOMS_SPEC =
 const CLOSURE_SPEC =
   "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
   " fully fastened, sitting flat and closed across the chest as shown.";
-/* THE HEM LENGTH (2026-10-18, "the shirt went into the pants and got smaller") - every front top's last part before the
-   size sentence, at P.LOW: it sheds first, so it rides only where the budget has room. Byte-exact like the others. */
-const HEM_SPEC = "Render the reference's full garment length, its hem hanging freely over the hips.";
-/* What the tops+front branch actually ships: anchor, one space (fitPrompt's join), clause, then the hem length. */
-const TOPS_CLOSURE_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
-const TOPS_FRONT_SPEC = TOPS_CLOSURE_SPEC + " " + HEM_SPEC;
+/* What the tops+front branch actually ships: anchor, one space (fitPrompt's join), clause. */
+const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
 
 /* ── THE PLAIN-TEE ANCHOR - the third axis, and the correction to the note above ──
    The comment on CLOSURE_SPEC calls it product-neutral: "on a tee there is no closure and
@@ -251,14 +247,14 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     api.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC, JSON.stringify(api.imageOnlyPrompt(TOP)));
   check("...and its anchor is still the front anchor, unaltered, with the clause appended whole",
     api.imageOnlyPrompt(TOP).startsWith(TOPS_SPEC + " ") &&
-    api.imageOnlyPrompt(TOP).endsWith(CLOSURE_SPEC + " " + HEM_SPEC),
+    api.imageOnlyPrompt(TOP).endsWith(CLOSURE_SPEC),
     "the clause must ride BESIDE the anchor, never be woven into it");
   check("no negative token rides with it - the tuxedo shipped through a positive prompt",
     !/\b(open|unbuttoned|undone|parted|exposed|never|avoid|don't|do not)\b/i.test(CLOSURE_SPEC),
     CLOSURE_SPEC);
   /* THE THIRD AXIS, held to every rule the other two are held to. */
   check("a plain knit tee matches its own specified wording byte for byte",
-    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC + " " + HEM_SPEC, JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
+    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC, JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
   check("...and the closure clause is NOT spent on it - the reported cause, removed",
     !api.imageOnlyPrompt(PLAIN_TEE).includes(CLOSURE_SPEC) &&
     !/\b(button|buttons|zip|placket|collar|pocket)\b/i.test(api.imageOnlyPrompt(PLAIN_TEE)),
@@ -497,7 +493,7 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
        row: what it guards is "one frozen anchor, nothing assembled onto it", and that still
        holds exactly. The name axis is deliberate now - see hasFrontClosure() - so the row
        carries its own expected string rather than pretending the name is inert. */
-    ["pathological name", { ...TOP, name: "x".repeat(400) }, "front", true, TOPS_SPEC + " " + HEM_SPEC],
+    ["pathological name", { ...TOP, name: "x".repeat(400) }, "front", true, TOPS_SPEC],
   ];
   /* Each case names the branch it must land in - now REGION x ANGLE, four frozen anchors
      rather than two. The invariance is unchanged in strength on every axis that was ever
@@ -585,13 +581,11 @@ console.log("\n── §2a THE FIT SENTENCE RIDES BESIDE THE ANCHOR, NEVER INTO 
   const fitApi = new Function(...Object.keys(fitSandbox),
     code + "\nreturn { imageOnlyPrompt };")(...Object.values(fitSandbox));
 
-  /* With the closure lock AND a fit sentence the hem length (P.LOW) does not fit the 650 budget and sheds first - the
-     trace's "structured + closure" rows - so the fit sentence follows the closure directly. */
   check("it rides AFTER the anchor (and closure, where one ships), as its own sentence",
-    fitApi.imageOnlyPrompt(TOP) === TOPS_CLOSURE_SPEC + " Fit: TEST_FIT_MARKER.",
+    fitApi.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC + " Fit: TEST_FIT_MARKER.",
     fitApi.imageOnlyPrompt(TOP));
   check("...same on a plain tee, which has no closure clause to ride after",
-    fitApi.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC + " " + HEM_SPEC + " Fit: TEST_FIT_MARKER.",
+    fitApi.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC + " Fit: TEST_FIT_MARKER.",
     fitApi.imageOnlyPrompt(PLAIN_TEE));
   check("...same on bottoms, and on the back anchors",
     fitApi.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC + " Fit: TEST_FIT_MARKER." &&
@@ -607,12 +601,11 @@ console.log("\n── §2a THE FIT SENTENCE RIDES BESIDE THE ANCHOR, NEVER INTO 
      the fit sentence - the tightest branch in the real table (tops+front+closure) leaves
      only 70 of 650 chars free, against getFitModifier()'s ~215-char longest string, so
      this is not a hypothetical squeeze. */
-  /* The hem length (P.LOW, 2026-10-18) sheds before it, then the fit sentence - never the anchor or the closure. */
-  const tightSandbox = { ...fitSandbox, PROMPT_MAX_CHARS: TOPS_CLOSURE_SPEC.length };
+  const tightSandbox = { ...fitSandbox, PROMPT_MAX_CHARS: TOPS_FRONT_SPEC.length };
   const tightApi = new Function(...Object.keys(tightSandbox),
     code + "\nreturn { imageOnlyPrompt };")(...Object.values(tightSandbox));
   check("under budget pressure the fit sentence is what sheds, not the anchor or the closure",
-    tightApi.imageOnlyPrompt(TOP) === TOPS_CLOSURE_SPEC,
+    tightApi.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC,
     tightApi.imageOnlyPrompt(TOP));
 }
 

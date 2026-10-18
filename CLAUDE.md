@@ -29,7 +29,6 @@ imageOnlyPrompt()  →  fitPrompt([
                                  | CATEGORY_ANCHOR.bottom
                                  | BACK_CATEGORY_ANCHOR.*],
                         [P.HIGH, FRONT_CLOSURE_LOCK]   // tops, front, only if hasFrontClosure()
-                        [P.LOW,  HEM_LENGTH_LOCK]      // tops, front, where the budget has room - 2026-10-18, §7.10
                         [P.MED,  fitSentence(garmentType)]   // RESTORED 2026-09-03, see below
                       ])
 lookAnchorPrompt() →  full-look path only (both slots filled)
@@ -1851,7 +1850,11 @@ every FRONT queued behind it, and the engine rendered the front reference throug
   three frames. Every 1.0x session since the floor (u3, v2, w3, x1) is clean frame by frame. A faster-turn tuning trades this
   against the back print riding a chest coming round - measured, not guessed, before any change.
 
-### 7.10 The hem length - "the shirt went into the pants and got smaller in the middle" (2026-10-18, Layer A)
+### 7.10 The hem length - "the shirt went into the pants and got smaller in the middle" (2026-10-18, Layer A) - REVERTED
+**Reverted the same evening** (the owner's next session, u23, whole body in frame: "it's a crop top" - the tee ending above
+the navel). lib/prompts.js and its tests are cc37cb9's again; `trace:prompt --json` is cc37cb9's. The record below is what was
+tried and measured on the rig, kept so it is not re-tried blind: on the rig the clause lengthened the front; on the owner's
+real body, framed head to feet, it rendered a crop top.
 The owner's clip + TEST record (mvdw3304, PEAK, the owner in a regular-length tee over blue track pants - the pants right
 throughout): the BACK view rendered the oversized tee at its length, over the hips; every FRONT-reference frame ended it at the
 pants' waistband, and on the return (the FRONT sent at order -0.65, landing on a body still showing its back, clip 3.9-4.4s) it

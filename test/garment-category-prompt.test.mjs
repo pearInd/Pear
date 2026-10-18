@@ -267,8 +267,7 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
   check("...and carries the same per-frame adaptation and preserve clauses as bottoms",
     /Dynamically adapt the garment drape to the subject's exact/.test(topsPrompt) &&
     /Strictly preserve the original top texture, pattern, and color\./.test(topsPrompt) &&
-    /* ...then the second named part, the HEM LENGTH (2026-10-18), and nothing else. */
-    /Keep the subject's lower body, shoes, and background unmodified\. Reproduce the reference's front closure exactly:[^.]*as shown\. Render the reference's full garment length, its hem hanging freely over the hips\.$/.test(topsPrompt),
+    /Keep the subject's lower body, shoes, and background unmodified\. Reproduce the reference's front closure exactly:[^.]*as shown\.$/.test(topsPrompt),
     topsPrompt);
 
   /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────

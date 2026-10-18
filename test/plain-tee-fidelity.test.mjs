@@ -95,11 +95,6 @@ const UNKNOWN_TOP = { garmentType: "upper_body" };
 const JEANS      = { garmentType: "lower_body", name: "Glide Slim" };
 
 const CLOSURE_RE = /Reproduce the reference's front closure/;
-/* THE HEM LENGTH (2026-10-18, "the shirt went into the pants and got smaller") - a separate P.LOW part every front top
-   carries after its anchor where the budget allows; the anchor-shape checks below read the prompt without it, and assert
-   it is there, once, at the end. */
-const HEM = " Render the reference's full garment length, its hem hanging freely over the hips.";
-const withoutHem = (p) => (p.endsWith(HEM) && p.indexOf(HEM) === p.length - HEM.length ? p.slice(0, -HEM.length) : null);
 
 console.log("── §1 CLASSIFICATION: which tops are plain knit tees ──");
 {
@@ -234,7 +229,7 @@ console.log("\n── §4 VOLUME: the fix must SHRINK the prompt, never grow it 
      tracks the anchor's real sentence count; §7.2's single-"Drape and fit" check is the
      other half and is the one that actually catches an assembly. */
   check("it is still ONE anchor - the tee branch did not become an assembly",
-    withoutHem(tee) !== null && withoutHem(tee).split(/(?<=\.)\s+/).filter(Boolean).length <= 5, tee);
+    tee.split(/(?<=\.)\s+/).filter(Boolean).length <= 5, tee);
 }
 
 console.log("\n── §5 THE AXIS IS A SELECTOR, and its scope is deliberate ──");
@@ -365,8 +360,7 @@ console.log("\n── §7 THE ANCHOR NOUN: the last button-down lean, on the DEF
    about collars, plackets and buttons - all front-of-garment features. BACK_CATEGORY_ANCHOR
    is left byte-identical, exactly as PLAIN_TEE_ANCHOR left it, and §7.4 pins that. */
 {
-  const genericWire = imageOnlyPrompt(UNKNOWN_TOP);
-  const generic = withoutHem(genericWire) ?? genericWire;
+  const generic = imageOnlyPrompt(UNKNOWN_TOP);
   const bd      = imageOnlyPrompt(BUTTONDOWN);
   const tee     = imageOnlyPrompt(TEE);
 
@@ -385,8 +379,8 @@ console.log("\n── §7 THE ANCHOR NOUN: the last button-down lean, on the DEF
   check("...and names the construction-neutral upper-body noun instead",
     generic.indexOf("Drape and fit the EXACT static top from the reference image") === 0 &&
     /Strictly preserve the original top texture, pattern, and color\./.test(generic) &&
-    /Keep the subject's lower body, shoes, and background unmodified\.$/.test(generic) && genericWire === generic + HEM,
-    genericWire);
+    /Keep the subject's lower body, shoes, and background unmodified\.$/.test(generic),
+    generic);
 
   check("§7.2 it is still ONE frozen anchor - the noun swap assembled nothing",
     generic.split("Drape and fit").length === 2 && !CLOSURE_RE.test(generic), generic);

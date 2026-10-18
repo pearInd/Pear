@@ -7344,18 +7344,13 @@ const _assetBlobCache = new Map();   // url → Promise<Blob|null>  (LRU-capped,
    ?pear_exp=:  "small"     - every reference downscaled to EXP_SMALL_W wide before it is sent;
                 "ref"       - both references uploaded ONCE at connect (through our edge, /f) and every later send is the
                               file id the engine already holds;
-                "small-ref" - both;
-                "legs"      - (2026-10-18, "the shirt went into the pants" on the return) every prompt request carries exp
-                              "legs" and the server's builder names the legs in a front top's lower-body lock (lib/prompts.js,
-                              promptForRequest);
-                "nohem"     - (2026-10-18, the A/B for the engine drawing the rear photo into the scene) the request carries
-                              exp "nohem" and the builder leaves HEM_LENGTH_LOCK out - the wire before 8c04543.
+                "small-ref" - both.
    A shopper's session, or no flag: nothing here runs. The TEST record carries the mode (ctx.exp) and each upload. */
 const PEAR_EXP = (() => {
   try {
     if (!(typeof traceEnabled === "function" && traceEnabled())) return "";
     const v = new URLSearchParams(location.search).get("pear_exp") || "";
-    return v === "small" || v === "ref" || v === "small-ref" || v === "notel" || v === "legs" || v === "nohem" ? v : "";
+    return v === "small" || v === "ref" || v === "small-ref" || v === "notel" ? v : "";
   } catch (_) { return ""; }
 })();
 const EXP_SMALL = PEAR_EXP === "small" || PEAR_EXP === "small-ref";
@@ -12801,8 +12796,7 @@ function requestWirePrompt(req, where) {
   const known = _wirePrompts.get(key);
   if (typeof known === "string") return Promise.resolve(known);
   if (known) return known;
-  const pending = fetchWirePrompt({ ...req, where: where || "prompt",
-    ...(typeof PEAR_EXP !== "undefined" && (PEAR_EXP === "legs" || PEAR_EXP === "nohem") ? { exp: PEAR_EXP } : {}) }).then(
+  const pending = fetchWirePrompt({ ...req, where: where || "prompt" }).then(
     (text) => { _wirePrompts.set(key, text); return text; },
     (err) => { _wirePrompts.delete(key); throw err; });
   _wirePrompts.set(key, pending);

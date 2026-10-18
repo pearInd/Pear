@@ -328,13 +328,9 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
      replaced", and 403 still leaves 231 characters of clearance against that. The
      directive this suite is actually about is asserted by ABSENCE, twice, above and
      below - the bounds are the secondary guard against creep, not the primary check. */
-  /* The front tops' HEM LENGTH (2026-10-18, P.LOW, its own part after the closure) is the other known clause: stripped
-     the same way, exactly once, so the bounds below still measure what they always measured. */
-  const HEM = " Render the reference's full garment length, its hem hanging freely over the hips.";
-  const topNoHem = top.endsWith(HEM) ? top.slice(0, -HEM.length) : null;
-  const topAnchor = (topNoHem ?? top).replace(/Reproduce the reference's front closure[\s\S]*?as shown\./, "").trim();
+  const topAnchor = top.replace(/Reproduce the reference's front closure[\s\S]*?as shown\./, "").trim();
   check("...and both are still minimal, which is what replaced it",
-    topNoHem !== null && topAnchor.length <= 420 && bot.length <= 360 && topNoHem.length <= 570 &&
+    topAnchor.length <= 420 && bot.length <= 360 && top.length <= 570 &&
     !/as soon as visible/.test(bot),
     `tops anchor=${topAnchor.length} (full ${top.length}) bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */

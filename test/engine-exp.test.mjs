@@ -46,32 +46,6 @@ console.log("\n── §1 only a TEST session ──");
     mode("", false)[2] === true && mode("?ref_upload=0", false)[2] === false && mode("?ref_upload=0&pear_exp=ref", true)[2] === true);
   check("§1.3 an unknown mode is no mode", mode("?pear_exp=fast", true)[0] === "");
   check("§1.4 ...and the TEST record carries it", /exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP \? PEAR_EXP : undefined,/.test(APP));
-  /* THE "LEGS" EXPERIMENT (2026-10-18, the return's tuck): TEST-only like the others. */
-  check("§1.6 \"legs\" is a TEST session's mode, and no shopper's", mode("?pear_exp=legs", true)[0] === "legs" && mode("?pear_exp=legs", false)[0] === "");
-}
-
-console.log("\n── §1c the legs experiment: one word, only on request, front tops only ──");
-{
-  const { promptForRequest, sanitizePromptRequest } = await import("../lib/prompts.js");
-  const PEAK = { name: "חולצה עם הדפס", title: "חולצה עם הדפס", type: "shirt", garmentType: "upper_body", __bottoms: false };
-  const req = (extra, item = PEAK) => promptForRequest(sanitizePromptRequest({ kind: "single", angle: "front", delta: 0, item, ...extra }));
-  const plain = req({}), legs = req({ exp: "legs" });
-  check("§1c.1 the room sends exp \"legs\" with every prompt request in that mode - nothing otherwise",
-    /fetchWirePrompt\(\{ \.\.\.req, where: where \|\| "prompt",\s*\n\s*\.\.\.\(typeof PEAR_EXP !== "undefined" && \(PEAR_EXP === "legs" \|\| PEAR_EXP === "nohem"\) \? \{ exp: PEAR_EXP \} : \{\}\) \}\)/.test(APP));
-  check("§1c.2 \"legs\" changes the lower-body lock's region and nothing else",
-    plain.includes("Keep the subject's lower body, shoes,") && !legs.includes("lower body") &&
-    legs.replace("Keep the subject's legs, shoes,", "Keep the subject's lower body, shoes,") === plain, legs);
-  check("§1c.3 any other exp is main's wire, byte for byte", req({ exp: "long" }) === plain && req({ exp: 1 }) === plain);
-  /* "nohem" (the A/B for the rear photo drawn into the scene): exactly the hem length out, nothing else. */
-  const HEM = " Render the reference's full garment length, its hem hanging freely over the hips.";
-  const expMode = (search, test) => new Function("location", "traceEnabled", EXP + "\nreturn PEAR_EXP;")({ search }, () => test);
-  check("§1c.5 \"nohem\" removes exactly the hem length - the wire before it - and resets after the request",
-    plain.includes(HEM) && req({ exp: "nohem" }) === plain.replace(HEM, "") && req({}) === plain &&
-    expMode("?pear_exp=nohem", true) === "nohem" && expMode("?pear_exp=nohem", false) === "");
-  check("§1c.4 the back, a bottom and the full look are untouched by it",
-    req({ exp: "legs", angle: "back" }) === req({ angle: "back" }) &&
-    req({ exp: "legs" }, { name: "shorts", type: "shorts", __bottoms: true }) === req({}, { name: "shorts", type: "shorts", __bottoms: true }) &&
-    promptForRequest(sanitizePromptRequest({ kind: "look", exp: "legs" })) === promptForRequest(sanitizePromptRequest({ kind: "look" })));
 }
 
 console.log("\n── §2 the send ──");
