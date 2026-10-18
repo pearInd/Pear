@@ -46,33 +46,6 @@ console.log("\n── §1 only a TEST session ──");
     mode("", false)[2] === true && mode("?ref_upload=0", false)[2] === false && mode("?ref_upload=0&pear_exp=ref", true)[2] === true);
   check("§1.3 an unknown mode is no mode", mode("?pear_exp=fast", true)[0] === "");
   check("§1.4 ...and the TEST record carries it", /exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP \? PEAR_EXP : undefined,/.test(APP));
-  /* THE HEM LENGTH EXPERIMENT (2026-10-18, "the shirt went into the pants and got smaller"): TEST-only like the others. */
-  check("§1.6 \"long\" and \"legs\" are a TEST session's modes, and no shopper's",
-    mode("?pear_exp=long", true)[0] === "long" && mode("?pear_exp=legs", true)[0] === "legs" &&
-    mode("?pear_exp=long", false)[0] === "" && mode("?pear_exp=legs", false)[0] === "");
-}
-
-console.log("\n── §1c the hem length experiment: one change per arm, only on request, front tops only ──");
-{
-  const { promptForRequest, sanitizePromptRequest } = await import("../lib/prompts.js");
-  const CLAUSE = "Render the reference's full garment length, its hem hanging freely over the hips.";
-  /* The reported product as the room describes it (FOX PEAK: "a shirt with a print"), the structured top anchor. */
-  const req = (extra, item = { name: "חולצה עם הדפס", title: "חולצה עם הדפס", type: "shirt", garmentType: "upper_body", __bottoms: false }) => promptForRequest(sanitizePromptRequest({
-    kind: "single", angle: "front", delta: 0, item, ...extra }));
-  const plain = req({}), long = req({ exp: "long" }), legs = req({ exp: "legs" });
-  check("§1c.1 the room sends that exp with every prompt request in those modes - nothing otherwise",
-    /fetchWirePrompt\(\{ \.\.\.req, where: where \|\| "prompt",\s*\n\s*\.\.\.\(typeof PEAR_EXP !== "undefined" && \(PEAR_EXP === "long" \|\| PEAR_EXP === "legs"\) \? \{ exp: PEAR_EXP \} : \{\}\) \}\)/.test(APP));
-  check("§1c.2 \"long\" adds exactly the length clause; the rest of the prompt is unchanged",
-    !plain.includes(CLAUSE) && long.includes(CLAUSE) && long.replace(" " + CLAUSE, "") === plain, long);
-  check("§1c.3 \"legs\" changes the lower-body lock's region and nothing else",
-    plain.includes("Keep the subject's lower body, shoes,") && !legs.includes("lower body") &&
-    legs.replace("Keep the subject's legs, shoes,", "Keep the subject's lower body, shoes,") === plain, legs);
-  check("§1c.4 any other exp is main's wire, byte for byte", req({ exp: "pass" }) === plain && req({ exp: 1 }) === plain);
-  check("§1c.5 ...and the request state is reset after each prompt (the next request is main's)", req({}) === plain);
-  check("§1c.6 the back, a bottom and the full look are untouched by either arm",
-    ["long", "legs"].every((exp) => req({ exp, angle: "back" }) === req({ angle: "back" }) &&
-      req({ exp }, { name: "shorts", type: "shorts", __bottoms: true }) === req({}, { name: "shorts", type: "shorts", __bottoms: true }) &&
-      promptForRequest(sanitizePromptRequest({ kind: "look", exp })) === promptForRequest(sanitizePromptRequest({ kind: "look" }))));
 }
 
 console.log("\n── §2 the send ──");

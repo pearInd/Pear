@@ -229,12 +229,9 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
     /identityLockSentence\(item, angle\)/.test(resolverCode) &&
     /angle !== "back"/.test(APP.slice(APP.indexOf("function identityLockSentence"))),
     "the back branch must withhold the print half - see identityLockSentence");
-  /* ...and the HEM LENGTH experiment (2026-10-18) is the only other P.HIGH part: HEM_LENGTH_EXP, gated on a request carrying
-     exp "long" (a TEST session's ?pear_exp=long) - engine-exp §1c pins that gated form and that it changes nothing else. */
-  const resolverNoExp = resolverCode.replace(/\.\.\.\(hemLong \? \[\[P\.HIGH, HEM_LENGTH_EXP\]\] : \[\]\),/, "");
   check("the one bought-back clause rides at P.HIGH, so it sheds before the anchor does",
-    (resolverNoExp.match(/P\.HIGH/g) || []).length === 1 &&
-    /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverNoExp), resolverCode);
+    (resolverCode.match(/P\.HIGH/g) || []).length === 1 &&
+    /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverCode), resolverCode);
   /* NOW SCOPED THREE WAYS, not two. The closure lock was shipping on plain tees, where
      "buttons / zip / placket" were the only construction words on the wire and the model
      rendered a garment that had them - see PLAIN_TEE_ANCHOR and plain-tee-fidelity.test.mjs.
