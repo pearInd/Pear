@@ -1892,7 +1892,13 @@ searched 12% above to 8% below the edge - and paints from there; it abstains (th
 one colour or a colour that never stops. On the real PEAK photos: 0.905 front / 0.911 back from every box answer (0.874, 0.941,
 0.920, 0.895). TEST records' `ctx.ref` carry `hem: "photo" | "box"`. `garment-box` §6h.
 
-### 7.11 The whole body before the measurement (2026-10-18, the owner's rule)
+### 7.11 The whole body before the measurement (2026-10-18, the owner's rule) - OFF BY DEFAULT the same evening
+**Turned off by default** after the sessions that followed it (u23 and two at 21:00): "the back/front got ruined - put it back
+as it was, keep the shirt as now". The orientation code was the "amazing" session's (cc37cb9) throughout; the full-body gate was
+the one change in the path that feeds it - the owner stood twice as far (a smaller body for the lite model) and the gate taught
+the shoulder baseline during the walk back (4 relearns in u23, a baseline of 0.27-0.42 in mve6yryi against ~0.6). `?full_body=1`
+turns it on; the default is the torso gate the "amazing" session ran. Before it comes back: learn the baseline only from the
+confirming full-body streak, and measure a turn at that distance against the close framing.
 "Make it impossible to measure unless the whole body is seen." The owner's last sessions were framed head to thighs; the
 go-live gate asked a top for shoulders and hips only. Now `awaitBodyPresence()` asks every garment for the nose, shoulders,
 hips, knees and ankles of the primary skeleton INSIDE the image (`FULL_BODY_EDGE` 0.01) - the torso at POSE_MIN_CONFIDENCE, the

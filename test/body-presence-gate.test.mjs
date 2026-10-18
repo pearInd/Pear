@@ -545,24 +545,26 @@ console.log("\n── §9 THE WHOLE BODY BEFORE THE MEASUREMENT - head to ankles
     return { v, miss: g.miss(), ms: Date.now() - t0, g };
   };
 
-  const ok = await run({ frames: standing });
+  const ON = "?full_body=1";
+  const ok = await run({ frames: standing, search: ON });
   check("§9.1 the whole body in frame opens the gate", ok.v === "present", JSON.stringify(ok));
-  const cut = await run({ frames: cutAtThighs });
+  const cut = await run({ frames: cutAtThighs, search: ON });
   check("§9.2 the reported framing (head to thighs) is REFUSED - not-full, naming what was missing",
     cut.v === "not-full" && cut.miss === "knees,ankles", JSON.stringify(cut));
-  const head = await run({ frames: headCut });
+  const head = await run({ frames: headCut, search: ON });
   check("§9.3 a head cut off at the top is refused as well", head.v === "not-full" && head.miss === "head", JSON.stringify(head));
   check("§9.4 for a BOTTOM too - the rule is the whole body, whatever the garment",
-    (await (async () => { const r = await run({ frames: cutAtThighs }); return r.v; })()) === "not-full");
-  const old = await run({ frames: cutAtThighs, search: "?full_body=0" });
-  check("§9.5 ?full_body=0 is the torso gate: the same framing opens it", old.v === "present", JSON.stringify(old));
-  const noModelFace = await run({ frames: null, face: true });
+    (await (async () => { const r = await run({ frames: cutAtThighs, search: ON }); return r.v; })()) === "not-full");
+  const old = await run({ frames: cutAtThighs });
+  check("§9.5 OFF BY DEFAULT (the owner, the same evening: \"put the back/front back as it was\"): without ?full_body=1 the torso gate opens on the same framing",
+    old.v === "present" && (await run({ frames: cutAtThighs, search: "?full_body=0" })).v === "present", JSON.stringify(old));
+  const noModelFace = await run({ frames: null, face: true, search: ON });
   check("§9.6 no pose model at all: a face cannot show the legs, so the gate cannot judge and proceeds (§2.5)",
     noModelFace.v === "skipped", JSON.stringify(noModelFace));
-  const broken = await run({ frames: () => { throw new Error("gpu lost"); } });
+  const broken = await run({ frames: () => { throw new Error("gpu lost"); }, search: ON });
   check("§9.7 a pose model that never answers is waited out, then proceeds - never a refusal on no evidence",
     broken.v === "timeout", JSON.stringify(broken));
-  const timed = await run({ frames: cutAtThighs, timer: { seconds: 0.3 } });
+  const timed = await run({ frames: cutAtThighs, timer: { seconds: 0.3 }, search: ON });
   check("§9.8 a self-timer's seconds are added to the wait - they are spent walking back",
     timed.v === "not-full" && timed.ms >= 650, JSON.stringify({ v: timed.v, ms: timed.ms }));
   const fm = ok.g.fullBodyMiss;

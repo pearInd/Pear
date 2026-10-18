@@ -17837,16 +17837,20 @@ function presenceFromPoseResult(result, category) {
    and the head, knees and ankles at FULL_BODY_MIN_VISIBILITY - BlazePose reads ankles less surely than shoulders even in
    full view, and the in-frame test is what tells a cut-off foot from a visible one. Measured on the owner's clips before
    it shipped (CLAUDE.md §7.11). Only the GO-LIVE gate asks this; the mid-session watcher (startPresenceWatcher) keeps the
-   torso rule, so a turn or a step never dims a session already running. `?full_body=0` is the old gate. */
+   torso rule, so a turn or a step never dims a session already running. OFF BY DEFAULT since the same evening (see
+   fullBodyGateEnabled - the owner: "the back/front got ruined, put it back"); `?full_body=1` turns it on. */
 const FULL_BODY_PARTS = Object.freeze([
   ["head", [0]], ["shoulders", [11, 12]], ["hips", [23, 24]], ["knees", [25, 26]], ["ankles", [27, 28]],
 ]);
 const FULL_BODY_MIN_VISIBILITY = 0.5;
 const FULL_BODY_EDGE = 0.01;
 
-/** @returns {boolean} the go-live gate requires the whole body (the default; ?full_body=0 is the torso gate) */
+/** @returns {boolean} the go-live gate requires the whole body - OFF by default since the evening it shipped (?full_body=1 turns
+    it on). The owner, on the sessions after it: "the back/front got ruined - put it back as it was, keep the shirt as now".
+    It made them stand twice as far for a pose model that reads a smaller body, and the gate teaches the shoulder baseline
+    while they walk back (THE BASELINE RE-LEARNS records that failure); the torso gate is what the "amazing" session ran. */
 function fullBodyGateEnabled() {
-  try { return new URLSearchParams(location.search).get("full_body") !== "0"; } catch (_) { return true; }
+  try { return new URLSearchParams(location.search).get("full_body") === "1"; } catch (_) { return false; }
 }
 
 /** The body parts of ONE skeleton not visibly inside the frame - [] is the whole body.
