@@ -25,7 +25,11 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-const PINNED = "221a5b5835f450b0c12fe8d3037456af0ea1b62b1155c26476e97b24519d912c";
+/* RE-PINNED 2026-10-18 for THE HEM LENGTH (lib/prompts.js HEM_LENGTH_LOCK - "the shirt went into the pants and got
+   smaller"): the front TOPS branch only, one P.LOW clause where the budget has room. Checked before re-pinning against the
+   previous engine over 157,248 requests: 151,648 byte-identical, 5,600 differing by exactly that clause inserted (front,
+   tops), 0 other differences, the full look unchanged. The pre-move pin it replaces: 221a5b5835f450b0…912c. */
+const PINNED = "b0e1c887b737c6c75b88b5aeb30360249ca4b7a06ffb4f208c69eba4f321da68";
 
 let fails = 0;
 function check(label, cond, detail) {

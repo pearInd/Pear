@@ -801,7 +801,8 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     square === built &&
     /^Drape and fit the EXACT static top from the reference image onto the live subject's CURRENT body contour/.test(square) &&
     /Strictly preserve the original top texture, pattern, and color\./.test(square) &&
-    /fully fastened, sitting flat and closed across the chest as shown\.$/.test(square));
+    /* ...then the front tops' HEM LENGTH (P.LOW, 2026-10-18 - "the shirt went into the pants"), the same at both poses. */
+    /fully fastened, sitting flat and closed across the chest as shown\. Render the reference's full garment length, its hem hanging freely over the hips\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

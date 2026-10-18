@@ -210,7 +210,14 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      garment-category-prompt.test.mjs §2-§3 and image-first.test.mjs §1 own the wording.
      Bounded on both sides here, so neither branch can creep back toward the assembly this
      whole sequence undid. */
-  const tops = api.imageOnlyPrompt(TEE);
+  /* The front tops' HEM LENGTH (2026-10-18, "the shirt went into the pants" - P.LOW, its own part after the closure,
+     shed first under any pressure) is read off the end here, exactly once, so every bound and every restore row below
+     still measures the anchor + closure base it always measured. */
+  const HEM = " Render the reference's full garment length, its hem hanging freely over the hips.";
+  const topsWire = api.imageOnlyPrompt(TEE);
+  const tops = topsWire.endsWith(HEM) ? topsWire.slice(0, -HEM.length) : topsWire;
+  check("the front tops branch ends on the hem length, once - and the base below is the wire without it",
+    topsWire === tops + HEM && !tops.includes(HEM.trim()), topsWire);
   const bottoms = api.imageOnlyPrompt(JEANS);
   /* The tops branch now carries a SECOND part - FRONT_CLOSURE_LOCK, bought back against
      the button-down-rendered-open report - so a flat "both branches are within 40 of each

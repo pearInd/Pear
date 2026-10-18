@@ -124,7 +124,7 @@ const { value: PROMPT_MAX_CHARS, source: PROMPT_MAX_CHARS_SOURCE, kind: PROMPT_M
 const NEEDED = [
   "STRICT_REFERENCE_LOCK", "PLAIN_TEE_ANCHOR", "FRONT_CLOSURE_LOCK",
   "CATEGORY_ANCHOR", "BACK_CATEGORY_ANCHOR", "PLAIN_BACK_ANCHOR", "LOOK_ANCHOR",
-  "VOLUME_PERSISTENCE", "CLOSED_BACK_HEM",
+  "VOLUME_PERSISTENCE", "CLOSED_BACK_HEM", "HEM_LENGTH_LOCK",
 ];
 
 const scope = {};
@@ -293,21 +293,24 @@ function fitPromptTrace(parts, max = PROMPT_MAX_CHARS) {
    [priority, text, name]. `fit` names the garment type for fitSentence(); a branch
    with fit:null has no size clause (the full-look path does not route through
    imageOnlyPrompt - see buildLookPrompt). */
+/* THE HEM LENGTH (2026-10-18) - front tops only, P.LOW, after the closure lock and before the size sentence, as
+   imageOnlyPrompt() orders it. It sheds first, so the ladder shows where it rides. */
+const hem = [P.LOW, scope.HEM_LENGTH_LOCK ?? "", "HEM_LENGTH_LOCK"];
 const branches = [
   { id: "top / front / plain knit tee",       fit: "upper_body",
-    parts: [[P.CORE, scope.PLAIN_TEE_ANCHOR, "PLAIN_TEE_ANCHOR"]] },
+    parts: [[P.CORE, scope.PLAIN_TEE_ANCHOR, "PLAIN_TEE_ANCHOR"], hem] },
   /* KEPT, and it is NOT REACHABLE IN PRODUCTION - see the note in the printout.
      isPlainKnitTop() and hasFrontClosure() are mutually exclusive by construction,
      so this row is a synthetic worst case, retained because it is the tightest
      arithmetic in the file and a future edit to either predicate could make it real. */
   { id: "top / front / plain tee + closure",  fit: "upper_body", synthetic: true,
     parts: [[P.CORE, scope.PLAIN_TEE_ANCHOR, "PLAIN_TEE_ANCHOR"],
-            [P.HIGH, closure, "FRONT_CLOSURE_LOCK"]] },
+            [P.HIGH, closure, "FRONT_CLOSURE_LOCK"], hem] },
   { id: "top / front / structured",           fit: "upper_body",
-    parts: [[P.CORE, A.top, "CATEGORY_ANCHOR.top"]] },
+    parts: [[P.CORE, A.top, "CATEGORY_ANCHOR.top"], hem] },
   { id: "top / front / structured + closure", fit: "upper_body",
     parts: [[P.CORE, A.top, "CATEGORY_ANCHOR.top"],
-            [P.HIGH, closure, "FRONT_CLOSURE_LOCK"]] },
+            [P.HIGH, closure, "FRONT_CLOSURE_LOCK"], hem] },
   { id: "top / back (rear print)",             fit: "upper_body",
     parts: [[P.CORE, B.top, "BACK_CATEGORY_ANCHOR.top"]] },
   { id: "top / back (PLAIN rear)",             fit: "upper_body",
@@ -387,6 +390,7 @@ const AUDIT = [
      app.js's restore notes claimed for several revisions that it was on the wire when it
      never was - the kind of false belief this audit exists to make unmaintainable. */
   "identityLockSentence", "garmentPrintText", "colorNameFromHex", "KEEP_OPPOSITE_LAYER",
+  "HEM_LENGTH_LOCK",
 ];
 
 const code = src

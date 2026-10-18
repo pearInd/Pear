@@ -29,6 +29,7 @@ imageOnlyPrompt()  →  fitPrompt([
                                  | CATEGORY_ANCHOR.bottom
                                  | BACK_CATEGORY_ANCHOR.*],
                         [P.HIGH, FRONT_CLOSURE_LOCK]   // tops, front, only if hasFrontClosure()
+                        [P.LOW,  HEM_LENGTH_LOCK]      // tops, front, where the budget has room - 2026-10-18, §7.10
                         [P.MED,  fitSentence(garmentType)]   // RESTORED 2026-09-03, see below
                       ])
 lookAnchorPrompt() →  full-look path only (both slots filled)
@@ -1846,6 +1847,27 @@ every FRONT queued behind it, and the engine rendered the front reference throug
   engine's session-to-session landing spread: of the three 1.6x sessions on the 700 floor, u4 and v1 were clean and x3 lost
   three frames. Every 1.0x session since the floor (u3, v2, w3, x1) is clean frame by frame. A faster-turn tuning trades this
   against the back print riding a chest coming round - measured, not guessed, before any change.
+
+### 7.10 The hem length - "the shirt went into the pants and got smaller in the middle" (2026-10-18, Layer A)
+The owner's clip + TEST record (mvdw3304, PEAK, the owner in a regular-length tee over blue track pants - the pants right
+throughout): the BACK view rendered the oversized tee at its length, over the hips; every FRONT-reference frame ended it at the
+pants' waistband, and on the return (the FRONT sent at order -0.65, landing on a body still showing its back, clip 3.9-4.4s) it
+read as tucked in. The front anchors carry the lower-body lock ("Keep the subject's lower body ... unmodified"), the back anchor
+does not; a camera hem at the waistband leaves the render the waistband as lower body to keep.
+- **The change:** `HEM_LENGTH_LOCK` ("Render the reference's full garment length, its hem hanging freely over the hips.") on
+  FRONT TOPS at **P.LOW** - it sheds before every other part, so the size sentence sheds exactly where it did before and nowhere
+  new (trace:prompt's ladder). It rides on a structured top at true-to-size and one size up (PEAK: 573/650); not on a plain tee
+  (638 before it), a closure top, or the longer size phrasings - a known gap, for a report against a plain tee to decide.
+- **Measured** (the rig, the owner's clip as the camera; `?pear_exp=long` experiment, 1944d35, then reverted into the default):
+  without it the tee stopped at the waistband (t2); with it, to the top of the thigh as in the store photo, back print and swaps
+  unchanged, the pants untouched (t3 - an engine slow to acknowledge, 1.5s; t4 - clean); on the clip that once lost the owner's
+  yellow pants, the yellow kept, as without it (yC vs yA). The rig did NOT reproduce the tuck itself (the clip is a render, not
+  the owner's own tee) - the owner's next session is the check of that half.
+- **Proven:** 157,248 prompt requests old vs new - 151,648 byte-identical, 5,600 differing by exactly that clause (front tops),
+  0 other differences, the full look unchanged; `prompt-engine` re-pinned on that. A `wrangler deploy` makes the edge answer
+  /prompt again (until then the API version differs and the room asks the origin - prefetched, off the critical path, §2.15).
+- **Seen in the same clip, not changed:** 2.4-2.8s the back reference landing on a body still 30-80 degrees from the lens drew
+  the tee open on a bare chest - the early BACK the owner asked for ("stronger angles, without waiting"), §7.6's trade.
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
