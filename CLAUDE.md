@@ -1882,6 +1882,15 @@ does not; a camera hem at the waistband leaves the render the waistband as lower
   nohem`). The back prompt and image are unchanged by it; not distinguishable at this count. If it shows up in the owner's
   sessions, the clause is the first thing to take out.
 
+### 7.13 Every session starts as the page's first did (2026-10-18)
+"The first measurement was perfect - make the rest like it." Three sessions in one page (mve7qrij / mve7rdka / mve7rxzh): the
+first learned the shoulder baseline in its own gate and read the shoulder order through the turn (front at the 3/4 view); the
+second and third started from the previous session's baseline (1.52 in the third against ~0.6), every live reading fell outside
+it, the baseline re-learned mid-turn with no square-on reading left to finish, and the order went stale for the whole turn (age
+0.26s -> 2.6s, 7.9s -> 10.7s) - the return fell back to |yaw| and the back stayed on a chest facing the lens. resetTryOnSession()
+now starts the twist state (baseline, snap guard, head room) and the pose focus window fresh at every go-live, before the gate -
+the state the page's first session starts from. `stream-continuity` §6.
+
 ### 7.12 The hem is found in the photo (2026-10-18, u23 "it's a crop top", Layer B)
 The real cause of u22's "it got smaller" and u23's crop top was the FRONT-photo mask (d8be678): it painted from the garment
 box's bottom edge, 0.874 on PEAK's front, where the tee's hem is at 0.905 - the bottom 3% of the shirt went to the engine

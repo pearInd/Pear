@@ -6881,6 +6881,17 @@ function resetTryOnSession() {
   _poseFacingSep = null; _poseFacingAt = 0; _poseTorsoLostAt = 0;
   _poseOrd = null; _poseOrdAt = 0;
   if (typeof _poseHeadOut !== "undefined") _poseHeadOut = false;
+  /* EVERY SESSION STARTS FROM THE STATE THE PAGE'S FIRST ONE DID (2026-10-18). The owner: "the first measurement was perfect -
+     make the rest like it". Three sessions in one page (mve7qrij, mve7rdka, mve7rxzh): the first learned the shoulder
+     baseline in its own gate and read the shoulder order through the whole turn; the second and third started from the
+     PREVIOUS session's baseline (learned at another moment, another stance - 1.52 in the third, against ~0.6), every live
+     reading fell outside it, the baseline re-learned mid-turn with no square-on reading left to finish it, and the order went
+     stale for the whole turn (its age 263ms -> 2.6s, 7.9s -> 10.7s): the return fell back to |yaw| alone. The baseline, its
+     snap guard and head-room state (makeTwistState) and the pose focus window start fresh here - before the gate, exactly
+     where the first session's start from the page's load. */
+  if (typeof makeTwistState === "function" && typeof _poseTwist !== "undefined") _poseTwist = makeTwistState();
+  if (typeof _poseFocus !== "undefined") _poseFocus = null;
+  if (typeof _poseFullMisses !== "undefined") _poseFullMisses = 0;
   if (retired.length) {
     console.warn(`[PEAR] try-on reset: the previous session left ${retired.join(" + ")} running - retired before this one starts`);
   }

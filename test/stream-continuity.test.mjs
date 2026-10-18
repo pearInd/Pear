@@ -283,6 +283,24 @@ console.log("\n── §6 A SECOND TRY-ON INHERITS NOTHING - the window that sim
     logs.length === 1 && /^\[PEAR\] try-on reset:.*orientation watcher.*live-camera bridge/.test(logs[0]), JSON.stringify(logs));
   sandbox.reset();
   check("after a clean exit it retires nothing and stays silent", logs.length === 1 && sandbox.state.watcherStopped === 1);
+
+  /* EVERY SESSION STARTS AS THE PAGE'S FIRST DID (2026-10-18, "the first measurement was perfect - make the rest like it"):
+     the shoulder baseline the previous session learned (1.52 in the reported third session) and the pose focus window are
+     fresh again, so the gate learns this session's own - as on the page's first go-live. */
+  const firstLike = new Function("console", `
+    let orientWatcher = null, orientWatcherItem = null, _continuity = null;
+    let _torsoYawAbs = 0, _torsoYawAt = 0, _torsoYawRise = 0, _poseFacingSep = 0, _poseFacingAt = 0, _poseTorsoLostAt = 0;
+    let _poseOrd = 0.84, _poseOrdAt = 5, _poseHeadOut = true, _poseFocus = { cx: 0.5 }, _poseFullMisses = 3;
+    function makeTwistState() { return { sh0: 0, th0: 0, n: 0 }; }
+    let _poseTwist = { sh0: 1.52, th0: 0.31, n: 9, relearned: 2 };
+    function stopStreamContinuity() {}
+    function orientTurnMark() {}
+    ${resetSrc}
+    resetTryOnSession();
+    return { _poseTwist, _poseOrd, _poseOrdAt, _poseHeadOut, _poseFocus, _poseFullMisses };`)({ warn() {}, log() {}, error() {} });
+  check("...and the shoulder baseline, its order and the pose focus window start fresh, as on the page's first session",
+    JSON.stringify(firstLike._poseTwist) === JSON.stringify({ sh0: 0, th0: 0, n: 0 }) && firstLike._poseOrd === null && firstLike._poseOrdAt === 0 &&
+    firstLike._poseHeadOut === false && firstLike._poseFocus === null && firstLike._poseFullMisses === 0, JSON.stringify(firstLike));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
