@@ -890,6 +890,9 @@ let wireGarmentId = null;
    and the front are one garment), and in x2 the front's acknowledgement came 5.3s late: the settle ceiling expired and the
    room revealed on the back - its print on the chest for 0.9s. armFirstFrameBilling holds the reveal while this is true. */
 let _wireHoldsPrimedBack = false;
+/* ...and when the acknowledgement that replaced it landed (0: none this session): the engine draws the back for
+   REFERENCE_RENDER_SETTLE_MS after it, so the reveal waits that out too, whatever the settle ceiling says (2026-10-18). */
+let _primedBackReplacedAt = 0;
 
 /** Stamp an ACKNOWLEDGED full image upload. Only after the ack resolves - a send that failed
  *  never reached the model and opened no render window.
@@ -899,6 +902,7 @@ let _wireHoldsPrimedBack = false;
 function noteImageUploadAcked(where, garmentId) {
   lastImageUploadAckAt = Date.now();
   if (garmentId !== undefined) wireGarmentId = garmentId;
+  if (_wireHoldsPrimedBack && where !== "primeBack") _primedBackReplacedAt = lastImageUploadAckAt;
   _wireHoldsPrimedBack = where === "primeBack";
   if (typeof window !== "undefined" && window.__pearDebugFrameTiming) {
     console.log(`[PEAR][DEBUG] image upload acknowledged (${where}) - garment on the wire: ${wireGarmentId};`,
@@ -6547,7 +6551,7 @@ async function connectRealtime({ force = false } = {}) {
   /* ...nor any render window, nor any garment identity - a stamp left by the last session
      would let this session's reveal gate judge its first frame against the wrong upload.
      typeof-guarded: signaling-retry.test.mjs runs this function standalone. */
-  if (typeof lastImageUploadAckAt !== "undefined") { lastImageUploadAckAt = 0; wireGarmentId = null; if (typeof _wireHoldsPrimedBack !== "undefined") _wireHoldsPrimedBack = false; }
+  if (typeof lastImageUploadAckAt !== "undefined") { lastImageUploadAckAt = 0; wireGarmentId = null; if (typeof _wireHoldsPrimedBack !== "undefined") { _wireHoldsPrimedBack = false; _primedBackReplacedAt = 0; } }
   /* ...and the QUEUE with them. A write left pending against the client we just
      disconnected would otherwise make this session's very first apply see wireBusy() and
      wait behind a promise that can no longer settle - the go-live hang, reintroduced by
@@ -16417,7 +16421,12 @@ function armFirstFrameBilling(video, gen) {
       heldForPrimedBack = true;
       if (typeof traceOrient === "function") traceOrient("reveal-hold-prime", { ms: Date.now() - armedAt });
     }
-    const primeBackHold = (primeBackOnWire || (heldForPrimedBack && renderSettling())) &&
+    /* ...and the front's render switch is timed from the acknowledgement that replaced the back (_primedBackReplacedAt), not
+       from this gate having watched it: a gate whose first frame came after that ack holds just the same (2026-10-18). */
+    const replacedAt = typeof _primedBackReplacedAt === "number" ? _primedBackReplacedAt : 0;
+    const settleMs = typeof REFERENCE_RENDER_SETTLE_MS === "number" ? REFERENCE_RENDER_SETTLE_MS : 1200;
+    const primeBackHold = settleHoldEnabled && (primeBackOnWire || (heldForPrimedBack && renderSettling()) ||
+      (replacedAt > 0 && Date.now() - replacedAt < settleMs)) &&
       Date.now() - armedAt < (typeof PRIME_BACK_HOLD_MAX_MS === "number" ? PRIME_BACK_HOLD_MAX_MS : 11000);
     const qualifies = isGarmentApplied && dressed && !stillRaw && !settleHold && !wrongGarmentHold && !primeBackHold;
     if (!qualifies) {

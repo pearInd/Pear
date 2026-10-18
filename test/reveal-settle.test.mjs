@@ -217,6 +217,17 @@ console.log("\n── §1c NEVER ON THE PRIMED BACK (2026-10-17, x2) ──");
   fast.run(8000);
   check("...while a front acknowledged in time reveals exactly as before (the prime costs nothing)",
     fast.firedAt() !== null && fast.firedAt() - fast.armedAt < CONFIG.REVEAL_SETTLE_MAX_MS, `${fast.firedAt() - fast.armedAt}ms`);
+  /* No frames at all while the back is on the wire, the front acknowledged past the settle ceiling, the first frame after it:
+     the gate never "saw" the back, and still waits out the front's render switch (_primedBackReplacedAt, 2026-10-18). */
+  const quiet = (arm) => { const q = liveHarness({ primeFrontAckMs: 6500, arm }); q.T.advance(6600); q.run(8000); return q; };
+  const qn = quiet(ARM.replace("||\n      (replacedAt > 0 && Date.now() - replacedAt < settleMs))", ")"));
+  check("negative control: without the replaced-at clause a first frame 0.1s after the front's ack reveals at once",
+    qn.firedAt() !== null && qn.firedAt() - (qn.armedAt + 6500) < CONFIG.REFERENCE_RENDER_SETTLE_MS,
+    `revealed ${qn.firedAt() === null ? "never" : qn.firedAt() - qn.armedAt - 6500}ms after the front's ack`);
+  const qf = quiet(ARM);
+  check("...with it, the reveal waits the front's render switch out even when the gate never watched the back",
+    qf.firedAt() !== null && qf.firedAt() - (qf.armedAt + 6500) >= CONFIG.REFERENCE_RENDER_SETTLE_MS,
+    `revealed ${qf.firedAt() === null ? "never" : qf.firedAt() - qf.armedAt - 6500}ms after the front's ack`);
   check("the ceiling sits under the first-frame teardown",
     /const PRIME_BACK_HOLD_MAX_MS = 11000;/.test(APP) && /const FIRST_FRAME_TIMEOUT_MS = 15000;/.test(APP) &&
     /_wireHoldsPrimedBack = where === "primeBack";/.test(APP));
