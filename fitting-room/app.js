@@ -7614,32 +7614,60 @@ function referenceBackHint(url) {
   return null;
 }
 
-/** The server's band for this rear photo, or null. Never rejects; memoised per photo and region,
-    except a timeout or a network failure, which is re-asked next time. */
+/* ── A TOP'S FRONT PHOTO, BELOW THE HEM (2026-10-18) - "the pants turned into pants that aren't mine" ──────────────
+   The owner's own session (record mvdue6dq, a living room lit from behind): the render drew the store model's light-blue
+   jeans - dark navy under the backlight, rivets and all - over the shopper's own yellow shorts, the yellow left showing at
+   the hems. The rear photo is masked (above), the FRONT went whole: the model's jeans below the PEAK tee's hem were in the
+   reference. A TOP's front photo is now painted BELOW THE HEM ONLY - the head, the collar, the print and every pixel above
+   the hem are the bytes as before - with the same server band (region top) and every abstain of the rear (no person, an
+   unsure box, no answer in time: whole). A bottom's front keeps the shirt above it untouched (its own case, not reported);
+   a full look's halves are drawn from their own bands already (stitchLookBlob). ?front_mask=0 is the old front. */
+function referenceFrontHint(url) {
+  if (!url || /^(data:|blob:)/i.test(url)) return null;
+  try {
+    const q = new URLSearchParams(location.search);
+    if (q.get("ref_mask") === "0" || q.get("front_mask") === "0") return null;
+  } catch (_) { /* no location */ }
+  if ((typeof resolveLook === "function" ? resolveLook() : null)) return null;
+  const it = typeof activeItem !== "undefined" ? activeItem : null;
+  if (!it || isBottomsGarment(it)) return null;
+  const back = typeof distinctBackOf === "function" ? distinctBackOf(it) : null;
+  if (back && sameImage(back, url)) return null;
+  const g = typeof galleryOf === "function" ? galleryOf(it) : null;
+  const front = (g && g.front) || it.img || null;
+  return front && sameImage(front, url) ? { region: "top", side: "front" } : null;
+}
+
+/** The server's band for this rear photo - or, for a top's front photo, the band from its top to the hem (only the rows
+    below the hem are painted) - or null. Never rejects; memoised per photo and region, except a timeout or a network
+    failure, which is re-asked next time. */
 function referenceBackBand(url) {
-  const hint = referenceBackHint(url);
+  const hint = referenceBackHint(url) || (typeof referenceFrontHint === "function" ? referenceFrontHint(url) : null);
   if (!hint || typeof fetch !== "function" || typeof location === "undefined") return null;
-  const key = `${(typeof canonicalImageUrl === "function" && canonicalImageUrl(url)) || url}|${hint.region}`;
+  const key = `${(typeof canonicalImageUrl === "function" && canonicalImageUrl(url)) || url}|${hint.region}${hint.side === "front" ? "|front" : ""}`;
   if (_refBandJobs.has(key)) return _refBandJobs.get(key);
   const job = (async () => {
     try {
       const q = `image_url=${encodeURIComponent(url)}&region=${hint.region}&v=4`;
       const r = await fetch(`${location.origin}/api/garment-box?${q}`,
         typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(REF_BAND_TIMEOUT_MS) } : {});
-      if (!r.ok) { _refBandJobs.delete(key); refMaskNote({ did: "whole", why: "http-" + r.status }); return null; }
+      if (!r.ok) { _refBandJobs.delete(key); refMaskNote({ did: "whole", why: "http-" + r.status, ...(hint.side ? { side: hint.side } : {}) }); return null; }
       const j = await r.json();
       const b = j && j.band;
       const ok = b && [b.y0, b.y1].every((v) => typeof v === "number" && v >= 0 && v <= 1) && b.y1 - b.y0 > 0.1;
       if (!ok) {
-        refMaskNote({ did: "whole", why: String((j && j.reason) || "no-band").slice(0, 24) });
+        refMaskNote({ did: "whole", why: String((j && j.reason) || "no-band").slice(0, 24), ...(hint.side ? { side: hint.side } : {}) });
         console.log(`[PEAR] rear reference: sent whole (${(j && j.reason) || "no band"}) -`, abbrevImg(url));
         return null;
       }
       const xs = [b.x0, b.x1].every((v) => typeof v === "number" && v >= 0 && v <= 1) && b.x1 - b.x0 > 0.1;
-      return xs ? { y0: b.y0, y1: b.y1, x0: b.x0, x1: b.x1 } : { y0: b.y0, y1: b.y1 };
+      /* A top's FRONT keeps everything above its hem: the band starts at the photo's top (nothing painted there). */
+      const y0 = hint.side === "front" ? 0 : b.y0;
+      const side = hint.side === "front" ? { side: "front" } : {};
+      return xs ? { y0, y1: b.y1, x0: b.x0, x1: b.x1, ...side } : { y0, y1: b.y1, ...side };
     } catch (e) {
       _refBandJobs.delete(key);   // not an answer - the next fetch asks again
-      refMaskNote({ did: "whole", why: "no-answer" });
+      refMaskNote({ did: "whole", why: "no-answer", ...(hint.side ? { side: hint.side } : {}) });
       console.log("[PEAR] rear reference: no band in time - the photo goes whole:", e?.message || e);
       return null;
     }
@@ -7715,7 +7743,7 @@ async function maskReferenceBand(blob, url, band) {
     if (!png && out && out.size > blob.size) out = await encode(0.85);
     if (!out || !out.size || out.size > blob.size * 1.25) { refMaskNote({ did: "whole", why: "heavy" }); return blob; }
     const pct = (v) => Math.round(v * 100);
-    refMaskNote({ did: "masked", top: pct(rows.top / H), bottom: pct((H - rows.bottom) / H),
+    refMaskNote({ did: "masked", ...(band.side ? { side: band.side } : {}), top: pct(rows.top / H), bottom: pct((H - rows.bottom) / H),
       kb: [Math.round(blob.size / 1024), Math.round(out.size / 1024)] });
     console.log(`[PEAR] rear reference: the store's model painted out - ${pct(rows.top / H)}% above the collar,` +
       ` ${pct((H - rows.bottom) / H)}% below the hem (${W}x${H}, ${Math.round(blob.size / 1024)} -> ${Math.round(out.size / 1024)} KB) -`, abbrevImg(url));

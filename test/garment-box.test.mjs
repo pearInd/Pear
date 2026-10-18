@@ -147,10 +147,10 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
 
   /* Run the band request for real, on a fake fetch and a fake room. */
   const bandBlock = APP.slice(APP.indexOf("const REF_BAND_TIMEOUT_MS"), APP.indexOf("/** The rows to paint on an image"));
-  const make = (fetchImpl, item, search = "") => new Function("fetch", "location", "activeItem", "resolveLook", "distinctBackOf", "sameImage",
+  const make = (fetchImpl, item, search = "", look = null) => new Function("fetch", "location", "activeItem", "resolveLook", "distinctBackOf", "sameImage",
     "isBottomsGarment", "canonicalImageUrl", "abbrevImg", "AbortSignal", "console",
-    bandBlock + "\nreturn { referenceBackBand, referenceBackHint, _refMaskLog };")(
-    fetchImpl, { origin: "https://app.example", search }, item, () => null, (it) => it.back || null,
+    bandBlock + "\nreturn { referenceBackBand, referenceBackHint, referenceFrontHint, _refMaskLog };")(
+    fetchImpl, { origin: "https://app.example", search }, item, () => look, (it) => it.back || null,
     (a, b) => String(a).split("?")[0] === String(b).split("?")[0], (it) => it.bottoms === true,
     (u) => String(u).split("?")[0], (u) => String(u).slice(0, 40), { timeout: () => undefined }, { log() {}, warn() {} });
   const item = { img: "https://cdn.example.com/tee-1.jpg", back: "https://cdn.example.com/tee-3.jpg" };
@@ -164,7 +164,19 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
       /\/api\/garment-box\?image_url=https%3A%2F%2Fcdn\.example\.com%2Ftee-3\.jpg%3Fwidth%3D1000&region=top&v=4$/.test(asked[0]),
     asked[0]);
   check("...once per photo: another spelling of the same photo is the memo (canonical key)", asked.length === 1 && c2 === c1);
-  check("THE FRONT IS NEVER ASKED ABOUT - it is sent exactly as before", good.referenceBackBand(item.img) === null && asked.length === 1);
+  /* A TOP'S FRONT, BELOW THE HEM (2026-10-18, the owner's session: the store model's jeans drawn over the shopper's shorts). */
+  const fr = await good.referenceBackBand(item.img);
+  check("a TOP's front photo is asked about (region top) and comes back from the photo's top to the hem - only below it is painted",
+    fr && fr.y0 === 0 && fr.y1 === 0.8954 && fr.side === "front" && asked.length === 2 && /region=top&v=4$/.test(asked[1]) &&
+      /tee-1\.jpg/.test(asked[1]), JSON.stringify(fr));
+  check("...memoised apart from the same photo's rear band", (await good.referenceBackBand(item.img)) === fr && asked.length === 2);
+  const pantsFront = make(async (u) => { asked.push(u); return { ok: true, json: async () => ANSWER }; }, { ...item, bottoms: true });
+  check("a BOTTOMS garment's front is never asked about - the shirt above it stays", pantsFront.referenceBackBand(item.img) === null);
+  const lookOn = make(async (u) => { asked.push(u); return { ok: true, json: async () => ANSWER }; }, item, "", { top: item, bottom: { img: "x" } });
+  check("a full look's front is never asked about (its halves are drawn from their own bands)", lookOn.referenceFrontHint(item.img) === null);
+  const frontOff = make(async (u) => { asked.push(u); return { ok: true, json: async () => ANSWER }; }, item, "?front_mask=0");
+  check("?front_mask=0 sends the front whole, the rear still masked",
+    frontOff.referenceBackBand(item.img) === null && (await frontOff.referenceBackBand(item.back)) !== null);
   check("a photo the active garment does not own is not asked about", good.referenceBackBand("https://cdn.example.com/other.jpg") === null);
   check("an upload (data:/blob:) is not asked about", good.referenceBackBand("data:image/png;base64,AAAA") === null &&
     good.referenceBackBand("blob:https://app.example/1") === null);
@@ -197,6 +209,8 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
   check("nothing worth painting -> null (the photo goes whole)", rowsFn({ y0: 0.001, y1: 0.999 }, 1499) === null &&
     rowsFn({ y0: 0.5, y1: 0.55 }, 1499) === null && rowsFn(null, 1499) === null && rowsFn({ y0: 0.3, y1: 0.9 }, 0) === null);
   check("one side only is still painted", !!rowsFn({ y0: 0.3, y1: 1 }, 1499) && !!rowsFn({ y0: 0, y1: 0.8 }, 1499));
+  const fRows = rowsFn({ y0: 0, y1: 0.8742 }, 1499);
+  check("the PEAK FRONT photo: nothing above the hem is painted, the jeans (rows 1310-1499) are", fRows && fRows.top === 0 && fRows.bottom === 1310, JSON.stringify(fRows));
 
   const maskFn = fnSrc("async function maskReferenceBand(blob, url, band) {");
   check("every abstain and every failure returns the ORIGINAL Blob",
