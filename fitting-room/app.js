@@ -4442,6 +4442,13 @@ function buildVideoConstraints(facing) {
 
 async function startCamera(facing = cameraFacing) {
   if (isDemoLocked()) {
+    /* THE DEMO'S RESULT STAYS ON SCREEN (2026-10-22). Reported from the marketing site's demo:
+       "the moment the measurement ends it closes and you can't see it". The demo locks at the
+       session's end (lockDemoAfterFirstMeasurement), and a camera re-open after that - a phone
+       rotated after the turn (reinitCameraForOrientation), a camera flip - landed here and swapped
+       the finished result for the locked screen. With a result on the card, a re-open only stays
+       closed: the result is what the visitor came for, and a new session is still refused. */
+    if (card()?.classList.contains("show-result")) return false;
     toast(t("demoAlreadyUsed"));
     showDemoLockedScreen();
     return false;
