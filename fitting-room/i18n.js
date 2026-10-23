@@ -110,6 +110,23 @@ const I18N = {
   placeholderHeight:         { he: "לדוגמה: 175", en: "e.g. 175" },
   labelWeight:               { he: 'משקל (בק"ג):', en: "Weight (kg):" },
   placeholderWeight:         { he: "לדוגמה: 68", en: "e.g. 68" },
+  /* Estimate from a photo (setupPhotoEstimate() in app.js). Shipped text: never name
+     the model behind it (CLAUDE.md §2.24). */
+  photoEstimateBtn:          { he: "הערכת מידות מתמונה", en: "Estimate from a photo" },
+  photoEstimateBusy:         { he: "מעריכים מידות…", en: "Estimating…" },
+  photoEstimateAgain:        { he: "החלפת תמונה", en: "Try another photo" },
+  photoEstimateNote:         { he: "התמונה משמשת רק לחישוב ולא נשמרת", en: "Your photo is used only for this estimate and isn't stored" },
+  photoEstimateDone:         { he: "בדקו את המספרים ותקנו אם צריך", en: "Check the numbers and correct them if needed" },
+  photoEstimateFailed:       { he: "לא הצלחנו להעריך מהתמונה. נסו תמונה של כל הגוף, או מלאו ידנית.", en: "We couldn't estimate from this photo. Try a full-body photo, or fill in the fields." },
+  photoEstimateFull:         { he: "כל המידות כבר מלאות. מחקו מידה כדי להעריך אותה מתמונה.", en: "Every measurement is already filled in. Clear one to estimate it from a photo." },
+  photoSourceCamera:         { he: "צילום עכשיו", en: "Take a photo" },
+  photoSourcePhoto:          { he: "בחירת תמונה", en: "Choose a photo" },
+  photoSourceFile:           { he: "העלאת קובץ", en: "Upload a file" },
+  photoCamHint:              { he: "עמדו במרחק כך שכל הגוף ייראה, מהראש ועד כפות הרגליים", en: "Step back so your whole body is in view, head to feet" },
+  photoCamShoot:             { he: "צילום בעוד 5 שניות", en: "Take in 5 seconds" },
+  photoCamCancel:            { he: "ביטול", en: "Cancel" },
+  photoCamDenied:            { he: "אין גישה למצלמה. אפשר לבחור תמונה במקום.", en: "No camera access. You can choose a photo instead." },
+  estimateTag:               { he: "הערכה", en: "Estimate" },
   btnNextScreen:             { he: "המשך לחדר המדידה הוירטואלי ←", en: "Continue to the virtual fitting room →" },   /* arrow: see btnContinue */
   fineTuneLabel:             { he: "כוונון עדין", en: "Fine-tune" },
   labelChest:                { he: 'היקף חזה (בס"מ)', en: "Chest circumference (cm)" },
