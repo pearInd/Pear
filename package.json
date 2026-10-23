@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "build": "node scripts/build.mjs",
+    "try:photo": "node scripts/try-photo-tryon.mjs",
     "vercel-build": "node scripts/build.mjs",
     "dev": "node --watch server.js",
     "test": "node test/run.mjs",

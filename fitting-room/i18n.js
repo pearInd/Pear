@@ -385,6 +385,24 @@ const I18N = {
   flipCamTitle:             { he: "הפוך מצלמה", en: "Flip camera" },
   galleryClearTitle:        { he: "נקה גלריה", en: "Clear gallery" },
 
+  /* Live / photo mode (setupFitMode() in app.js). Shipped text: never name the model
+     behind the photo path (CLAUDE.md §2.24). */
+  fitModeAria:              { he: "מצב מדידה", en: "Fitting mode" },
+  fitModeLive:              { he: "לייב", en: "Live" },
+  fitModePhoto:             { he: "תמונה", en: "Photo" },
+  fitModePhotoHint:         { he: "תמונה אחת, כל הגוף בפריים מהראש ועד כפות הרגליים, עומדים ישר מול המצלמה", en: "One photo, your whole body in frame from head to feet, standing straight to the camera" },
+  photoFitShoot:            { he: "צילום תמונה", en: "Take photo" },
+  photoFitShootSub:         { he: "Take photo · 5s timer", en: "5-second timer" },
+  photoFitBusy:             { he: "מלבישים את הבגד על התמונה…", en: "Putting the garment on your photo…" },
+  photoFitFailed:           { he: "לא הצלחנו להלביש את הבגד על התמונה. נסו תמונה אחרת, או מדידה בלייב.", en: "We couldn't put the garment on this photo. Try another photo, or the live fitting." },
+  photoFitNotFullBody:      { he: "לא רואים את כל הגוף בתמונה. התרחקו כך שתיראו מהראש ועד כפות הרגליים, ונסו שוב.", en: "Your whole body isn't in the photo. Step back so you're visible from head to feet, and try again." },
+  photoFitCheckFailed:      { he: "לא הצלחנו לבדוק את התמונה. נסו שוב בעוד רגע.", en: "We couldn't check the photo. Try again in a moment." },
+  photoFitNoGarment:        { he: "בחרו בגד מהקטלוג כדי למדוד אותו על תמונה", en: "Choose a garment from the catalog to try it on a photo" },
+  photoFitDownload:         { he: "הורדה", en: "Download" },
+  photoFitAgain:            { he: "צילום חדש", en: "New photo" },
+  photoFitResultAlt:        { he: "הבגד על התמונה שלך", en: "The garment on your photo" },
+  photoGalleryAria:         { he: "בחירת תמונה מהגלריה", en: "Choose a photo from your gallery" },
+
   /* camera + fitting-room entry */
   camStarting:              { he: "מפעיל מצלמה…", en: "Starting camera…" },
   camDenied:                { he: "לא ניתן לגשת למצלמה:", en: "Couldn't access the camera:" },

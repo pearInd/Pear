@@ -503,6 +503,7 @@ const SUITES = [
   ["cloak", "cloak.test.mjs"],
   ["rt-proxy", "rt-proxy.test.mjs"],
   ["body-estimate", "body-estimate.test.mjs"],
+  ["photo-tryon", "photo-tryon.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────
