@@ -784,7 +784,48 @@
                 <p class="camera-card__size-mismatch-text" id="sizeMismatchText"></p>
                 <button class="btn-primary camera-card__size-mismatch-cta" id="sizeMismatchUpdateBtn" type="button" data-i18n="sizeMismatchUpdateBtn">עדכן מידות · Update Profile Sizes</button>
             </div>
+
+            <!-- ░░ Photo mode (setupFitMode() in app.js, POST /api/photo-tryon) - the still
+                 path beside the live one. Everything here is inert in live mode (the
+                 default): the layer and the gallery button only show on
+                 .camera-card.is-photo-mode, and the gallery button only once the camera
+                 is open (.live). The result is a STILL and is never shown over a live
+                 session - the mode cannot change while one runs (CLAUDE.md §2.9). ░░ -->
+            <div class="photo-fit" id="photoFit">
+                <img class="photo-fit__result" id="photoFitResult" alt="" data-i18n-alt="photoFitResultAlt" hidden>
+                <div class="photo-fit__count" id="photoFitCount" aria-live="assertive" hidden></div>
+                <div class="photo-fit__busy" id="photoFitBusy" role="status" hidden>
+                    <span class="photo-fit__spinner" aria-hidden="true"></span>
+                    <span data-i18n="photoFitBusy">מלבישים את הבגד על התמונה…</span>
+                </div>
+                <div class="photo-fit__actions" id="photoFitActions" hidden>
+                    <a class="photo-fit__btn" id="photoFitDownload" download="pear-look.png" data-i18n="photoFitDownload">הורדה</a>
+                    <button class="photo-fit__btn" id="photoFitAgain" type="button" data-i18n="photoFitAgain">צילום חדש</button>
+                </div>
+            </div>
+            <button class="photo-gallery-btn" id="photoGalleryBtn" type="button" aria-label="בחירת תמונה מהגלריה" data-i18n-aria="photoGalleryAria" data-i18n-title="photoGalleryAria" title="בחירת תמונה מהגלריה">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4.5 4 3.5 3-2.5 4 3.5"/></svg>
+            </button>
+            <input type="file" id="photoFitInput" accept="image/*,.heic,.heif" hidden>
         </div>
+
+        <!-- ░░ Live / photo mode switch - the gender switch's liquid glass (same classes, the
+             same press-and-drag layer: setupGenderSwitch() runs both). Live is the default
+             and the mode is locked while a live session runs. ░░ -->
+        <div class="fit-mode-wrap">
+            <div class="gender-toggle liquid-glass-track fit-mode-toggle" id="fitModeToggle" role="radiogroup" aria-label="מצב מדידה" data-i18n-aria="fitModeAria" data-active="live">
+                <span class="liquid-glass-pill" aria-hidden="true"></span>
+                <button class="gender-option fit-mode-tab is-active" type="button" role="radio" aria-checked="true" data-mode="live">
+                    <svg class="gender-option__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="1.5" y="4" width="9" height="8" rx="1.5"/><path d="M10.5 7l4-2.2v6.4l-4-2.2"/></svg>
+                    <span data-i18n="fitModeLive">לייב</span>
+                </button>
+                <button class="gender-option fit-mode-tab" type="button" role="radio" aria-checked="false" data-mode="photo">
+                    <svg class="gender-option__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 5h2.5L6 3h4l1.5 2H14v8H2z"/><circle cx="8" cy="8.7" r="2.3"/></svg>
+                    <span data-i18n="fitModePhoto">תמונה</span>
+                </button>
+            </div>
+        </div>
+        <p class="fit-mode-hint" id="fitModeHint" data-i18n="fitModePhotoHint" hidden>תמונה אחת, כל הגוף בפריים מהראש ועד כפות הרגליים, עומדים ישר מול המצלמה</p>
 
         <!-- ░░ Live try-on controls ░░ -->
         <div class="cam-controls">

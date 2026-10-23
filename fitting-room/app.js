@@ -2602,6 +2602,262 @@ function setupPhotoEstimate() {
   }
 }
 
+/* ── Live / photo mode - the still path beside the live one ──────────────────────
+   "לייב" is the room as it always was and stays the default. "תמונה" turns the same
+   capture button into a 5s-timer photo, shows a gallery button inside the camera card
+   once the camera is open, and sends ONE photo plus the garment's front reference to
+   POST /api/photo-tryon (lib/photo-tryon.js); the dressed photo comes back as a still
+   in the card.
+   What it does NOT touch: goLive(), the orientation, the reference resolution, the
+   recorder. The mode cannot change while a live session runs, and the still is cleared
+   on the way back to live, so it is never over a live feed (CLAUDE.md §2.9).
+   The garment is the FRONT reference the live session is conditioned on
+   (galleryOf(item).front || item.img) - a full look sends both pieces. The person photo
+   is a raw camera frame, un-mirrored (the model sees reality, as Decart does - see
+   MIRROR_POLICY), so the result's printed text reads correctly. */
+const PHOTO_FIT_TIMER_S = 5;
+const PHOTO_FIT_TIMEOUT_MS = 90_000;
+let fitMode = "live";
+let photoFitBusy = false;
+
+function setFitMode(mode) {
+  if (mode !== "live" && mode !== "photo") return;
+  if (mode === fitMode) return;
+  if (photoFitBusy || isLive()) return;   // locked while a photo is in flight or a session runs
+  fitMode = mode;
+  const track = $("fitModeToggle");
+  if (track) {
+    track.dataset.active = mode;
+    track.querySelectorAll(".fit-mode-tab").forEach((b) => {
+      const on = b.dataset.mode === mode;
+      b.classList.toggle("is-active", on);
+      b.setAttribute("aria-checked", String(on));
+    });
+  }
+  card().classList.toggle("is-photo-mode", mode === "photo");
+  const hint = $("fitModeHint"); if (hint) hint.hidden = mode !== "photo";
+  if (mode === "live") clearPhotoFit();
+  paintCaptureForMode();
+}
+
+/* The capture button's words for the current mode. Live mode owns its words (the HTML,
+   setLiveControls()); photo mode saves whatever live words are showing and puts them back
+   unchanged on the way out. setLiveControls() calls this last, so a repaint from anywhere
+   ends on the right label - and a live repaint while in photo mode refreshes the saved
+   words rather than the visible ones. */
+function paintCaptureForMode() {
+  const btn = $("captureBtn");
+  if (!btn || isLive()) return;
+  const icon = btn.querySelector(".btn-capture__icon");
+  const label = btn.querySelector(".btn-capture__label");
+  const en = btn.querySelector(".btn-capture__en");
+  if (!icon || !label || !en) return;
+  const showingPhoto = label.getAttribute("data-i18n") === "photoFitShoot";
+  if (fitMode === "photo") {
+    if (!showingPhoto) {
+      btn._liveWords = { icon: icon.textContent, label: label.textContent, key: label.getAttribute("data-i18n"), en: en.textContent, he: byLang(true, false) };
+    }
+    icon.textContent = "📷";
+    label.textContent = t("photoFitShoot");
+    label.setAttribute("data-i18n", "photoFitShoot");
+    en.textContent = t("photoFitShootSub");
+  } else if (showingPhoto && btn._liveWords) {
+    const w = btn._liveWords;
+    icon.textContent = w.icon;
+    // The words as they were - re-read from the dictionary only if the language changed meanwhile.
+    label.textContent = w.he !== byLang(true, false) && w.key ? t(w.key) : w.label;
+    if (w.key) label.setAttribute("data-i18n", w.key); else label.removeAttribute("data-i18n");
+    en.textContent = w.en;
+    btn._liveWords = null;
+  }
+}
+
+function clearPhotoFit() {
+  const img = $("photoFitResult");
+  if (img) { img.hidden = true; img.removeAttribute("src"); }
+  const actions = $("photoFitActions"); if (actions) actions.hidden = true;
+  card().classList.remove("has-photo-result");
+}
+
+/* The 5s self-timer, then one raw frame of #webcam. */
+async function takeFitPhoto() {
+  const video = $("webcam");
+  if (photoFitBusy || !localStream || !video || !video.videoWidth) return;
+  photoFitBusy = true;
+  clearPhotoFit();
+  const count = $("photoFitCount");
+  card().classList.add("is-photo-busy");   // the gallery button steps aside for the countdown
+  try {
+    for (let n = PHOTO_FIT_TIMER_S; n > 0; n--) {
+      if (count) { count.hidden = false; count.textContent = String(n); }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  } finally {
+    if (count) count.hidden = true;
+    card().classList.remove("is-photo-busy");
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  photoFitBusy = false;
+  await runPhotoFit(canvas);
+}
+
+/* ── FULL BODY OR NOTHING - the photo reaches the server only if the whole body is in it ──
+   A try-on of half a body is a wasted generation and a misleading picture, so the photo is
+   checked HERE, in the browser, by the same pose model the presence gate uses - before any
+   byte of it leaves the page. Every joint from the head to both ankles must be detected
+   (visibility >= PHOTO_FULL_BODY_MIN_VIS) and inside the frame.
+   FAILS CLOSED, unlike the presence gate (§2.5): that gate guards a session the shopper
+   asked for, and refusing it would stop them; this one guards a photo, and "we could not
+   check it" costs one more photo, never a lost fitting - the live mode is a tap away.
+   The server cannot repeat this check without sending the photo to a model, so this is
+   the one gate; the room never calls /api/photo-tryon past it. */
+const PHOTO_FULL_BODY = Object.freeze({
+  NOSE: 0, LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12, LEFT_HIP: 23, RIGHT_HIP: 24,
+  LEFT_KNEE: 25, RIGHT_KNEE: 26, LEFT_ANKLE: 27, RIGHT_ANKLE: 28,
+});
+const PHOTO_FULL_BODY_MIN_VIS = 0.5;
+const PHOTO_FULL_BODY_TRIES = 3;           // VIDEO mode re-detects on a new image within a call or two
+const PHOTO_FULL_BODY_LOAD_MS = 10_000;
+
+/**
+ * @param {{landmarks?: Array<Array<{x:number,y:number,visibility?:number}>>}|null} result
+ * @returns {{ok: boolean, missing: string[]}|null} null = cannot judge (no detector answer)
+ */
+function photoFullBodyVerdict(result) {
+  if (!result || !Array.isArray(result.landmarks)) return null;
+  const lms = result.landmarks[0];
+  if (!Array.isArray(lms) || !lms.length) return { ok: false, missing: ["person"] };
+  const missing = Object.entries(PHOTO_FULL_BODY).filter(([, i]) => {
+    const lm = lms[i];
+    if (!lm || Number(lm.visibility ?? 0) < PHOTO_FULL_BODY_MIN_VIS) return true;
+    return !(lm.x >= 0 && lm.x <= 1 && lm.y >= 0 && lm.y <= 1);   // detected, but outside the frame
+  }).map(([name]) => name);
+  return { ok: missing.length === 0, missing };
+}
+
+async function photoShowsFullBody(canvas) {
+  const detector = await Promise.race([
+    loadPoseLandmarker(),
+    new Promise((resolve) => setTimeout(() => resolve(null), PHOTO_FULL_BODY_LOAD_MS)),
+  ]);
+  if (!detector) return null;
+  let verdict = null;
+  for (let i = 0; i < PHOTO_FULL_BODY_TRIES; i++) {
+    /* Through detectPoseFrame(), the one guarded call site (its monotonic timestamp). The
+       live loop's POSE FOCUS WINDOW state is set aside for the call and put back after, so a
+       still photo neither uses a window learned on the live feed nor teaches it one: the whole
+       photo is read, and the live pose loop resumes exactly where it was. */
+    const focus = _poseFocus, misses = _poseFullMisses;
+    _poseFocus = null;
+    try {
+      verdict = photoFullBodyVerdict(detectPoseFrame(detector, canvas));
+    } catch (e) {
+      console.warn("[PEAR] photo fit - full-body check failed:", e?.message || e);
+      verdict = null;
+    } finally {
+      _poseFocus = focus; _poseFullMisses = misses;
+    }
+    if (verdict && verdict.ok) break;
+  }
+  return verdict;
+}
+
+/* A File, a Blob or a canvas → a canvas no larger than PHOTO_ESTIMATE_MAX_SIDE. */
+async function photoToCanvas(source) {
+  const bitmap = source instanceof HTMLCanvasElement ? source : await createImageBitmap(source);
+  const scale = Math.min(1, PHOTO_ESTIMATE_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  if (typeof bitmap.close === "function") bitmap.close();
+  return canvas;
+}
+
+async function runPhotoFit(source) {
+  if (photoFitBusy) return;
+  const look = resolveLook();
+  const items = look ? [look.top, look.bottom] : (activeItem ? [activeItem] : []);
+  if (!items.length) { toast(t("photoFitNoGarment")); return; }
+  photoFitBusy = true;
+  clearPhotoFit();
+  const busy = $("photoFitBusy"); if (busy) busy.hidden = false;
+  card().classList.add("is-photo-busy");
+
+  let answer = null;
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), PHOTO_FIT_TIMEOUT_MS) : null;
+  let blocked = null;
+  try {
+    const personCanvas = await photoToCanvas(source);
+    const body = await photoShowsFullBody(personCanvas);
+    if (!body || !body.ok) {
+      blocked = body ? "photoFitNotFullBody" : "photoFitCheckFailed";
+      console.log(`[PEAR] photo fit - not sent: ${body ? "missing " + body.missing.join(", ") : "no pose check"}`);
+      throw new Error("not a full-body photo");
+    }
+    const person = personCanvas.toDataURL("image/jpeg", 0.85);
+    const garments = [];
+    for (const it of items) {
+      const url = galleryOf(it).front || it.img;
+      const blob = url ? await garmentBlobCached(url) : null;
+      if (!blob) continue;
+      garments.push({
+        image: await photoToJpegDataUrl(blob),
+        region: isBottomsGarment(it) ? "lower_body" : "upper_body",
+        name: it.name || "",
+      });
+    }
+    if (!garments.length) throw new Error("no garment image");
+    const resp = await fetch(`${location.origin}/api/photo-tryon`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ person, garments }),
+      signal: ctrl ? ctrl.signal : undefined,
+    });
+    answer = resp.ok ? await resp.json() : null;
+  } catch (e) {
+    if (!blocked) console.warn("[PEAR] photo fit - unavailable:", e?.message || e);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (busy) busy.hidden = true;
+    card().classList.remove("is-photo-busy");
+    photoFitBusy = false;
+  }
+
+  if (blocked) { toast(t(blocked)); return; }
+  if (!answer || answer.ok !== true || typeof answer.image !== "string" || !answer.image.startsWith("data:image/")) {
+    console.log(`[PEAR] photo fit - no image (${answer?.reason || "no answer"})`);
+    toast(t("photoFitFailed"));
+    return;
+  }
+  /* The mode may have gone back to live while the photo was being made - a late still
+     must not land on the live card. */
+  if (fitMode !== "photo" || isLive()) return;
+  console.log(`[PEAR] photo fit - done in ${answer.ms}ms`);
+  const img = $("photoFitResult");
+  if (img) { img.src = answer.image; img.hidden = false; }
+  const dl = $("photoFitDownload"); if (dl) dl.href = answer.image;
+  const actions = $("photoFitActions"); if (actions) actions.hidden = false;
+  card().classList.add("has-photo-result");
+}
+
+function setupFitMode() {
+  const track = $("fitModeToggle");
+  if (!track) return;
+  setupGenderSwitch(track, { tab: ".fit-mode-tab", key: "mode", get: () => fitMode, set: setFitMode });
+  $("photoGalleryBtn")?.addEventListener("click", () => { if (!photoFitBusy) $("photoFitInput")?.click(); });
+  const input = $("photoFitInput");
+  input?.addEventListener("change", () => {
+    const file = input.files && input.files[0];
+    input.value = "";   // the same photo can be picked again
+    if (file) runPhotoFit(file);
+  });
+  $("photoFitAgain")?.addEventListener("click", clearPhotoFit);
+}
+
 /* ── The gender switch's input layer: tap AND press-and-drag ─────────────────────
    Liquid Glass physics for #genderToggle, the model the language switch uses
    (setupLangToggle in i18n.js), on top of the radiogroup setGender() already owns.
@@ -2627,7 +2883,14 @@ const GENDER_RUBBER_BAND    = 0.28;   // share of the overshoot the pill follows
 const GENDER_CLICK_SWALLOW_MS = 400;  // how long after a drag a stray click is ignored
 
 /** @param {HTMLElement|null} track  #genderToggle */
-function setupGenderSwitch(track) {
+/* Also runs the fitting room's live/photo switch (setupFitMode()): `opts` names the tab
+   selector, the dataset key on each tab, and the state's getter/setter. With no `opts` it
+   is the gender switch, exactly as before. */
+function setupGenderSwitch(track, opts) {
+  const tabSel = (opts && opts.tab) || ".gender-tab";
+  const key = (opts && opts.key) || "gender";
+  const current = (opts && opts.get) || (() => currentUserGender);
+  const choose = (opts && opts.set) || setGender;
   if (!track || track.dataset.switchWired) return;
   track.dataset.switchWired = "1";
   const pill = track.querySelector(".liquid-glass-pill");
@@ -2636,12 +2899,12 @@ function setupGenderSwitch(track) {
 
   track.addEventListener("click", (e) => {
     if (Date.now() < swallowClickUntil) { swallowClickUntil = 0; return; }   // the tail of a drag, not a tap
-    const btn = e.target.closest(".gender-tab");
-    if (btn) setGender(btn.dataset.gender);
+    const btn = e.target.closest(tabSel);
+    if (btn) choose(btn.dataset[key]);
   });
   if (!pill) return;   // no pill in the markup - taps still work, there is just nothing to drag
 
-  const options = () => Array.from(track.querySelectorAll(".gender-tab"));
+  const options = () => Array.from(track.querySelectorAll(tabSel));
   const nearestTo = (centre) => {
     let best = null, bestD = Infinity;
     for (const b of options()) {
@@ -2654,11 +2917,11 @@ function setupGenderSwitch(track) {
   track.addEventListener("pointerdown", (e) => {
     swallowClickUntil = 0;   // a new press: any click trailing the last drag has already fired
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    const opts = options();
-    if (opts.length < 2) return;
-    const lefts = opts.map((b) => b.offsetLeft);
+    const tabs = options();
+    if (tabs.length < 2) return;
+    const lefts = tabs.map((b) => b.offsetLeft);
     const pillW = pill.offsetWidth;
-    const active = opts.find((b) => b.dataset.gender === currentUserGender);
+    const active = tabs.find((b) => b.dataset[key] === current());
     /* With nothing chosen yet the pill appears under the finger, clamped into the track;
        clientLeft converts the border-box rect into offsetLeft's padding-box frame. */
     const r = track.getBoundingClientRect();
@@ -2689,7 +2952,7 @@ function setupGenderSwitch(track) {
     g.left = left;
     pill.style.transform = `translate3d(${(left - g.anchor).toFixed(1)}px, 0, 0)`;
     const over = nearestTo(left + g.pillW / 2);
-    if (over) track.dataset.preview = over.dataset.gender;
+    if (over) track.dataset.preview = over.dataset[key];
   });
 
   const endGesture = (e, commit) => {
@@ -2706,7 +2969,7 @@ function setupGenderSwitch(track) {
     pill.style.transform = "";
     if (!commit) return;
     const target = nearestTo(g.left + g.pillW / 2);
-    if (target && target.dataset.gender !== currentUserGender) setGender(target.dataset.gender);
+    if (target && target.dataset[key] !== current()) choose(target.dataset[key]);
   };
   track.addEventListener("pointerup", (e) => endGesture(e, true));
   track.addEventListener("pointercancel", (e) => endGesture(e, false));
@@ -4474,6 +4737,8 @@ function renderColorSwatches() {
  * @returns {void}
  */
 function renderActiveGarment() {
+  // A still made for the previous garment must not stay up beside the new one.
+  if (typeof clearPhotoFit === "function") clearPhotoFit();
   const { top, bottom } = activeOutfit;
   const chip = $("activeGarment");
   chip.hidden = false;
@@ -16277,6 +16542,8 @@ function hideCamGuide() {
    ============================================================================= */
 /* One button toggles the live session: Go Live ⇄ Stop. */
 function onLiveToggle() {
+  // Photo mode: the same button takes the photo (setupFitMode()); a live session can't be running.
+  if (typeof fitMode !== "undefined" && fitMode === "photo" && !isLive()) { takeFitPhoto(); return; }
   if (isLive()) stopLive();
   else goLive();
 }
@@ -19683,6 +19950,7 @@ function setLiveControls(live) {
   if (icon)  icon.innerHTML    = live ? '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="7" y="7" width="10" height="10" rx="2.4" fill="currentColor" stroke="none"/></svg>' : '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="6.5" width="12.5" height="11" rx="2.6"/><path d="M15.5 10.4 20.4 7.8v8.4l-4.9-2.6z"/></svg>';
   if (label) label.textContent = live ? byLang("עצור מדידה חיה", "Stop") : byLang("התחל מדידה חיה", "Go Live");
   if (en)    en.textContent    = live ? "Stop" : "Go Live";
+  if (!live && typeof paintCaptureForMode === "function") paintCaptureForMode();   // photo mode keeps its own words
 }
 
 /* =============================================================================
@@ -21932,6 +22200,7 @@ function init() {
        in whatever language is active when they fire. */
     try { if (activeItem || (activeOutfit.top && activeOutfit.bottom)) renderActiveGarment(); } catch {}
     try { setConn(connState); } catch {}
+    try { paintCaptureForMode(); } catch {}
     try { assetPrepRender(); } catch {}
     try { if (scanTimerInterval) { scanStepIndex = -1; updateScanTimer(); } } catch {}
     try { const h = $("otp-email-hint"); if (h && h.dataset.email) h.textContent = `${t("otpSentTo")} ${h.dataset.email}`; } catch {}
@@ -22068,6 +22337,9 @@ function init() {
   // and the press-and-drag layer, wired together so a drag can swallow its trailing click.
   // See setupGenderSwitch().
   setupGenderSwitch($("genderToggle"));
+
+  // The fitting room's live / photo switch - same glass and gesture layer.
+  setupFitMode();
 
   // "Estimate from a photo" - fills empty height/weight with an editable estimate.
   setupPhotoEstimate();

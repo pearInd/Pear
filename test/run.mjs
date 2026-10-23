@@ -552,6 +552,7 @@ const SUITES = [
   ["pose-follow", "pose-follow.test.mjs"],
   ["full-look", "full-look.test.mjs"],
   ["body-estimate", "body-estimate.test.mjs"],
+  ["photo-tryon", "photo-tryon.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

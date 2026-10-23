@@ -36,6 +36,7 @@ import { classifyGarmentFull } from "./lib/garment-category.js";
    reference before it is sent (2026-10-08 - see lib/garment-box.js and GET /api/garment-box). */
 import { detectGarmentBand, GARMENT_BOX_VERSION } from "./lib/garment-box.js";
 import { estimateBodyFromPhoto, sanitizeBodyEstimateRequest } from "./lib/body-estimate.js";
+import { photoTryOn, sanitizePhotoTryOnRequest } from "./lib/photo-tryon.js";
 import { makeStoreSizeChartHandler } from "./lib/store-size-charts.js";
 /* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
 import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
@@ -139,6 +140,7 @@ const storeCatalogLimiter = rateLimit({ windowMs: 60_000, max: 30 }); // "Comple
 const sizeLimiter     = rateLimit({ windowMs: 60_000, max: 120 });  // size verdicts - one per NEW measurement set, memoised client-side
 const promptLimiter   = rateLimit({ windowMs: 60_000, max: 240 });  // wire prompts - a few per garment (angle x size delta), memoised client-side
 const bodyEstimateLimiter = rateLimit({ windowMs: 60_000, max: 10 }); // height/weight from a photo - one model call per press
+const photoTryOnLimiter = rateLimit({ windowMs: 60_000, max: 6 });   // photo try-on - one image generation per photo
 
 /* ── CORS enforcement ────────────────────────────────────────────────────────
    The fitting room is PUBLICLY ACCESSIBLE to any anonymous visitor - no login
@@ -909,6 +911,23 @@ app.post("/api/body-estimate", bodyEstimateLimiter, async (req, res) => {
   if (!request.image) return res.status(400).json({ ok: false, reason: "bad_image" });
   const answer = await estimateBodyFromPhoto(request, GEMINI_API_KEY);
   console.log(`[body-estimate] ${answer.ok ? `ok (confidence ${answer.confidence})` : answer.reason}`);
+  res.json(answer);
+});
+
+/* ── Photo try-on - POST /api/photo-tryon ───────────────────────────────────────
+   The room's photo mode (lib/photo-tryon.js). Request: { person: a data: URL,
+   garments: [{ image: data: URL, region: "upper_body"|"lower_body", name }] } (one, or two
+   for a full look). Response: { ok: true, image: data: URL, ms } or { ok: false, reason }.
+   Always 200 except an unusable request (400). The person photo is never stored or
+   logged - only the outcome and the time are. */
+app.post("/api/photo-tryon", photoTryOnLimiter, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const request = sanitizePhotoTryOnRequest(req.body);
+  if (!request.person || !request.garments.length) {
+    return res.status(400).json({ ok: false, reason: request.person ? "bad_garment" : "bad_person" });
+  }
+  const answer = await photoTryOn(request, GEMINI_API_KEY);
+  console.log(`[photo-tryon] ${answer.ok ? `ok in ${answer.ms}ms (${request.garments.length} garment(s))` : answer.reason}`);
   res.json(answer);
 });
 
