@@ -502,6 +502,7 @@ const SUITES = [
   ["return-side", "return-side.test.mjs"],
   ["cloak", "cloak.test.mjs"],
   ["rt-proxy", "rt-proxy.test.mjs"],
+  ["body-estimate", "body-estimate.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

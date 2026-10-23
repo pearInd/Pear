@@ -2311,6 +2311,227 @@ function setGender(gender) {
   if (sizeFormEl && !sizeFormEl.hidden) calculateSize();
 }
 
+/* ── Estimate from a photo ───────────────────────────────────────────────────────
+   The shopper takes or uploads one photo and the measurement fields - HEIGHT and WEIGHT,
+   and the optional CHEST / WAIST / LEGS - fill with an estimate (POST /api/body-estimate,
+   lib/body-estimate.js). The button opens a menu of three sources: take a photo now (an
+   in-page camera sheet with a 5s self-timer, so a shopper alone can step back into a
+   full-body frame), choose a photo, or upload a file. What it does NOT do, deliberately:
+   - pick the size. The numbers go through calculateSize() exactly as typed ones do, so
+     the size is lib/sizing.js's, from numbers the shopper can see.
+   - overwrite. Only an EMPTY field is filled; a typed value is sent as KNOWN - a typed
+     height is also the scale the photo lacks, so every other estimate improves with it.
+   - move on. Each filled field carries an "estimate" tag until the shopper edits it, and
+     Continue is theirs to press.
+   - block. Every failure (no person, low confidence, no camera, network) fills nothing and
+     says so; the form is as the shopper left it (CLAUDE.md §2.5). An optional field the
+     model could not read comes back null and simply stays empty.
+   The photo is downscaled here to a ≤1024px JPEG, sent once, and never kept or logged.
+   The camera sheet's stream is its own and is stopped the moment the sheet closes - it
+   never touches #webcam / localStream (§2.9). */
+const PHOTO_ESTIMATE_MAX_SIDE = 1024;
+const PHOTO_ESTIMATE_TIMEOUT_MS = 25_000;
+const PHOTO_ESTIMATE_FIELDS = ["height", "weight", "chest", "waist", "legs"];
+const PHOTO_CAM_TIMER_S = 5;
+
+/* A File, an ImageBitmap-able Blob, or a canvas already holding the frame → JPEG data URL. */
+async function photoToJpegDataUrl(source) {
+  const bitmap = source instanceof HTMLCanvasElement ? source : await createImageBitmap(source);
+  const scale = Math.min(1, PHOTO_ESTIMATE_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  if (typeof bitmap.close === "function") bitmap.close();
+  return canvas.toDataURL("image/jpeg", 0.85);
+}
+
+/* The camera sheet. Resolves a canvas holding the frame, null on cancel, or "denied" when
+   there is no camera to open. Built on <body> so no glass ancestor's backdrop-filter
+   becomes its containing block. */
+function openPhotoCamera() {
+  return new Promise(async (resolve) => {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") { resolve("denied"); return; }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false,
+      });
+    } catch (e) {
+      console.warn("[PEAR] photo estimate - camera unavailable:", e?.name || e);
+      resolve("denied");
+      return;
+    }
+
+    const sheet = document.createElement("div");
+    sheet.className = "photo-cam";
+    sheet.setAttribute("role", "dialog");
+    sheet.setAttribute("aria-modal", "true");
+    sheet.innerHTML =
+      '<div class="photo-cam__frame"><video class="photo-cam__video" playsinline muted autoplay></video>' +
+      '<span class="photo-cam__count" aria-live="assertive"></span></div>' +
+      '<p class="photo-cam__hint"></p>' +
+      '<div class="photo-cam__actions"><button type="button" class="photo-cam__cancel"></button>' +
+      '<button type="button" class="photo-cam__shoot"></button></div>';
+    const video = sheet.querySelector("video"), count = sheet.querySelector(".photo-cam__count");
+    const shoot = sheet.querySelector(".photo-cam__shoot"), cancel = sheet.querySelector(".photo-cam__cancel");
+    sheet.querySelector(".photo-cam__hint").textContent = t("photoCamHint");
+    shoot.textContent = t("photoCamShoot");
+    cancel.textContent = t("photoCamCancel");
+    video.srcObject = stream;
+    document.body.appendChild(sheet);
+    shoot.focus();
+
+    let timer = null, done = false;
+    const close = (result) => {
+      if (done) return;
+      done = true;
+      if (timer) clearInterval(timer);
+      stream.getTracks().forEach((tr) => tr.stop());
+      document.removeEventListener("keydown", onKey);
+      sheet.remove();
+      resolve(result);
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(null); };
+    document.addEventListener("keydown", onKey);
+    cancel.addEventListener("click", () => close(null));
+    shoot.addEventListener("click", () => {
+      if (timer) return;
+      shoot.disabled = true;
+      let left = PHOTO_CAM_TIMER_S;
+      count.textContent = String(left);
+      timer = setInterval(() => {
+        left -= 1;
+        if (left > 0) { count.textContent = String(left); return; }
+        clearInterval(timer); timer = null;
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 960;
+        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+        close(canvas);
+      }, 1000);
+    });
+  });
+}
+
+function setupPhotoEstimate() {
+  const btn = $("btnPhotoEstimate"), menu = $("photoEstimateMenu");
+  const label = $("photoEstimateLabel"), status = $("photoEstimateStatus");
+  const pickers = { photo: $("photoEstimatePhoto"), file: $("photoEstimateFile") };
+  if (!btn || !menu) return;
+  const tagOf = (id) => $(`${id}EstimateTag`);
+  let busy = false;
+
+  // A field the shopper edits is theirs again - its tag goes.
+  PHOTO_ESTIMATE_FIELDS.forEach((id) => {
+    $(id)?.addEventListener("input", () => { const tag = tagOf(id); if (tag) tag.hidden = true; });
+  });
+
+  const say = (key) => {
+    if (!status) return;
+    status.textContent = key ? t(key) : "";
+    status.hidden = !key;
+    status.classList.toggle("is-error", key === "photoEstimateFailed" || key === "photoCamDenied");
+  };
+  const setLabel = (key) => {
+    if (!label) return;
+    label.textContent = t(key);
+    label.setAttribute("data-i18n", key);
+  };
+  const isEmpty = (id) => !String($(id)?.value || "").trim();
+  const known = (id) => {
+    const v = parseFloat(String($(id)?.value || "").trim());
+    return Number.isFinite(v) ? v : null;
+  };
+
+  const setMenu = (open) => {
+    menu.hidden = !open;
+    btn.setAttribute("aria-expanded", String(open));
+    if (open) menu.querySelector("button")?.focus();
+  };
+  btn.addEventListener("click", () => {
+    if (busy) return;
+    if (!menu.hidden) { setMenu(false); return; }
+    if (!PHOTO_ESTIMATE_FIELDS.some(isEmpty)) { say("photoEstimateFull"); return; }
+    say(null);
+    setMenu(true);
+  });
+  document.addEventListener("click", (e) => {
+    if (!menu.hidden && !menu.contains(e.target) && !btn.contains(e.target)) setMenu(false);
+  });
+  menu.addEventListener("keydown", (e) => { if (e.key === "Escape") { setMenu(false); btn.focus(); } });
+
+  menu.querySelectorAll("[data-source]").forEach((item) => {
+    item.addEventListener("click", async () => {
+      setMenu(false);
+      const source = item.dataset.source;
+      if (source !== "camera") { pickers[source]?.click(); return; }
+      const shot = await openPhotoCamera();
+      if (shot === "denied") { say("photoCamDenied"); return; }
+      if (shot) estimate(shot);
+    });
+  });
+  Object.values(pickers).forEach((input) => {
+    input?.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      input.value = "";   // the same photo can be picked again
+      if (file) estimate(file);
+    });
+  });
+
+  async function estimate(source) {
+    busy = true;
+    btn.classList.add("is-busy");
+    btn.setAttribute("aria-busy", "true");
+    setLabel("photoEstimateBusy");
+    say(null);
+
+    let answer = null;
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), PHOTO_ESTIMATE_TIMEOUT_MS) : null;
+    try {
+      const image = await photoToJpegDataUrl(source);
+      const body = { image, gender: currentUserGender || null };
+      PHOTO_ESTIMATE_FIELDS.forEach((id) => { body[id] = known(id); });
+      const resp = await fetch(`${location.origin}/api/body-estimate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+      answer = resp.ok ? await resp.json() : null;
+    } catch (e) {
+      console.warn("[PEAR] photo estimate - unavailable, the form stands:", e?.message || e);
+    } finally {
+      if (timer) clearTimeout(timer);
+      busy = false;
+      btn.classList.remove("is-busy");
+      btn.removeAttribute("aria-busy");
+    }
+
+    if (!answer || answer.ok !== true) {
+      console.log(`[PEAR] photo estimate - nothing filled (${answer?.reason || "no answer"})`);
+      setLabel("photoEstimateBtn");
+      say("photoEstimateFailed");
+      return;
+    }
+
+    // Only fields still empty NOW - the shopper may have typed while it was running.
+    let filled = 0;
+    PHOTO_ESTIMATE_FIELDS.forEach((id) => {
+      const el = $(id), value = answer[id];
+      if (!el || String(el.value || "").trim() || !Number.isFinite(value)) return;
+      el.value = String(value);
+      const tag = tagOf(id); if (tag) tag.hidden = false;
+      filled++;
+    });
+    console.log(`[PEAR] photo estimate - filled ${filled} field(s), confidence ${answer.confidence}`);
+    setLabel("photoEstimateAgain");
+    say(filled ? "photoEstimateDone" : null);
+    if (filled) calculateSize();
+  }
+}
+
 /* ── The gender switch's input layer: tap AND press-and-drag ─────────────────────
    Liquid Glass physics for #genderToggle, the model the language switch uses
    (setupLangToggle in i18n.js), on top of the radiogroup setGender() already owns.
@@ -20445,7 +20666,7 @@ function init() {
 
   // Measurements only - the consent checkboxes in #sizeForm are wired by
   // setupConsentPanel(); ticking one must not re-run the size calculator.
-  document.querySelectorAll('#sizeForm input:not([type="checkbox"])').forEach((i) => {
+  document.querySelectorAll('#sizeForm input:not([type="checkbox"]):not([type="file"])').forEach((i) => {
     i.addEventListener("input", calculateSize);
     i.addEventListener("keydown", onMeasurementKeydown);   // Task 5 - Enter to proceed
   });
@@ -20455,6 +20676,9 @@ function init() {
   // and the press-and-drag layer, wired together so a drag can swallow its trailing click.
   // See setupGenderSwitch().
   setupGenderSwitch($("genderToggle"));
+
+  // "Estimate from a photo" - fills empty height/weight with an editable estimate.
+  setupPhotoEstimate();
 
   // Explicit open only - startCamera() is also called from flipCamera() and
   // reinitCameraForOrientation(), where the page shouldn't jump since the user is

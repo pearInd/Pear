@@ -223,12 +223,44 @@
                 </div>
             </div>
 
+            <!-- ░░ Estimate from a photo - fills EMPTY measurement fields (height, weight
+                 and the optional three) with an estimate the shopper can edit
+                 (setupPhotoEstimate() in app.js, POST /api/body-estimate). It never picks
+                 the size and never moves on by itself. The button opens a small menu: take
+                 a photo now (the in-page camera sheet, built by app.js on <body>), choose a
+                 photo, or upload a file. The file inputs sit OUTSIDE the measurement wiring:
+                 the #sizeForm input listener skips [type="file"]. ░░ -->
+            <div class="photo-estimate" id="photoEstimate">
+                <input type="file" id="photoEstimatePhoto" accept="image/*" hidden>
+                <input type="file" id="photoEstimateFile" accept="image/*,.heic,.heif" hidden>
+                <button type="button" class="btn-photo-estimate" id="btnPhotoEstimate" aria-haspopup="menu" aria-expanded="false" aria-controls="photoEstimateMenu">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+                    <span id="photoEstimateLabel" data-i18n="photoEstimateBtn">הערכת מידות מתמונה</span>
+                </button>
+                <div class="photo-estimate__menu" id="photoEstimateMenu" role="menu" hidden>
+                    <button type="button" role="menuitem" data-source="camera">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+                        <span data-i18n="photoSourceCamera">צילום עכשיו</span>
+                    </button>
+                    <button type="button" role="menuitem" data-source="photo">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4.5 4 3.5 3-2.5 4 3.5"/></svg>
+                        <span data-i18n="photoSourcePhoto">בחירת תמונה</span>
+                    </button>
+                    <button type="button" role="menuitem" data-source="file">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 15v4h14v-4"/></svg>
+                        <span data-i18n="photoSourceFile">העלאת קובץ</span>
+                    </button>
+                </div>
+                <p class="photo-estimate__note" data-i18n="photoEstimateNote">התמונה משמשת רק לחישוב ולא נשמרת</p>
+                <p class="photo-estimate__status" id="photoEstimateStatus" role="status" aria-live="polite" hidden></p>
+            </div>
+
             <div class="form-group">
-                <label for="height"><span class="required">*</span><span data-i18n="labelHeight">גובה (בס"מ):</span></label>
+                <label for="height"><span class="required">*</span><span data-i18n="labelHeight">גובה (בס"מ):</span><span class="estimate-tag" id="heightEstimateTag" data-i18n="estimateTag" hidden>הערכה</span></label>
                 <input type="number" id="height" min="100" max="300" placeholder="לדוגמה: 175" data-i18n-placeholder="placeholderHeight">
             </div>
             <div class="form-group">
-                <label for="weight"><span class="required">*</span><span data-i18n="labelWeight">משקל (בק"ג):</span></label>
+                <label for="weight"><span class="required">*</span><span data-i18n="labelWeight">משקל (בק"ג):</span><span class="estimate-tag" id="weightEstimateTag" data-i18n="estimateTag" hidden>הערכה</span></label>
                 <input type="number" id="weight" min="18" max="250" placeholder="לדוגמה: 68" data-i18n-placeholder="placeholderWeight">
             </div>
 
@@ -300,15 +332,15 @@
                 <div class="section-divider"><span><span data-i18n="fineTuneLabel">כוונון עדין</span> <span data-i18n-hide-on-en>· Fine-tune your fit</span></span></div>
 
                 <div class="form-group">
-                    <label for="chest"><span data-i18n="labelChest">היקף חזה (בס"מ)</span> <span class="optional" data-i18n="optionalTag">(אופציונלי)</span>:</label>
+                    <label for="chest"><span data-i18n="labelChest">היקף חזה (בס"מ)</span> <span class="optional" data-i18n="optionalTag">(אופציונלי)</span>:<span class="estimate-tag" id="chestEstimateTag" data-i18n="estimateTag" hidden>הערכה</span></label>
                     <input type="number" id="chest" min="50" max="150" placeholder="לדוגמה: 94" data-i18n-placeholder="placeholderChest">
                 </div>
                 <div class="form-group">
-                    <label for="waist"><span data-i18n="labelWaist">היקף מותניים (בס"מ)</span> <span class="optional" data-i18n="optionalTag">(אופציונלי)</span>:</label>
+                    <label for="waist"><span data-i18n="labelWaist">היקף מותניים (בס"מ)</span> <span class="optional" data-i18n="optionalTag">(אופציונלי)</span>:<span class="estimate-tag" id="waistEstimateTag" data-i18n="estimateTag" hidden>הערכה</span></label>
                     <input type="number" id="waist" min="40" max="150" placeholder="לדוגמה: 80" data-i18n-placeholder="placeholderWaist">
                 </div>
                 <div class="form-group">
-                    <label for="legs"><span data-i18n="labelLegs">אורך רגליים (בס"מ)</span> <span class="optional" data-i18n="optionalTag">(אופציונלי)</span>:</label>
+                    <label for="legs"><span data-i18n="labelLegs">אורך רגליים (בס"מ)</span> <span class="optional" data-i18n="optionalTag">(אופציונלי)</span>:<span class="estimate-tag" id="legsEstimateTag" data-i18n="estimateTag" hidden>הערכה</span></label>
                     <input type="number" id="legs" min="50" max="120" placeholder="לדוגמה: 102" data-i18n-placeholder="placeholderLegs">
                 </div>
             </div>

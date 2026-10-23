@@ -333,6 +333,71 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .form-group input::placeholder { color: var(--muted-2); }
 .form-group__label { font-size: .85rem; font-weight: 600; color: var(--text); }
 
+/* ── Estimate from a photo (setupPhotoEstimate() in app.js) ───────────────────
+   A quiet dashed glass pill above height/weight - an alternative to typing, so it
+   reads as secondary to the fields, never as the form's primary action. */
+.photo-estimate { display: grid; gap: 8px; justify-items: center; }
+.btn-photo-estimate {
+  width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 15px 18px; border: 1px dashed rgba(0, 0, 0, .22); border-radius: var(--pill);
+  background: rgba(255, 255, 255, .35); color: var(--ink);
+  font-family: inherit; font-size: .92rem; font-weight: 600; cursor: pointer;
+  transition: border-color .3s var(--ease), background .3s var(--ease), transform .3s var(--ease);
+}
+.btn-photo-estimate svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.btn-photo-estimate:hover { border-color: rgba(141, 182, 0, .55); background: rgba(255, 255, 255, .55); }
+.btn-photo-estimate:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--pear-ring); }
+.btn-photo-estimate.is-busy { cursor: progress; opacity: .75; }
+.btn-photo-estimate.is-busy svg { animation: photo-estimate-pulse 1.1s ease-in-out infinite; }
+@keyframes photo-estimate-pulse { 50% { opacity: .35; } }
+.photo-estimate__note { margin: 0; font-size: .74rem; color: var(--muted-2); text-align: center; }
+.photo-estimate__status { margin: 0; font-size: .8rem; color: var(--muted); text-align: center; }
+.photo-estimate__status.is-error { color: #a33; }
+.estimate-tag {
+  margin-inline-start: 8px; padding: 2px 9px; border-radius: var(--pill);
+  background: var(--pear-tint); color: var(--pear-deep);
+  font-size: .7rem; font-weight: 600; vertical-align: 1px;
+}
+.estimate-tag[hidden] { display: none; }
+.photo-estimate { position: relative; }
+.photo-estimate__menu {
+  width: 100%; display: grid; gap: 4px; padding: 6px;
+  border: 1px solid var(--glass-line); border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .82);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  box-shadow: var(--shadow-soft);
+}
+.photo-estimate__menu[hidden] { display: none; }
+.photo-estimate__menu button {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 12px 14px; border: 0; border-radius: 12px; background: transparent;
+  color: var(--ink); font-family: inherit; font-size: .9rem; font-weight: 600;
+  text-align: start; cursor: pointer; transition: background .2s var(--ease);
+}
+.photo-estimate__menu button:hover, .photo-estimate__menu button:focus-visible { outline: none; background: var(--pear-soft); }
+.photo-estimate__menu svg { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+
+/* The camera sheet (openPhotoCamera() in app.js) - appended to <body>, above everything. */
+.photo-cam {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  padding: 20px; background: rgba(10, 10, 11, .88);
+}
+.photo-cam__frame { position: relative; width: min(92vw, 520px); max-height: 70vh; aspect-ratio: 3 / 4; border-radius: var(--radius); overflow: hidden; background: #000; }
+.photo-cam__video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.photo-cam__count {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 5rem; font-weight: 800; text-shadow: 0 2px 16px rgba(0, 0, 0, .5); pointer-events: none;
+}
+.photo-cam__hint { margin: 0; max-width: 520px; color: rgba(255, 255, 255, .85); font-size: .9rem; text-align: center; }
+.photo-cam__actions { display: flex; gap: 12px; }
+.photo-cam__actions button {
+  padding: 13px 24px; border-radius: var(--pill); font-family: inherit; font-size: .92rem; font-weight: 700; cursor: pointer;
+}
+.photo-cam__shoot { border: 0; background: #fff; color: var(--ink); }
+.photo-cam__shoot:disabled { opacity: .6; cursor: progress; }
+.photo-cam__cancel { border: 1px solid rgba(255, 255, 255, .4); background: transparent; color: #fff; }
+
 /* ── Gender selector - Liquid Glass segmented switch ──────────────────────────
    Restyled 2026-09-15 from a dark filled pill to the LANGUAGE SWITCH'S glass language
    (.lang-switch): frosted white track, white specular pill, ink for the chosen option and

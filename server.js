@@ -32,6 +32,7 @@ import { supabase } from "./lib/supabase.js";
    field on classifyFrontBackDetailed() (short version: that one is stamped with
    CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
 import { classifyGarmentFull } from "./lib/garment-category.js";
+import { estimateBodyFromPhoto, sanitizeBodyEstimateRequest } from "./lib/body-estimate.js";
 import { makeStoreSizeChartHandler } from "./lib/store-size-charts.js";
 /* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
 import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
@@ -134,6 +135,7 @@ const classifyLimiter = rateLimit({ windowMs: 60_000, max: 200 });   // garment 
 const storeCatalogLimiter = rateLimit({ windowMs: 60_000, max: 30 }); // "Complete the Look" store-scoped catalog reads
 const sizeLimiter     = rateLimit({ windowMs: 60_000, max: 120 });  // size verdicts - one per NEW measurement set, memoised client-side
 const promptLimiter   = rateLimit({ windowMs: 60_000, max: 240 });  // wire prompts - a few per garment (angle x size delta), memoised client-side
+const bodyEstimateLimiter = rateLimit({ windowMs: 60_000, max: 10 }); // height/weight from a photo - one model call per press
 
 /* ── CORS enforcement ────────────────────────────────────────────────────────
    The fitting room is PUBLICLY ACCESSIBLE to any anonymous visitor - no login
@@ -888,6 +890,23 @@ app.post("/api/prompt", promptLimiter, (req, res) => {
     console.error("[prompt] build failed:", err?.message || err);
     res.status(500).json({ error: "prompt_failed" });
   }
+});
+
+/* ── Height / weight from a photo - POST /api/body-estimate ─────────────────────
+   Screen 1's "estimate from a photo" (lib/body-estimate.js). Request: { image: a data:
+   URL (jpeg/png/webp), height?, weight?, chest?, waist?, legs?, gender? } - a typed value
+   is sent as KNOWN. Response: { ok: true, height, weight, chest|null, waist|null,
+   legs|null, confidence } or { ok: false, reason }.
+   Always 200 except an unusable image (400): the browser treats every `ok: false` as
+   "fill nothing", so the form stays as the shopper left it (CLAUDE.md §2.5).
+   The photo is never stored or logged - only the outcome is. */
+app.post("/api/body-estimate", bodyEstimateLimiter, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const request = sanitizeBodyEstimateRequest(req.body);
+  if (!request.image) return res.status(400).json({ ok: false, reason: "bad_image" });
+  const answer = await estimateBodyFromPhoto(request, GEMINI_API_KEY);
+  console.log(`[body-estimate] ${answer.ok ? `ok (confidence ${answer.confidence})` : answer.reason}`);
+  res.json(answer);
 });
 
 app.post("/api/sessions",    sessionLimiter, saveSession);
