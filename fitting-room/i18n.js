@@ -369,6 +369,22 @@ const I18N = {
   errDeviceLinkFailed:      { he: "שיוך המכשיר נכשל - נסה שוב.", en: "Couldn't link this device - please try again." },
   errNetworkRetry:          { he: "שגיאת רשת - נסה שוב.", en: "Network error - please try again." },
 
+  /* Fallbacks in index.html that app.js overwrites at runtime - keyed so the very first
+     paint is already in the page's language, and so a toggle never leaves Hebrew in the
+     English room (the runtime writers repaint over them on "pear:languagechanged"). */
+  otpCountdownStart:        { he: "60 שניות נותרו", en: "60 seconds remaining" },
+  agPrepVerifying:          { he: "מאמתים את תמונות הבגד · Verifying garment assets", en: "Verifying garment assets" },
+  sizeMismatchUpdateBtn:    { he: "עדכן מידות · Update Profile Sizes", en: "Update profile sizes" },
+  gdDetecting:              { he: "מזהה בגדים בתמונה…", en: "Finding garments in the photo…" },
+  gdNone:                   { he: "לא זוהו בגדים", en: "No garments found" },
+  gdOutfit:                 { he: "זוהתה תלבושת מלאה · בחר/י עליון או תחתון", en: "Full outfit found · choose the top or the bottom" },
+  gdImageAlt:               { he: "התמונה שהועלתה", en: "Your uploaded photo" },
+  fullscreenTitle:          { he: "מסך מלא", en: "Full screen" },
+  cartAria:                 { he: "סל קניות · Shopping cart", en: "Shopping cart" },
+  engineTitle:              { he: "מנוע", en: "Engine" },
+  flipCamTitle:             { he: "הפוך מצלמה", en: "Flip camera" },
+  galleryClearTitle:        { he: "נקה גלריה", en: "Clear gallery" },
+
   /* camera + fitting-room entry */
   camStarting:              { he: "מפעיל מצלמה…", en: "Starting camera…" },
   camDenied:                { he: "לא ניתן לגשת למצלמה:", en: "Couldn't access the camera:" },
@@ -397,6 +413,14 @@ export function t(key) {
   const entry = I18N[key];
   if (!entry) return "";
   return entry[getActiveLang()] || entry.he;
+}
+
+/* One string per language, written inline at the call site: the Hebrew room keeps the
+   exact text it always showed (often "עברית · English"), the English room gets English
+   only. For runtime copy app.js builds around live values (toasts, status lines, error
+   messages) - static markup belongs in the I18N table and its data-i18n walk. */
+export function byLang(he, en) {
+  return getActiveLang() === "en" ? en : he;
 }
 
 /* t() with {placeholders}. The stock copy is the first string in this file whose text
@@ -433,6 +457,14 @@ function applyI18nText(lang) {
   document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
     const entry = I18N[el.dataset.i18nAria];
     if (entry) el.setAttribute("aria-label", entry[lang] || entry.he);
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const entry = I18N[el.dataset.i18nTitle];
+    if (entry) el.setAttribute("title", entry[lang] || entry.he);
+  });
+  document.querySelectorAll("[data-i18n-alt]").forEach((el) => {
+    const entry = I18N[el.dataset.i18nAlt];
+    if (entry) el.setAttribute("alt", entry[lang] || entry.he);
   });
   // Static "· English" partner labels that sit beside a data-i18n span as a
   // permanent bilingual design accent (e.g. "· Complete the Look", the
@@ -591,7 +623,7 @@ function syncLangSwitchUI(lang) {
   if (!btn) return;
   const isHe = lang === "he";
   btn.setAttribute("aria-checked", String(isHe));
-  btn.setAttribute("aria-label", isHe ? "שפה: עברית · Language: Hebrew" : "שפה: אנגלית · Language: English");
+  btn.setAttribute("aria-label", isHe ? "שפה: עברית · Language: Hebrew" : "Language: English");
   const enSeg = btn.querySelector('[data-lang="en"]');
   const heSeg = btn.querySelector('[data-lang="he"]');
   if (enSeg) enSeg.classList.toggle("is-active", !isHe);

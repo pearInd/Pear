@@ -174,11 +174,11 @@
              entirely for returning devices. ░░ -->
         <div id="screen-otp" class="otp-card" hidden style="display:none">
             <h2 data-i18n="otpTitle">אימות אימייל</h2>
-            <p id="otp-email-hint">שלחנו קוד ל: </p>
+            <p id="otp-email-hint" data-i18n="otpSentTo">שלחנו קוד ל: </p>
             <input id="otpInput" type="text" inputmode="numeric"
                    maxlength="6" pattern="[0-9]*"
                    placeholder="הכנס קוד בן 6 ספרות" autocomplete="one-time-code" data-i18n-placeholder="otpPlaceholder">
-            <div id="otp-countdown">60 שניות נותרו</div>
+            <div id="otp-countdown" data-i18n="otpCountdownStart">60 שניות נותרו</div>
             <button id="btn-verify-otp" type="button" class="btn-primary" data-i18n="btnVerifyOtp">אמת קוד</button>
             <button id="btn-resend-otp" type="button" class="btn-ghost" data-i18n="btnResendOtp">שלח קוד חדש</button>
             <p id="otp-error" class="login-error" role="alert" hidden></p>
@@ -269,7 +269,7 @@
                  staggered liquid reveal. ░░ -->
             <div class="result-actions" id="resultActions">
                 <div class="result-box" id="resultBox">
-                    <div id="resultLabel">המידה המומלצת עבורך:</div>
+                    <div id="resultLabel" data-i18n="resultLabelDefault">המידה המומלצת עבורך:</div>
                     <div class="size-display" id="sizeResult">-</div>
                     <!-- Out-of-stock notice + the in-stock alternatives. Written by
                          renderStockNotice() in app.js, which owns [hidden] and the
@@ -420,7 +420,7 @@
              a dead control in the header. role="switch" (not two nested buttons/radios) -
              it IS fundamentally a single boolean toggle, just presented as two segments. -->
         <button type="button" class="fs-switch" id="fullscreenToggleBtn" role="switch" aria-checked="false"
-                aria-label="מסך מלא · Full screen" title="מסך מלא" data-i18n-aria="fullscreenToggleAria">
+                aria-label="מסך מלא · Full screen" title="מסך מלא" data-i18n-aria="fullscreenToggleAria" data-i18n-title="fullscreenTitle">
             <span class="fs-switch__seg fs-switch__seg--normal is-active" aria-hidden="true">
                 <svg class="fs-switch__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -485,7 +485,7 @@
              in app.js <-> pear-widget.js). Anchored to .app-header__actions
              (position:relative in style.css), not fixed like .profile-dropdown,
              since #cartBtn itself sits in normal document flow, not a fixed corner. -->
-        <div class="cart-dropdown" id="cartDropdown" role="menu" aria-label="סל קניות · Shopping cart" hidden>
+        <div class="cart-dropdown" id="cartDropdown" role="menu" aria-label="סל קניות · Shopping cart" data-i18n-aria="cartAria" hidden>
             <!-- Heading is bound STRICTLY to the active language (one data-i18n node,
                  no bilingual "· English" partner span). The partner-span pattern used
                  elsewhere in this file is a deliberate design accent on wide, static
@@ -499,7 +499,7 @@
             <p class="cart-dropdown__empty" id="cartEmpty" data-i18n="cartDropdownEmpty">הסל ריק</p>
             <div class="cart-dropdown__list" id="cartList"></div>
         </div>
-        <span class="app-header__engine" id="engineBadge" title="מנוע">●</span>
+        <span class="app-header__engine" id="engineBadge" title="מנוע" data-i18n-title="engineTitle">●</span>
         </div><!-- /.app-header__actions -->
     </div>
 
@@ -535,7 +535,7 @@
                 <span class="ag-prep__sheen" aria-hidden="true"></span>
                 <span class="ag-prep__readout"><span class="ag-prep__pct" id="agPrepPct">0<i class="ag-prep__sign">%</i></span></span>
                 <span class="ag-prep__copy">
-                    <span class="ag-prep__phase" id="agPrepPhase" aria-live="polite">מאמתים את תמונות הבגד · Verifying garment assets</span>
+                    <span class="ag-prep__phase" id="agPrepPhase" aria-live="polite" data-i18n="agPrepVerifying">מאמתים את תמונות הבגד · Verifying garment assets</span>
                     <span class="ag-prep__track"><i class="ag-prep__fill" id="agPrepFill"></i></span>
                 </span>
             </div>
@@ -548,7 +548,7 @@
             <!-- Flip front/rear camera - floating glass control, preview only
                  (hidden during the billed live session). -->
             <button class="camera-card__flip" id="flipCamBtn" type="button"
-                    aria-label="הפוך מצלמה · Flip camera" title="הפוך מצלמה" data-i18n-aria="flipCamAria">
+                    aria-label="הפוך מצלמה · Flip camera" title="הפוך מצלמה" data-i18n-aria="flipCamAria" data-i18n-title="flipCamTitle">
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
                      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>
@@ -719,7 +719,7 @@
                      mid-cycle can't stomp the currently-shown step; the text below is only the
                      pre-JS fallback. min-height on .scan-overlay__text (style.css) reserves room
                      for the longest step so switching between them never shifts the loader. -->
-                <div class="scan-overlay__text"><span id="scanStepText">קח כמה צעדים אחורה שיראו אותך בבירור</span><span class="dots"><i>.</i><i>.</i><i>.</i></span></div>
+                <div class="scan-overlay__text"><span id="scanStepText" data-i18n="scanStepFrame">קח כמה צעדים אחורה שיראו אותך בבירור</span><span class="dots"><i>.</i><i>.</i><i>.</i></span></div>
                 <!-- CONTENT CLEANUP: generic, provider-free copy - never names the underlying
                      AI vendor/model. Ticking mm:ss elapsed counter is written here every
                      second by startScanTimer()/updateScanTimer() in app.js for as long as
@@ -782,7 +782,7 @@
                  never saw the Screen 1 form at all. ░░ -->
             <div class="camera-card__size-mismatch" id="sizeMismatchView" hidden>
                 <p class="camera-card__size-mismatch-text" id="sizeMismatchText"></p>
-                <button class="btn-primary camera-card__size-mismatch-cta" id="sizeMismatchUpdateBtn" type="button">עדכן מידות · Update Profile Sizes</button>
+                <button class="btn-primary camera-card__size-mismatch-cta" id="sizeMismatchUpdateBtn" type="button" data-i18n="sizeMismatchUpdateBtn">עדכן מידות · Update Profile Sizes</button>
             </div>
         </div>
 
@@ -864,7 +864,7 @@
                     <span data-i18n="pipRetakeLabel">מדוד שוב</span>
                     <span class="pip-retake__en" data-i18n-hide-on-en>Retake</span>
                 </button>
-                <button class="pip-clear" id="galleryClear" type="button" title="נקה גלריה" data-i18n="galleryClearLabel">נקה</button>
+                <button class="pip-clear" id="galleryClear" type="button" title="נקה גלריה" data-i18n-title="galleryClearTitle" data-i18n="galleryClearLabel">נקה</button>
             </div>
             <div class="pear-gallery-track" id="galleryTrack"></div>
 
@@ -909,7 +909,7 @@
       <div class="gd-head__text">
         <span class="gd-eyebrow">PEAR · Detect</span>
         <h3 class="gd-title"><span data-i18n="gdTitle">בחר/י את הבגד</span> <span data-i18n-hide-on-en>· Select a garment</span></h3>
-        <p class="gd-sub" id="gdSub">מזהה בגדים בתמונה…</p>
+        <p class="gd-sub" id="gdSub" data-i18n="gdDetecting">מזהה בגדים בתמונה…</p>
       </div>
       <button class="gd-close" id="gdClose" type="button" aria-label="סגור" data-gd-close data-i18n-aria="ariaClose">✕</button>
     </header>
@@ -930,7 +930,7 @@
       <!-- .gd-frame wraps ONLY the image so .gd-boxes { inset:0 } overlaps the
            rendered image exactly - box coords are % of natural size, scale-free. -->
       <div class="gd-frame" id="gdFrame">
-        <img class="gd-frame__img" id="gdImage" alt="התמונה שהועלתה" decoding="async">
+        <img class="gd-frame__img" id="gdImage" alt="התמונה שהועלתה" data-i18n-alt="gdImageAlt" decoding="async">
         <!-- focus scrim - dims the whole image; each bracket clears its own zone on hover -->
         <div class="gd-scrim" aria-hidden="true"></div>
         <div class="gd-boxes" id="gdBoxes"></div>
@@ -1067,7 +1067,7 @@
      order (EN always left, עב always right) regardless of which language is
      currently active - see the comment on setupLangToggle() in i18n.js for why. -->
 <button type="button" class="lang-switch" id="langSwitch" role="switch" aria-checked="false"
-        aria-label="שפה: אנגלית · Language: English">
+        aria-label="Language: English">
   <span class="lang-switch__seg lang-switch__seg--en is-active" data-lang="en" aria-hidden="true">EN</span>
   <span class="lang-switch__seg lang-switch__seg--he" data-lang="he" aria-hidden="true">עב</span>
   <span class="lang-switch__thumb" aria-hidden="true"></span>
