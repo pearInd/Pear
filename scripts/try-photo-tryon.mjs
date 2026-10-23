@@ -34,10 +34,33 @@ const bottom = bool("--bottom");
 const name = flag("--name") || "";
 const server = flag("--server");
 const out = path.resolve(flag("--out") || `photo-tryon-${Date.now()}.png`);
-const [personPath, garmentArg] = args;
+/* No path, or one that does not exist: on macOS, ask with a Finder dialog instead of failing -
+   `npm run try:photo` with nothing after it is the easiest way in. */
+function pickFile(prompt) {
+  console.log(`… a Finder window is open: ${prompt}`);
+  try {
+    /* Through System Events, activated: a bare `choose file` from a terminal opens BEHIND the
+       other windows, where it is easy to miss. */
+    return execFileSync("osascript", [
+      "-e", 'tell application "System Events"',
+      "-e", "activate",
+      "-e", `set f to choose file with prompt "${prompt}" of type {"public.image"}`,
+      "-e", "end tell",
+      "-e", "POSIX path of f",
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch (e) {
+    const why = String(e.stderr || e.message || "").trim();
+    console.error(`✖ no file chosen${/-128/.test(why) ? " (cancelled)" : why ? `: ${why}` : ""}`);
+    return null;
+  }
+}
+const given = (p) => p && (/^https?:\/\//i.test(p) || fs.existsSync(p)) ? p : null;
+const personPath = given(args[0]) || pickFile("Choose a full-body photo of yourself (head to feet)");
+const garmentArg = given(args[1]) || pickFile("Choose the garment photo");
 
 if (!personPath || !garmentArg) {
   console.error("usage: node scripts/try-photo-tryon.mjs <person photo> <garment photo or URL> [--bottom] [--name \"...\"] [--out result.png] [--server http://localhost:3000]");
+  console.error("       (on macOS, run it with no files and it asks with a Finder window)");
   process.exit(2);
 }
 
