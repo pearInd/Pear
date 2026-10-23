@@ -21758,6 +21758,9 @@ function init() {
   // straight to the camera with #screen-calculator never revealed at all.
   if (DEMO_MODE) {
     showSizeForm();
+    // The marketing site's demo has no store cart: no "Add to Cart" there (owner, 2026-10-23).
+    const addToCart = $("addToCartBtn");
+    if (addToCart) addToCart.style.display = "none";
   } else if (DEMO_GATE && isDemoGateLocked()) {
     showDemoGateLockedMessage();
   } else {
