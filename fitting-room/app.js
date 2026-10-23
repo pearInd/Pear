@@ -14248,6 +14248,14 @@ function lockDemoAfterFirstMeasurement() {
   demoLocked = true;
   try { localStorage.setItem(PEAR_DEMO_LOCK_KEY, "true"); } catch {}
   notifyParentDemoLocked();
+  /* ONE MEASUREMENT, NO "MEASURE AGAIN" (2026-10-23). Reported from the marketing site's demo:
+     after the measurement "Go Live" and "Measure again" were still there and a second session
+     started. The result and its panel stay; the two buttons that would start another go away,
+     and goLive() refuses a locked demo as a backstop. */
+  for (const id of ["captureBtn", "retakeBtn"]) {
+    const b = $(id);
+    if (b) b.style.display = "none";
+  }
 }
 
 /* =============================================================================
@@ -17150,6 +17158,7 @@ let goLiveResolvingSize = false;
 
 async function goLive() {
   if (busy || isLive() || goLiveResolvingSize) return;
+  if (isDemoLocked()) { toast(t("demoAlreadyUsed")); return; }   // the demo is one measurement
 
   /* THE STALE-currentBodyCategory RACE, CLOSED AT THE ENFORCEMENT POINT. calculateSize()
      is the only writer of currentUserSize/currentSizeCategory/currentBodyCategory, but it
@@ -21609,6 +21618,9 @@ function openFitLightbox(idx) {
       if (IS_MOBILE) dlBtn.target = "_blank";
     } else { dlBtn.hidden = true; dlBtn.removeAttribute("href"); }
   }
+  // A used demo offers no "Try again live" (ONE MEASUREMENT, see lockDemoAfterFirstMeasurement).
+  const liveBtn = lb.querySelector("[data-lb-live]");
+  if (liveBtn) liveBtn.hidden = isDemoLocked();
   lb.classList.add("show");
 }
 
