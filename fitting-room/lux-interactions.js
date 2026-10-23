@@ -121,7 +121,7 @@
              the item was in their cart. Failing visibly is the point. */
           console.warn("[PEAR lux] add-to-cart blocked: no identifiable active garment " +
             `after ${GARMENT_RETRIES + 1} attempts (sku/variantId both empty)`);
-          springToast("לא זוהה פריט פעיל - בחרו בגד ונסו שוב · No active item - pick a garment and try again");
+          springToast(byLang("לא זוהה פריט פעיל - בחרו בגד ונסו שוב · No active item - pick a garment and try again", "No active item - pick a garment and try again"));
           return;
         }
         landWithGarment(garment);
@@ -168,15 +168,15 @@
         // kids numeric scale alike) so the confirmation matches what was actually
         // tried on, not just "something was added".
         springToast(garment.size
-          ? `הפריט במידה ${garment.size} נוסף לעגלה · Size ${garment.size} added to cart`
-          : "נוסף לסל · Added to cart");
+          ? byLang(`הפריט במידה ${garment.size} נוסף לעגלה · Size ${garment.size} added to cart`, `Size ${garment.size} added to cart`)
+          : byLang("נוסף לסל · Added to cart", "Added to cart"));
       } else {
         // Standalone (PEAR demo site, no host store to sync with) - this
         // local counter IS the source of truth here, so it still owns the badge.
         count += 1;
         localStorage.setItem("pear_cart_count", String(count));
         renderBadge();
-        springToast("הפריט נוסף לסל! (דמו)");
+        springToast(byLang("הפריט נוסף לסל! (דמו)", "Added to cart (demo)"));
       }
     }
 
@@ -194,7 +194,7 @@
       if (e.source !== window.parent) return;
       if (!e.data || e.data.type !== "PEAR_ADD_TO_CART_RESULT") return;
       if (e.data.ok === false) {
-        springToast("נשמר - ההוספה האוטומטית לסל החנות נכשלה, נא להוסיף ידנית · Saved - couldn't add to the store cart automatically, please add it manually");
+        springToast(byLang("נשמר - ההוספה האוטומטית לסל החנות נכשלה, נא להוסיף ידנית · Saved - couldn't add to the store cart automatically, please add it manually", "Saved - couldn't add to the store cart automatically, please add it manually"));
       }
     });
 
@@ -267,6 +267,10 @@
   /* Top-center spring toast - reserved for cart confirmations so the existing
      bottom measurement toasts (app.js → toast()) are left exactly as they are. */
   let cartToastEl = null, cartToastTimer = 0;
+  /* The page's language as i18n.js keeps it on <html lang> - this classic script imports
+     nothing, so it reads the attribute. English gets English only, never the Hebrew half. */
+  function byLang(he, en) { return document.documentElement.lang === "en" ? en : he; }
+
   function springToast(msg) {
     if (!cartToastEl) {
       cartToastEl = document.createElement("div");

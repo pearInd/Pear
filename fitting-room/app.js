@@ -29,7 +29,7 @@
    TOKEN_ENDPOINT, fetched the instant the user goes live (see mintEphemeralToken).
    We destructure the derived constants so existing call sites read naturally.   */
 import { CONFIG } from "./config.js";
-import { t, tf, setupLangToggle } from "./i18n.js";
+import { t, tf, setupLangToggle, byLang } from "./i18n.js";
 const {
   CONNECT_TIMEOUT_MS,
   APPLY_TIMEOUT_MS,
@@ -576,6 +576,10 @@ for (const _g of PEAR_CATALOG) {
 const SUBTYPE_LABEL_HE = {
   sleeveless: "גופייה", short_sleeve: "שרוול קצר", long_sleeve: "שרוול ארוך",
   slim: "גזרה צמודה", regular: "גזרה רגילה", wide: "גזרה רחבה",
+};
+const SUBTYPE_LABEL_EN = {
+  sleeveless: "Sleeveless", short_sleeve: "Short sleeve", long_sleeve: "Long sleeve",
+  slim: "Slim fit", regular: "Regular fit", wide: "Wide fit",
 };
 /* SUBTYPE_PROMPT / SHIRT_NOUN - moved to lib/prompts.js (server-side prompt engine, 2026-09-26). */
 
@@ -1964,12 +1968,16 @@ const SIZE_MISMATCH_MESSAGE =
   "כדי למדוד, יש לעדכן/לשנות את המידות בפרופיל. · " +
   "This item is not within your size range (Kids item). You cannot try on this item with " +
   "your current profile size. Please update your profile sizes to proceed.";
+/* The English half alone, for the English room - the Hebrew room keeps the bilingual line. */
+const SIZE_MISMATCH_MESSAGE_EN =
+  "This item is not within your size range (Kids item). You cannot try on this item with " +
+  "your current profile size. Please update your profile sizes to proceed.";
 
 /* go-live gate paralleling liveBlockReason()/livePendingReason() just below - returns
    the localized message when an adult-sized shopper is about to launch a kids-only
    garment, else null. */
 function sizeCategoryMismatchReason() {
-  return hasSizeCategoryMismatch() ? SIZE_MISMATCH_MESSAGE : null;
+  return hasSizeCategoryMismatch() ? (typeof byLang === "function" ? byLang(SIZE_MISMATCH_MESSAGE, SIZE_MISMATCH_MESSAGE_EN) : SIZE_MISMATCH_MESSAGE) : null;
 }
 
 /* PROACTIVE counterpart to sizeCategoryMismatchReason() above. That gate only fires
@@ -1996,7 +2004,7 @@ function updateSizeMismatchUI() {
   view.hidden = !mismatched;
   if (mismatched) {
     const textEl = $("sizeMismatchText");
-    if (textEl) textEl.textContent = SIZE_MISMATCH_MESSAGE;
+    if (textEl) textEl.textContent = typeof byLang === "function" ? byLang(SIZE_MISMATCH_MESSAGE, SIZE_MISMATCH_MESSAGE_EN) : SIZE_MISMATCH_MESSAGE;
   }
   /* Blocked means BLOCKED, not "blocked once you click": the live stage and the size
      selector are both suppressed while a mismatch stands, so there is no camera feed
@@ -2434,9 +2442,9 @@ function openPhotoCamera() {
       '<button type="button" class="photo-cam__shoot"></button></div>';
     const video = sheet.querySelector("video"), count = sheet.querySelector(".photo-cam__count");
     const shoot = sheet.querySelector(".photo-cam__shoot"), cancel = sheet.querySelector(".photo-cam__cancel");
-    sheet.querySelector(".photo-cam__hint").textContent = t("photoCamHint");
-    shoot.textContent = t("photoCamShoot");
-    cancel.textContent = t("photoCamCancel");
+    // data-i18n as well as the text, so a language toggle while the sheet is open repaints it.
+    [[sheet.querySelector(".photo-cam__hint"), "photoCamHint"], [shoot, "photoCamShoot"], [cancel, "photoCamCancel"]]
+      .forEach(([el, key]) => { el.textContent = t(key); el.setAttribute("data-i18n", key); });
     video.srcObject = stream;
     document.body.appendChild(sheet);
     shoot.focus();
@@ -2486,9 +2494,12 @@ function setupPhotoEstimate() {
     $(id)?.addEventListener("input", () => { const tag = tagOf(id); if (tag) tag.hidden = true; });
   });
 
+  /* The key rides on data-i18n so a language toggle repaints the line in place
+     (applyI18nText() in i18n.js) - set as plain text it stayed in the old language. */
   const say = (key) => {
     if (!status) return;
     status.textContent = key ? t(key) : "";
+    if (key) status.setAttribute("data-i18n", key); else status.removeAttribute("data-i18n");
     status.hidden = !key;
     status.classList.toggle("is-error", key === "photoEstimateFailed" || key === "photoCamDenied");
   };
@@ -3944,7 +3955,7 @@ function setActiveItem(item, opts = {}) {
   try { injectSizeSelector(); updateSizeMismatchUI(); } catch {}
 
   if (!opts.silent) {
-    toast(`עכשיו מודדים: <b>${item.name}</b>`);
+    toast(byLang(`עכשיו מודדים: <b>${item.name}</b>`, `Now fitting: <b>${item.name}</b>`));
     resetToLive();
     // applyActive() re-applies the FULL look when both slots are filled (so a mid-
     // session shirt/pants swap restyles the whole outfit), else just this garment.
@@ -4003,7 +4014,7 @@ function setAngle(angle) {
   }
   syncOrientationWatcher();                  // start/stop the webcam orientation monitor
   renderPerspectiveSelector();
-  hotSwapIfLive(`מציג ${ANGLE_LABEL_HE[next]} · ${ANGLE_LABEL_EN[next]} view`);
+  hotSwapIfLive(byLang(`מציג ${ANGLE_LABEL_HE[next]} · ${ANGLE_LABEL_EN[next]} view`, `${ANGLE_LABEL_EN[next]} view`));
 }
 
 /* Colour/variant swap. Re-renders the swatch strip against the NEW colour's own gallery,
@@ -4012,7 +4023,7 @@ function setColor(color) {
   if (!colorsOf(activeItem).includes(color) || color === activeColor) return;
   activeColor = color;
   renderPerspectiveSelector();
-  hotSwapIfLive(`צבע · ${color}`);
+  hotSwapIfLive(byLang(`צבע · ${color}`, `Colour · ${color}`));
 }
 
 /* Shared live hot-swap: re-issue the active garment through the existing applyActive()
@@ -4362,7 +4373,7 @@ window.addEventListener("message", (e) => {
   /* The room's garment is half of a full look now: its composites are rebuilt with the corrected photos. */
   if (typeof activeItem !== "undefined" && target !== activeItem && typeof prewarmLookComposites === "function") prewarmLookComposites();
   prewarmOrientationAssets();
-  hotSwapIfLive("מעדכן תמונת בגד · updating garment view");
+  hotSwapIfLive((typeof byLang === "function" ? byLang("מעדכן תמונת בגד · updating garment view", "Updating garment view") : "מעדכן תמונת בגד · updating garment view"));
 });
 
 /* Sync the live product gallery for the active item + colour. There is NO on-screen
@@ -4477,7 +4488,7 @@ function renderActiveGarment() {
     $("activeGarmentMedia").innerHTML = `<span class="ag-duo ag-duo--views">${lookViewThumbs(top)}${lookViewThumbs(bottom)}</span>`;
     $("activeGarmentName").innerText = `${top.name} + ${bottom.name}`;
     $("activeGarmentType").innerHTML = `<span data-i18n="lookTypeLabel">${t("lookTypeLabel")}</span>`;
-    if (eyebrow) eyebrow.innerText = "לוק מלא · Full look";
+    if (eyebrow) eyebrow.innerText = byLang("לוק מלא · Full look", "Full look");
     chip.classList.add("is-duo");
     chip.classList.remove("is-composite");   // duo owns the wide layout in this branch
   } else {
@@ -4488,11 +4499,14 @@ function renderActiveGarment() {
        custom:true too, and the PEAK tee read "בגד עליון שהעלית · Custom upload" (2026-10-11, the owner's screenshot). */
     const uploaded = item.custom && /^(data:|blob:)/i.test(String(item.img || ""));
     $("activeGarmentType").innerText = uploaded
-      ? (item.garmentType === "lower_body" ? "בגד תחתון שהעלית · Custom upload" : "בגד עליון שהעלית · Custom upload")
+      ? byLang(item.garmentType === "lower_body" ? "בגד תחתון שהעלית · Custom upload" : "בגד עליון שהעלית · Custom upload",
+               item.garmentType === "lower_body" ? "Your bottoms · Custom upload" : "Your top · Custom upload")
       : item.custom
-      ? (item.garmentType === "lower_body" ? "מכנסיים מהחנות · Store item" : "חולצה מהחנות · Store item")
-      : (item.garmentType === "lower_body" ? "מכנסיים · " : "חולצה · ") + (SUBTYPE_LABEL_HE[item.subType] || "");
-    if (eyebrow) eyebrow.innerText = "פריט נמדד · Now fitting";
+      ? byLang(item.garmentType === "lower_body" ? "מכנסיים מהחנות · Store item" : "חולצה מהחנות · Store item",
+               item.garmentType === "lower_body" ? "Bottoms · Store item" : "Top · Store item")
+      : byLang((item.garmentType === "lower_body" ? "מכנסיים · " : "חולצה · ") + (SUBTYPE_LABEL_HE[item.subType] || ""),
+               (item.garmentType === "lower_body" ? "Bottoms" : "Top") + (SUBTYPE_LABEL_EN[item.subType] ? " · " + SUBTYPE_LABEL_EN[item.subType] : ""));
+    if (eyebrow) eyebrow.innerText = byLang("פריט נמדד · Now fitting", "Now fitting");
     chip.classList.remove("is-duo");
     /* A composite is ~2:1, so the 60px square + object-fit:cover the chip normally uses
        would crop it down to a slice of the FRONT panel - the back would be invisible,
@@ -4553,10 +4567,10 @@ function addToLook(piece) {
   if (outfitComplete()) {
     prewarmLookComposites();   // both sides' composites, before the go-live and the turn need them
     $("completeLook").classList.add("is-complete");
-    toast(`לוק מלא: <b>${activeOutfit.top.name}</b> + <b>${activeOutfit.bottom.name}</b>`);
+    toast(byLang(`לוק מלא: <b>${activeOutfit.top.name}</b> + <b>${activeOutfit.bottom.name}</b>`, `Full look: <b>${activeOutfit.top.name}</b> + <b>${activeOutfit.bottom.name}</b>`));
   } else {
     $("completeLook").classList.remove("is-complete");
-    toast(`נוסף ללוק: <b>${piece.name}</b> - הוסף/י פריט מהקטגוריה המשלימה ללוק מלא`);
+    toast(byLang(`נוסף ללוק: <b>${piece.name}</b> - הוסף/י פריט מהקטגוריה המשלימה ללוק מלא`, `Added to the look: <b>${piece.name}</b> - add an item from the other category for a full look`));
   }
 
   // Mid-session: restyle the live feed in place - the FULL look (both garments in
@@ -5786,7 +5800,7 @@ async function mintEphemeralToken() {
     });
   } catch (e) {
     console.error("[PEAR] mintEphemeralToken() - network error (server unreachable?):", e?.message || e);
-    throw new Error("לא ניתן להגיע לשרת הטוקנים (" + (e?.message || e) + ")");
+    throw new Error(byLang("לא ניתן להגיע לשרת הטוקנים (", "Couldn't reach the connection server (") + (e?.message || e) + ")");
   }
 
   let data = {};
@@ -5812,13 +5826,13 @@ async function mintEphemeralToken() {
         : resp.status !== 405
         ? "\n  → Check that DECART_API_KEY in .env is set to a valid dct_… key from platform.decart.ai"
         : "\n  → Open the fitting room via http://localhost:3000/fitting-room/ (the Express server)");
-    throw new Error("מינטינג טוקן נכשל: " + detail);
+    throw new Error(byLang("מינטינג טוקן נכשל: ", "Couldn't start the connection: ") + detail);
   }
   /* `t` - a SEALED ticket the edge opens (server.js mintToken, lib/rt-proxy.js, 2026-10-03): the engine's key
      and model never reach this page in readable form. */
   if (!data.t) {
     console.error("[PEAR] mintEphemeralToken() - response OK but no ticket:", data);
-    throw new Error("השרת לא החזיר כרטיס חיבור תקין.");
+    throw new Error(byLang("השרת לא החזיר כרטיס חיבור תקין.", "The server didn't return a valid connection ticket."));
   }
   data.apiKey = data.t;
   data.expiresAt = data.exp;
@@ -6289,8 +6303,9 @@ function inputGateHeld() {
    @returns {Promise<{prompt: {text: string, enhance: boolean}, image: Blob|string}>} */
 async function resolveInitialConditioning(item) {
   const refuse = (why) => {
-    const e = new Error("לא ניתן לטעון את תמונת הבגד שנבחר - המדידה לא הופעלה · " +
-      `The selected garment could not be loaded, so the session was not started (${why})`);
+    const en = `The selected garment could not be loaded, so the session was not started (${why})`;
+    const e = new Error(typeof byLang === "function" ? byLang("לא ניתן לטעון את תמונת הבגד שנבחר - המדידה לא הופעלה · " + en, en)
+                                                     : "לא ניתן לטעון את תמונת הבגד שנבחר - המדידה לא הופעלה · " + en);
     e.isNoGarment = true;
     return e;
   };
@@ -6604,9 +6619,9 @@ function buildRealtimeConnectOpts(gen) {
          "did this already fire" gating needed for a just-once toast. The badge (setConn
          above) is the persistent indicator; this is the attention-catching one, matching
          the existing pattern for other state changes (e.g. the orientation flip toast). */
-      if (state === "reconnecting") toast("מתחבר מחדש…");
+      if (state === "reconnecting") toast((typeof byLang === "function" ? byLang("מתחבר מחדש…", "Reconnecting…") : "מתחבר מחדש…"));
       else if ((state === "connected" || state === "generating") && prevState === "reconnecting") {
-        toast("החיבור חזר");
+        toast((typeof byLang === "function" ? byLang("החיבור חזר", "Reconnected") : "החיבור חזר"));
       }
 
       /* ── THE STATE-REVERSION BUG ───────────────────────────────────────────
@@ -6937,7 +6952,7 @@ async function connectRealtime({ force = false } = {}) {
 
     rtClient.on("error", (err) => {
       console.error("[session] render engine error:", err?.message || String(err));
-      showCamError("שגיאת חיבור: " + (err?.message || err));
+      showCamError(byLang("שגיאת חיבור: ", "Connection error: ") + (err?.message || err));
     });
 
     connState = (rtClient.getConnectionState && rtClient.getConnectionState()) || "connected";
@@ -7163,7 +7178,7 @@ function waitConnected(timeout) {
     (function poll() {
       if (isLive()) return resolve();
       if (connState === "error" || connState === "disconnected") return reject(new Error("session " + connState));
-      if (Date.now() - start > timeout) return reject(new Error("timeout מחכה לחיבור (" + connState + ")"));
+      if (Date.now() - start > timeout) return reject(new Error((typeof byLang === "function" ? byLang("timeout מחכה לחיבור (", "Timed out waiting for the connection (") : "timeout מחכה לחיבור (") + connState + ")"));
       setTimeout(poll, 50);
     })();
   });
@@ -8191,6 +8206,11 @@ const PREP_PHASE_COPY = {
   [PREP_PHASE_PRELOAD]:  "מכינים את קובצי התמונה · Preloading image data",
   [PREP_PHASE_READY]:    "מוכן · Ready",
 };
+const PREP_PHASE_COPY_EN = {
+  [PREP_PHASE_CLASSIFY]: "Verifying garment assets",
+  [PREP_PHASE_PRELOAD]:  "Preloading image data",
+  [PREP_PHASE_READY]:    "Ready",
+};
 
 /** True while any asset this run needs is still unresolved. The overlay's only trigger. */
 function assetPrepActive() {
@@ -8336,7 +8356,7 @@ function assetPrepRender() {
   const label = $("agPrepPhase");
   if (num) num.firstChild ? (num.firstChild.nodeValue = String(pct)) : (num.textContent = String(pct));
   if (fill) fill.style.width = pct + "%";
-  if (label) label.textContent = PREP_PHASE_COPY[assetPrepPhase] || "";
+  if (label) label.textContent = (typeof byLang === "function" ? byLang(PREP_PHASE_COPY[assetPrepPhase], PREP_PHASE_COPY_EN[assetPrepPhase]) : PREP_PHASE_COPY[assetPrepPhase]) || "";
   wrap.setAttribute("data-phase", assetPrepPhase);           // raw state, for the console/debug contract
   wrap.setAttribute("aria-valuenow", String(pct));
 }
@@ -8507,9 +8527,9 @@ async function preloadGarmentAssets() {
     const back  = distinctBackOf(item, g);
     const label = item.name || item.garmentType || "garment";
 
-    setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front […]`);
+    setText((typeof byLang === "function" ? byLang("בודק תמונות בגד… · ", "") : "בודק תמונות בגד… · ") + `Scanning Garment Assets… ${label} Front […]`);
     const frontBlob = front ? await garmentBlobCached(front) : null;
-    setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front [${frontBlob ? "OK" : "FAIL"}]`);
+    setText((typeof byLang === "function" ? byLang("בודק תמונות בגד… · ", "") : "בודק תמונות בגד… · ") + `Scanning Garment Assets… ${label} Front [${frontBlob ? "OK" : "FAIL"}]`);
     /* What Decart will actually be conditioned on, measured rather than assumed - see
        REFERENCE_MIN_EDGE_PX. Fire-and-forget and typeof-guarded: this function is extracted
        and run standalone by preload-composite (CLAUDE.md 2.6/2.7), where the helper above the
@@ -8524,7 +8544,7 @@ async function preloadGarmentAssets() {
 
     if (!back) { hasBack = false; continue; }
 
-    setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back […]`);
+    setText((typeof byLang === "function" ? byLang("בודק תמונות בגד… · ", "") : "בודק תמונות בגד… · ") + `Scanning Garment Assets… ${label} Back […]`);
     const backBlob = await garmentBlobCached(back);
     if (backBlob && typeof probeReferenceResolution === "function") probeReferenceResolution(backBlob, label, "back");
     let backOk = !!backBlob;
@@ -8548,7 +8568,7 @@ async function preloadGarmentAssets() {
           "\n  → garment:", label);
       }
     }
-    setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back [${backOk ? "OK" : "FAIL"}]`);
+    setText((typeof byLang === "function" ? byLang("בודק תמונות בגד… · ", "") : "בודק תמונות בגד… · ") + `Scanning Garment Assets… ${label} Back [${backOk ? "OK" : "FAIL"}]`);
     prepTick();
     if (!backOk) {
       console.warn("[PEAR] GARMENT_BACK failed pre-load validation - proceeding FRONT-ONLY -", label, back);
@@ -8576,7 +8596,7 @@ async function preloadGarmentAssets() {
        later one on the exact same item: this call is a no-op cache hit if the
        prewarm already finished, and the actual missing wait if it had not. */
     if (compositeActiveFor(item)) {
-      setText(`מכינים תצוגה משולבת… · Preparing combined view… ${label} […]`);
+      setText((typeof byLang === "function" ? byLang("מכינים תצוגה משולבת… · ", "") : "מכינים תצוגה משולבת… · ") + `Preparing combined view… ${label} […]`);
       let composite = null;
       if (item.composite) {
         // Prefer the widget's own composite (it is the exact image the store page
@@ -8586,7 +8606,7 @@ async function preloadGarmentAssets() {
         if (!composite) console.warn("[PEAR] handed-over composite failed to decode during preload -", label);
       }
       if (!composite) composite = await createGarmentComposite(front, back);
-      setText(`מכינים תצוגה משולבת… · Preparing combined view… ${label} [${composite ? "OK" : "FAIL"}]`);
+      setText((typeof byLang === "function" ? byLang("מכינים תצוגה משולבת… · ", "") : "מכינים תצוגה משולבת… · ") + `Preparing combined view… ${label} [${composite ? "OK" : "FAIL"}]`);
       prepTick();
       if (!composite) {
         console.warn("[PEAR] COMPOSITE failed pre-load validation - proceeding FRONT-ONLY -", label);
@@ -10852,7 +10872,7 @@ function createOrientationWatcher() {
       if (!backBlob) {
         console.error("[PEAR] CRITICAL: GARMENT_BACK unavailable at flip time; holding FRONT_MODE -", GARMENT_BACK);
         settleFrontOnBackFailure();
-        toast("תמונת הגב אינה זמינה");
+        toast((typeof byLang === "function" ? byLang("תמונת הגב אינה זמינה", "The back view isn't available") : "תמונת הגב אינה זמינה"));
         return;                           // keep showing the front instead of a blank/failed swap
       }
       // Content check: a Blob can fetch/decode fine and still be a broken-image/
@@ -10869,7 +10889,7 @@ function createOrientationWatcher() {
         console.error("[PEAR] CRITICAL: GARMENT_BACK decoded but looks like a blank/solid-color placeholder (no garment texture); holding FRONT_MODE -", GARMENT_BACK);
         _assetBlobCache.delete(GARMENT_BACK);   // don't keep serving this bad asset from cache
         settleFrontOnBackFailure();
-        toast("תמונת הגב אינה תקינה");
+        toast((typeof byLang === "function" ? byLang("תמונת הגב אינה תקינה", "The back view image is invalid") : "תמונת הגב אינה תקינה"));
         return;
       }
     } else if (GARMENT_FRONT) {
@@ -10983,7 +11003,7 @@ function createOrientationWatcher() {
       // release whatever the NEW one has since raised.
       if (disposed) return;
       orientHoldEnd("swap-complete");
-      toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
+      toast(next === "back" ? (typeof byLang === "function" ? byLang("מציג גב · Back view", "Back view") : "מציג גב · Back view") : (typeof byLang === "function" ? byLang("מציג חזית · Front view", "Front view") : "מציג חזית · Front view"));
     } catch (e) {
       /* ── ROLL THE LOCK BACK - "I turned around and the back print was gone" ─────
          THE FAILURE THIS CLOSES. autoOrientation was advanced before the dispatch, and
@@ -12743,9 +12763,12 @@ function hasBothViews(item) { return hasFrontView(item) && hasBackView(item); }
 /* Reason a single garment can't go live (or null when it can). */
 function itemBlockReason(item) {
   if (!item) return null;
-  if (!hasFrontView(item)) return `ל־${item.name || "בגד זה"} אין תמונת חזית · no front-view image`;
+  const en = typeof byLang === "function" && byLang(false, true);
+  if (!hasFrontView(item)) return en ? `${item.name || "This item"} has no front-view image`
+                                     : `ל־${item.name || "בגד זה"} אין תמונת חזית · no front-view image`;
   if (item.requireBothViews && !hasBackView(item))
-    return `ל־${item.name || "בגד זה"} חסרה תמונת גב · missing required back-view image`;
+    return en ? `${item.name || "This item"} is missing a required back-view image`
+              : `ל־${item.name || "בגד זה"} חסרה תמונת גב · missing required back-view image`;
   return null;
 }
 
@@ -12779,9 +12802,11 @@ function liveBlockReason() {
 function itemPendingReason(item) {
   if (!item) return null;
   if (item._awaitingBackCorrection)
-    return "עדיין מחפשים תצוגת גב לבגד, רק רגע · Still finding a back view for this item";
+    return typeof byLang === "function" ? byLang("עדיין מחפשים תצוגת גב לבגד, רק רגע · Still finding a back view for this item", "Still finding a back view for this item")
+                                        : "עדיין מחפשים תצוגת גב לבגד, רק רגע · Still finding a back view for this item";
   if (item._compositeBuilding)
-    return "מכינים תצוגה משולבת, רק רגע · Preparing the combined view";
+    return typeof byLang === "function" ? byLang("מכינים תצוגה משולבת, רק רגע · Preparing the combined view", "Preparing the combined view")
+                                        : "מכינים תצוגה משולבת, רק רגע · Preparing the combined view";
   return null;
 }
 /* ── THE CLASSIFICATION GATE - "I faced forward and it printed the BACK graphic" ────
@@ -12871,7 +12896,8 @@ function livePendingReason() {
      that photo's back view is ready. typeof-guarded because the extract-based suites
      (pending-gate.test.mjs) run this function standalone with no module scope - §2.7. */
   if (typeof classifyPending !== "undefined" && classifyPending) {
-    return "מאמתים את תמונות הבגד, רק רגע · Checking the garment photos";
+    return typeof byLang === "function" ? byLang("מאמתים את תמונות הבגד, רק רגע · Checking the garment photos", "Checking the garment photos")
+                                        : "מאמתים את תמונות הבגד, רק רגע · Checking the garment photos";
   }
   const look = resolveLook();
   if (look) return itemPendingReason(look.top) || itemPendingReason(look.bottom);
@@ -14258,7 +14284,7 @@ function injectSizeSelector() {
   const anySoldOut = scale.some((sz) => isSizeSoldOut(sz));
   row.innerHTML =
     `<div class="pear-sz-head">` +
-      `<span class="pear-sz-label">מידה · Size</span>` +
+      `<span class="pear-sz-label">${byLang("מידה · Size", "Size")}</span>` +
       (currentUserSize ? `<span class="pear-sz-hint">${t("szRecommendedHint")}</span>` : "") +
     `</div>` +
     `<div class="pear-sz-btns">${btnHtml}</div>` +
@@ -14316,13 +14342,13 @@ function setSizeOverride(size) {
     ladder.includes(currentUserSize) && ladder.includes(size);
   const delta = getSizeDelta();
   if (!onLadder) {
-    toast(`מידה שנבחרה: <b>${size}</b>`);
+    toast(byLang(`מידה שנבחרה: <b>${size}</b>`, `Selected size: <b>${size}</b>`));
   } else if (delta < 0) {
-    toast(`מידה <b>${size}</b> - הלבוש יראה הדוק יותר`);
+    toast(byLang(`מידה <b>${size}</b> - הלבוש יראה הדוק יותר`, `Size <b>${size}</b> - the garment will look tighter`));
   } else if (delta > 0) {
-    toast(`מידה <b>${size}</b> - הלבוש יראה גדול יותר`);
+    toast(byLang(`מידה <b>${size}</b> - הלבוש יראה גדול יותר`, `Size <b>${size}</b> - the garment will look looser`));
   } else {
-    toast(`מידה <b>${size}</b> - התאמה מדויקת`);
+    toast(byLang(`מידה <b>${size}</b> - התאמה מדויקת`, `Size <b>${size}</b> - true to size`));
   }
 }
 
@@ -14912,8 +14938,8 @@ function updateProfileButton() {
 
   // (no age row - the field is gone; see the "AGE - REMOVED" note)
   const heightEl = $("profileHeight"), weightEl = $("profileWeight");
-  if (heightEl) heightEl.textContent = PEAR_USER.height != null ? `${PEAR_USER.height} ס"מ` : "-";
-  if (weightEl) weightEl.textContent = PEAR_USER.weight != null ? `${PEAR_USER.weight} ק"ג` : "-";
+  if (heightEl) heightEl.textContent = PEAR_USER.height != null ? `${PEAR_USER.height} ${byLang('ס"מ', "cm")}` : "-";
+  if (weightEl) weightEl.textContent = PEAR_USER.weight != null ? `${PEAR_USER.weight} ${byLang('ק"ג', "kg")}` : "-";
 
   const sizeEl = $("profileSize");
   if (sizeEl) {
@@ -15445,6 +15471,7 @@ function showOtpScreen(email) {
   if (subtitle) subtitle.hidden = true;
   const hint = $("otp-email-hint");
   if (hint) hint.textContent = `${t("otpSentTo")} ${email}`;
+  if (hint && hint.dataset) hint.dataset.email = email;   // repainted on a language toggle
   const input = $("otpInput");
   if (input) { input.value = ""; input.focus(); }
   const errEl = $("otp-error");
@@ -17213,7 +17240,9 @@ async function applyConditioningWithRecovery() {
              second token and opening a second session spends a shopper's time and a
              credit to arrive at the same failure. Those rethrow unchanged, exactly as
              they did before this recovery existed. */
-          const e = new Error(`timeout ממתין ליישום הבגד (rtClient.set לא הגיב${label ? " - " + label : ""})`);
+          const e = new Error((typeof byLang === "function" && byLang(false, true))
+            ? `Timed out applying the garment (the render engine did not answer${label ? " - " + label : ""})`
+            : `timeout ממתין ליישום הבגד (rtClient.set לא הגיב${label ? " - " + label : ""})`);
           e.isApplyTimeout = true;
           reject(e);
         }, budgetMs);
@@ -17240,7 +17269,7 @@ async function applyConditioningWithRecovery() {
     if (!err || !err.isApplyTimeout) throw err;   // a definite failure - see race()'s note
     console.warn("[PEAR] initial apply did not land -", err?.message || err,
       "\n  → resetting the realtime client once and retrying with a lightweight payload");
-    toast("מרענן חיבור מדידה... · Refreshing the fitting connection…");
+    toast((typeof byLang === "function" ? byLang("מרענן חיבור מדידה... · Refreshing the fitting connection…", "Refreshing the fitting connection…") : "מרענן חיבור מדידה... · Refreshing the fitting connection…"));
 
     /* FLUSH FIRST, then reset. The queue may still hold the write that never came back,
        and its epoch must be retired before a new session's first write is queued behind
@@ -17466,7 +17495,7 @@ async function goLive() {
     ensureOnline().then(online => {
       if (!online) {
         console.warn("[go-live] health probe returned offline - proceeding anyway");
-        toast("בדיקת קישוריות לא הצליחה - ממשיכים בניסיון חיבור");
+        toast(byLang("בדיקת קישוריות לא הצליחה - ממשיכים בניסיון חיבור", "Connectivity check failed - trying to connect anyway"));
       }
     });
 
@@ -17481,9 +17510,10 @@ async function goLive() {
     // exactly what to fix. cameraLooksBlack() only inspects local pixels; it sends
     // nothing to any API.
     if (await cameraLooksBlack()) {
-      showCamError("זוהה מסך שחור. הפעל את המצלמה או הסר חסימה מהעדשה כדי להמשיך. " +
-        "(Black screen detected. Please turn on your camera or remove any obstacles to proceed.)");
-      toast("מסך שחור - המדידה לא הופעלה כדי לחסוך קרדיטים");
+      showCamError(byLang("זוהה מסך שחור. הפעל את המצלמה או הסר חסימה מהעדשה כדי להמשיך. " +
+        "(Black screen detected. Please turn on your camera or remove any obstacles to proceed.)",
+        "Black screen detected. Please turn on your camera or remove any obstacles to proceed."));
+      toast(byLang("מסך שחור - המדידה לא הופעלה כדי לחסוך קרדיטים", "Black screen - the fitting wasn't started, to save credits"));
       return;   // finally{} resets busy + the capture button; no billed session opened
     }
 
@@ -17584,8 +17614,8 @@ async function goLive() {
     if (typeof traceOrient === "function") traceOrient("preload", { ok: !!preload.ok, back: !!preload.hasBack, ms: Date.now() - preloadAt });
     if (!preload.ok) {
       $("scanOverlay").hidden = true;
-      showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
-      toast("טעינת תמונת הבגד נכשלה");
+      showCamError(byLang("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.", "Could not load the garment image."));
+      toast(byLang("טעינת תמונת הבגד נכשלה", "The garment image failed to load"));
       return;   // finally{} resets busy + the capture button; no billed session opened
     }
     if (!preload.hasBack) {
@@ -17598,7 +17628,7 @@ async function goLive() {
          unavailable to a shopper who was never offered one - a new false alarm created
          purely by widening the gate. Only a run that genuinely intended AI Auto has
          lost something worth reporting. */
-      if (wantedAutoView) toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
+      if (wantedAutoView) toast(byLang("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only", "Back view unavailable - front only"));
     }
     /* Every asset this run needs is now fetched, decoded and validated - so the prep
        overlay can retire and hand over the finalized card in one step. Guarded: this
@@ -17651,7 +17681,7 @@ async function goLive() {
     if (currentAngle === AUTO_ANGLE && !orientWatcher) {
       console.warn("[PEAR] AI Auto watcher unavailable after retry - proceeding FRONT-ONLY (never a stitched composite)");
       currentAngle = "front";
-      toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
+      toast(byLang("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only", "Back view unavailable - front only"));
     }
     console.log(`[VTON Pipeline] Top-level mode this run: ${currentAngle}`,
       currentAngle === AUTO_ANGLE ? "(per-orientation asset switching - watcher armed; FRONT_MODE/BACK_MODE is a live lock, see [VTON Pipeline] Current Active State below)"
@@ -17728,12 +17758,12 @@ async function goLive() {
         stopScanTimer();                // model never became ready - retire the loading UI here
         $("scanOverlay").hidden = true;
         stopLive();
-        showCamError("החיבור לא הניב תמונה - נסה שוב.");
+        showCamError(byLang("החיבור לא הניב תמונה - נסה שוב.", "The connection didn't produce an image - try again."));
         setConn("error");
       }, FIRST_FRAME_TIMEOUT_MS);
     }
 
-    toast("מדידה חיה · סרטון " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות");
+    toast(byLang("מדידה חיה · סרטון " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות", "Live fitting · " + Math.round(VIDEO_LENGTH_MS / 1000) + "-second video"));
   } catch (err) {
     if (typeof traceOrient === "function") traceOrient("live-fail", { m: String(err?.message || err).slice(0, 160) });
     stopLive();                        // close any partial session - no idle billing
@@ -17749,10 +17779,10 @@ async function goLive() {
       if (/out of credits|insufficient credits/i.test(why)) {
         const testing = typeof traceEnabled === "function" && traceEnabled();
         showCamError(testing
-          ? "המדידה החיה נכשלה: נגמר הקרדיט בחשבון מנוע הרינדור - יש לטעון קרדיט"
-          : "המדידה החיה אינה זמינה כרגע - נסו שוב מאוחר יותר · Live try-on is unavailable right now");
+          ? byLang("המדידה החיה נכשלה: נגמר הקרדיט בחשבון מנוע הרינדור - יש לטעון קרדיט", "The live try-on failed: the render account is out of credits - top it up")
+          : byLang("המדידה החיה אינה זמינה כרגע - נסו שוב מאוחר יותר · Live try-on is unavailable right now", "Live try-on is unavailable right now - try again later"));
       } else {
-        showCamError("המדידה החיה נכשלה: " + why);
+        showCamError(byLang("המדידה החיה נכשלה: ", "The live try-on failed: ") + why);
       }
       setConn("error");
     }
@@ -17935,7 +17965,7 @@ function finalizeVideoClip() {
   if (typeof traceSessionEnd === "function") traceSessionEnd("clip");
   setLiveControls(false);
   $("captureBtn").disabled = !localStream;
-  toast("הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן");
+  toast(byLang("הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן", "Your " + Math.round(VIDEO_LENGTH_MS / 1000) + "-second video is ready"));
 }
 
 /* ── Lower-body compositing guard (config.js LOWER_BODY_GUARD_ENABLED) ────────
@@ -19651,7 +19681,7 @@ function setLiveControls(live) {
   btn.classList.toggle("is-live", live);
   btn.disabled = false;
   if (icon)  icon.innerHTML    = live ? '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="7" y="7" width="10" height="10" rx="2.4" fill="currentColor" stroke="none"/></svg>' : '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="6.5" width="12.5" height="11" rx="2.6"/><path d="M15.5 10.4 20.4 7.8v8.4l-4.9-2.6z"/></svg>';
-  if (label) label.textContent = live ? "עצור מדידה חיה" : "התחל מדידה חיה";
+  if (label) label.textContent = live ? byLang("עצור מדידה חיה", "Stop") : byLang("התחל מדידה חיה", "Go Live");
   if (en)    en.textContent    = live ? "Stop" : "Go Live";
 }
 
@@ -20058,7 +20088,7 @@ function ensureReplayZone() {
     zone.setAttribute("aria-label", "Replay zone");
     zone.innerHTML =
       `<div class="pear-rz-header">` +
-        `<span class="pear-rz-badge">Your Try-On · ההקלטה שלך</span>` +
+        `<span class="pear-rz-badge">${byLang("Your Try-On · ההקלטה שלך", "Your Try-On")}</span>` +
         `<span id="pearRzTitle" class="pear-rz-title"></span>` +
       `</div>` +
       `<video id="pearReplayVideo" class="pear-rz-video"` +
@@ -20066,13 +20096,11 @@ function ensureReplayZone() {
       `<div class="pear-rz-actions">` +
         `<button id="pearRzReplayBtn" class="pear-rz-btn pear-rz-btn--replay" type="button">` +
           `<span aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.2 12a6.8 6.8 0 1 0 2-4.8"/><path d="M4.6 4.6v3.9h3.9"/></svg></span>` +
-          `<span>צפה שוב</span>` +
-          `<span class="pear-rz-btn__en">Replay</span>` +
+          byLang(`<span>צפה שוב</span><span class="pear-rz-btn__en">Replay</span>`, `<span>Replay</span>`) +
         `</button>` +
         `<button id="pearRzDlBtn" class="pear-rz-btn pear-rz-btn--dl" type="button">` +
           `<span aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 4.5v10.5M7.6 10.8 12 15.2l4.4-4.4M5.5 19.5h13"/></svg></span>` +
-          `<span>הורד</span>` +
-          `<span class="pear-rz-btn__en">Download</span>` +
+          byLang(`<span>הורד</span><span class="pear-rz-btn__en">Download</span>`, `<span>Download</span>`) +
         `</button>` +
       `</div>`;
 
@@ -20169,8 +20197,8 @@ async function downloadRecording() {
       if (navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
-          title: "PEAR - מדידה וירטואלית",
-          text: "הלוק שלי מ-PEAR · PEAR virtual fitting",
+          title: byLang("PEAR - מדידה וירטואלית", "PEAR - virtual fitting"),
+          text: byLang("הלוק שלי מ-PEAR · PEAR virtual fitting", "My look from PEAR · PEAR virtual fitting"),
         });
         return;                                   // saved/shared - done
       }
@@ -20356,7 +20384,7 @@ async function fetchStoreLookItems(currentItem) {
         id: it.image_url,
         img: it.image_url,
         type: guessTypeFromUrl(it.image_url),
-        name: "פריט מהחנות",
+        name: byLang("פריט מהחנות", "Store item"),
         custom: true,
       }))
       .filter((it) => it.type === wantType)
@@ -20408,16 +20436,17 @@ async function renderCompleteTheLook(item) {
   }
   section.hidden = false;
   const he = item.garmentType === "lower_body" ? "חולצות שמשלימות את המכנסיים" : "מכנסיים שמשלימים את החולצה";
-  $("clSub").textContent = he + " · Complete the Look";
+  const en = item.garmentType === "lower_body" ? "Tops that go with these bottoms" : "Bottoms that go with this top";
+  $("clSub").textContent = byLang(he + " · Complete the Look", en);
   $("clTrack").innerHTML = recs.map((r, i) => `
     <article class="cl-card" style="--i:${i}">
       <div class="cl-card__media">${garmentThumb(r)}</div>
       <div class="cl-card__body">
-        <span class="cl-card__cat">${r.type === "pants" ? "Pants" : "Shirt"}${SUBTYPE_LABEL_HE[r.subType] ? " · " + SUBTYPE_LABEL_HE[r.subType] : ""}</span>
+        <span class="cl-card__cat">${r.type === "pants" ? "Pants" : "Shirt"}${byLang(SUBTYPE_LABEL_HE, SUBTYPE_LABEL_EN)[r.subType] ? " · " + byLang(SUBTYPE_LABEL_HE, SUBTYPE_LABEL_EN)[r.subType] : ""}</span>
         <div class="cl-card__name">${r.name}${r.tried ? ` · <span data-i18n="clTried">${t("clTried")}</span>` : ""}</div>
         ${r.price != null ? `<span class="cl-card__price">$${r.price}</span>` : ""}
       </div>
-      <button class="cl-card__look" data-look="${i}">הוסף ללוק · Add to Look</button>
+      <button class="cl-card__look" data-look="${i}">${byLang("הוסף ללוק · Add to Look", "Add to Look")}</button>
     </article>`).join("");
 }
 
@@ -20430,9 +20459,9 @@ function viewBadge(p) {
   const front = hasFrontView(p), back = hasBackView(p);
   const blocked = !!itemBlockReason(p);
   const cls = blocked ? "viewbadge--blocked" : (front && back) ? "viewbadge--complete" : "viewbadge--partial";
-  const title = blocked ? "חסרה תמונת גב · back view required"
-              : (front && back) ? "חזית + גב · front + back ready"
-              : "חזית בלבד · front only";
+  const title = blocked ? byLang("חסרה תמונת גב · back view required", "Back view required")
+              : (front && back) ? byLang("חזית + גב · front + back ready", "Front + back ready")
+              : byLang("חזית בלבד · front only", "Front only");
   const dot = (on) => `<i class="viewbadge__dot${on ? " is-on" : ""}"></i>`;
   const mark = blocked ? '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5.5" y="10.5" width="13" height="9.5" rx="2.4"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>' : (front && back) ? '<svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 12.6l4.3 4.3 8.7-9.4"/></svg>' : "";
   return `<span class="viewbadge ${cls}" title="${title}" aria-label="${title}">`
@@ -20444,7 +20473,7 @@ function renderCatalogPanel() {
   // Clicking it opens the native file picker (delegated [data-upload] handler).
   const uploadCard = `
     <div class="cat-item cat-item--upload" data-upload role="button" tabindex="0"
-         aria-label="העלה בגד משלך · Upload your own garment">
+         aria-label="${byLang("העלה בגד משלך · Upload your own garment", "Upload your own garment")}">
       <div class="cat-item__media cat-upload__media">
         <span class="cat-upload__icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor"
@@ -20524,9 +20553,9 @@ function onGarmentFileChosen(e) {
  */
 function handleGarmentFile(file) {
   const U = CONFIG.UPLOAD;
-  if (!/^image\//i.test(file.type)) { toast("קובץ לא נתמך - בחר/י תמונה"); return; }
+  if (!/^image\//i.test(file.type)) { toast(byLang("קובץ לא נתמך - בחר/י תמונה", "Unsupported file - choose an image")); return; }
   if (file.size > U.MAX_BYTES) {
-    toast(`התמונה גדולה מדי (מקסימום ${Math.round(U.MAX_BYTES / (1024 * 1024))}MB)`);
+    toast(byLang(`התמונה גדולה מדי (מקסימום ${Math.round(U.MAX_BYTES / (1024 * 1024))}MB)`, `The image is too large (max ${Math.round(U.MAX_BYTES / (1024 * 1024))}MB)`));
     return;
   }
 
@@ -20535,10 +20564,10 @@ function handleGarmentFile(file) {
     const img = new Image();
     // Same-origin data URL → canvas stays untainted, so getImageData()/toDataURL() work.
     img.onload = () => runDetection(img);
-    img.onerror = () => toast("טעינת התמונה נכשלה - נסה/י תמונה אחרת");
+    img.onerror = () => toast(byLang("טעינת התמונה נכשלה - נסה/י תמונה אחרת", "The image failed to load - try another"));
     img.src = String(reader.result);
   };
-  reader.onerror = () => toast("קריאת הקובץ נכשלה");
+  reader.onerror = () => toast(byLang("קריאת הקובץ נכשלה", "Couldn't read the file"));
   reader.readAsDataURL(file);
 }
 
@@ -20565,7 +20594,7 @@ function runDetection(img) {
 
     if (!boxes.length) {
       showDetectEmpty();
-      toast("לא זוהו בגדים. נסה/י תמונה ברורה אחרת.");
+      toast(byLang("לא זוהו בגדים. נסה/י תמונה ברורה אחרת.", "No garments found. Try another, clearer photo."));
       return;
     }
 
@@ -20578,8 +20607,8 @@ function runDetection(img) {
       enterOutfitMode(outfit);
     } else {
       exitOutfitMode();
-      $("gdSub").textContent =
-        `${boxes.length} ${boxes.length === 1 ? "פריט זוהה" : "פריטים זוהו"} · tap to select`;
+      setGdSub(null,
+        byLang(`${boxes.length} ${boxes.length === 1 ? "פריט זוהה" : "פריטים זוהו"} · tap to select`, `${boxes.length} ${boxes.length === 1 ? "item" : "items"} found · tap to select`));
       renderDetectionBoxes(boxes);
     }
   }, CONFIG.UPLOAD.DETECT_RENDER_DELAY_MS);
@@ -20593,7 +20622,7 @@ function openGarmentDetect() {
   $("gdBoxes").innerHTML = "";
   $("gdLoading").hidden = false;
   $("gdEmpty").hidden = true;
-  $("gdSub").textContent = "מזהה בגדים בתמונה…";
+  setGdSub("gdDetecting");
   detectedOutfit = null; activeSide = "top";
   { const tabs = $("gdTabs"); if (tabs) tabs.hidden = true; }
   document.body.classList.add("gd-open");
@@ -20607,9 +20636,18 @@ function closeGarmentDetect() {
   document.body.classList.remove("gd-open");
 }
 
+/* #gdSub carries its i18n key while it shows a fixed line, so a language toggle repaints
+   it in place; a line with a live count is written as text and drops the key. */
+function setGdSub(key, text) {
+  const el = $("gdSub");
+  if (!el) return;
+  if (key) { el.setAttribute("data-i18n", key); el.textContent = t(key); }
+  else { el.removeAttribute("data-i18n"); el.textContent = text; }
+}
+
 function showDetectEmpty() {
   $("gdEmpty").hidden = false;
-  $("gdSub").textContent = "לא זוהו בגדים";
+  setGdSub("gdNone");
 }
 
 /**
@@ -20628,9 +20666,9 @@ function renderDetectionBoxes(boxes) {
     const left = (b.xmin / iw) * 100, top = (b.ymin / ih) * 100;
     const w = (b.width / iw) * 100,   h = (b.height / ih) * 100;
     const en = b.label || "Item", he = GARMENT_LABEL_HE[en] || "פריט";
-    return `<button class="gd-box" type="button" data-box="${i}" aria-label="מדוד ${he}" style="--i:${i};` +
+    return `<button class="gd-box" type="button" data-box="${i}" aria-label="${byLang("מדוד " + he, "Try on " + en)}" style="--i:${i};` +
       `left:${left.toFixed(3)}%;top:${top.toFixed(3)}%;width:${w.toFixed(3)}%;height:${h.toFixed(3)}%">` +
-      `<span class="gd-box__label"><b>${he}</b><span>${en}</span></span>` +
+      byLang(`<span class="gd-box__label"><b>${he}</b><span>${en}</span></span>`, `<span class="gd-box__label"><b>${en}</b></span>`) +
       `<i class="gd-corner gd-corner--tl"></i><i class="gd-corner gd-corner--tr"></i>` +
       `<i class="gd-corner gd-corner--bl"></i><i class="gd-corner gd-corner--br"></i>` +
       `</button>`;
@@ -20659,7 +20697,7 @@ function outfitBoundsPct(bounds) {
 function enterOutfitMode(outfit) {
   detectedOutfit = outfit;
   activeSide = "top";
-  $("gdSub").textContent = "זוהתה תלבושת מלאה · בחר/י עליון או תחתון";
+  setGdSub("gdOutfit");
   const tabs = $("gdTabs"); if (tabs) tabs.hidden = false;
   updateTabsUI();
   renderOutfitBox();
@@ -20675,9 +20713,9 @@ function renderOutfitBox() {
   const p = outfitBoundsPct(b);
   const { he, en } = SIDE_LABEL[activeSide];
   $("gdBoxes").innerHTML =
-    `<button class="gd-box gd-box--outfit" type="button" data-box="0" aria-label="מדוד ${he}" style="--i:0;` +
+    `<button class="gd-box gd-box--outfit" type="button" data-box="0" aria-label="${byLang("מדוד " + he, "Try on " + en)}" style="--i:0;` +
     `left:${p.left.toFixed(3)}%;top:${p.top.toFixed(3)}%;width:${p.width.toFixed(3)}%;height:${p.height.toFixed(3)}%">` +
-    `<span class="gd-box__label"><b>${he}</b><span>${en}</span></span>` +
+    byLang(`<span class="gd-box__label"><b>${he}</b><span>${en}</span></span>`, `<span class="gd-box__label"><b>${en}</b></span>`) +
     `<i class="gd-corner gd-corner--tl"></i><i class="gd-corner gd-corner--tr"></i>` +
     `<i class="gd-corner gd-corner--bl"></i><i class="gd-corner gd-corner--br"></i>` +
     `</button>`;
@@ -20693,9 +20731,9 @@ function positionOutfitBox() {
   el.style.left = p.left.toFixed(3) + "%";  el.style.top    = p.top.toFixed(3) + "%";
   el.style.width = p.width.toFixed(3) + "%"; el.style.height = p.height.toFixed(3) + "%";
   const { he, en } = SIDE_LABEL[activeSide];
-  el.setAttribute("aria-label", "מדוד " + he);
+  el.setAttribute("aria-label", byLang("מדוד " + he, "Try on " + en));
   const lbl = el.querySelector(".gd-box__label");
-  if (lbl) lbl.innerHTML = `<b>${he}</b><span>${en}</span>`;
+  if (lbl) lbl.innerHTML = byLang(`<b>${he}</b><span>${en}</span>`, `<b>${en}</b>`);
 }
 
 /** Toggle handler - snap the bracket + crop target between the TOP and BOTTOM regions. */
@@ -20755,7 +20793,7 @@ function selectDetectedGarment(index) {
       closeGarmentDetect();
       uploadTarget = "front";
       setActiveItem(customFrontItem);                  // re-render: Back tab is now a REAL view (no AI badge)
-      toast(`נוספה תמונת גב · back view added - <b>Front + Back</b> מוכן`);
+      toast(byLang(`נוספה תמונת גב · back view added - <b>Front + Back</b> מוכן`, `Back view added - <b>Front + Back</b> ready`));
     }, CONFIG.UPLOAD.PICK_ANIM_MS);
     return;
   }
@@ -20764,7 +20802,7 @@ function selectDetectedGarment(index) {
   const item = {
     id: null,
     custom: true,
-    name: gtype === "lower_body" ? "המכנס שלך · Your garment" : "הבגד שלך · Your garment",
+    name: gtype === "lower_body" ? byLang("המכנס שלך · Your garment", "Your garment") : byLang("הבגד שלך · Your garment", "Your garment"),
     price: null,
     type: gtype === "lower_body" ? "pants" : "shirt",  // feeds recommendFor()/thumbnails
     subType: "",                                       // no catalog subType → generic prompt
@@ -20781,7 +20819,7 @@ function selectDetectedGarment(index) {
     setActiveItem(item);                               // fills its slot, paints chip, resets to live
     const cc = $("cameraCard");
     if (cc) cc.scrollIntoView({ behavior: "smooth", block: "center" });
-    toast(`נבחר בגד מותאם - הוסף/י <b>תמונת גב</b> או שנשלים אותה ב־AI`);
+    toast(byLang(`נבחר בגד מותאם - הוסף/י <b>תמונת גב</b> או שנשלים אותה ב־AI`, `Custom garment selected - add a <b>back photo</b>, or AI will complete it`));
   }, CONFIG.UPLOAD.PICK_ANIM_MS);
 }
 
@@ -21309,10 +21347,10 @@ function setConn(state) {
   b.style.color = "";
   if (state === "connected" || state === "generating") {
     b.classList.add("live");
-    b.textContent = "● מחובר ל-API חי";
+    b.textContent = byLang("● מחובר ל-API חי", "● Connected");
   } else if (state === "connecting") {
     b.style.color = "#d08a17";
-    b.textContent = "● מתחבר…";
+    b.textContent = byLang("● מתחבר…", "● Connecting…");
   } else if (state === "reconnecting") {
     /* A REAL SDK state (StreamSession.scheduleReconnect(), stream-session.js), not a
        hypothetical one: the SDK retries a dropped mid-session connection internally
@@ -21322,10 +21360,10 @@ function setConn(state) {
        element are untouched throughout, only this badge and the one-time toast below
        change. */
     b.style.color = "#d08a17";
-    b.textContent = "● מתחבר מחדש…";
+    b.textContent = byLang("● מתחבר מחדש…", "● Reconnecting…");
   } else if (state === "error" || state === "disconnected") {
     b.classList.add("mock");
-    b.textContent = "● לא מחובר";
+    b.textContent = byLang("● לא מחובר", "● Not connected");
   } else {
     b.textContent = "●";
   }
@@ -21490,7 +21528,7 @@ function saveFitToGallery(imageSrc, garmentName, size, itemId) {
   while (arr.length > GALLERY_MAX) { const old = arr.shift(); dropClip(old.ts); }
   writeGallery(arr);
   renderGallery(arr);
-  toast("הלוק נשמר בגלריית המדידות");
+  toast(byLang("הלוק נשמר בגלריית המדידות", "Look saved to your fitting gallery"));
   return ts;
 }
 
@@ -21537,7 +21575,7 @@ function renderGallery(arr) {
       (it.ts === activeClipTs ? " is-playing" : "") + (compareSel.has(it.ts) ? " is-selected" : "");
     return `<button class="${cls}" type="button" data-idx="${idx}" data-ts="${it.ts}"${clip ? ` data-video-src="${clip}"` : ""} style="--gi:${i}">
        <span class="live-gallery-item__media">${media}</span>
-       <span class="lgi-select" role="checkbox" aria-checked="${compareSel.has(it.ts)}" title="בחר להשוואה"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 12.6l4.3 4.3 8.7-9.4"/></svg></span>
+       <span class="lgi-select" role="checkbox" aria-checked="${compareSel.has(it.ts)}" title="${byLang("בחר להשוואה", "Select to compare")}"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 12.6l4.3 4.3 8.7-9.4"/></svg></span>
        <span class="live-gallery-item__badge">
          <span class="live-gallery-item__name">${escHtml(it.name)}</span>
          <span class="live-gallery-item__size">${escHtml(it.size)}</span>
@@ -21559,7 +21597,7 @@ function markActiveTile() {
 /* Compare selection (max two). Updates tile state + the floating Compare pill. */
 function toggleCompareSelect(ts) {
   if (compareSel.has(ts)) compareSel.delete(ts);
-  else if (compareSel.size >= 2) { toast("ניתן להשוות שתי מדידות בלבד"); return; }
+  else if (compareSel.size >= 2) { toast(byLang("ניתן להשוות שתי מדידות בלבד", "You can compare two fittings at most")); return; }
   else compareSel.add(ts);
   syncCompareUI();
   // Open the split-screen comparison the instant a 2nd look is picked - no extra
@@ -21704,7 +21742,7 @@ function clearGallery() {
   const bar = $("compareBar"); if (bar) bar.hidden = true;
   try { localStorage.removeItem(GALLERY_KEY); } catch (_) {}
   renderGallery([]);
-  toast("גלריית המדידות נוקתה");
+  toast(byLang("גלריית המדידות נוקתה", "Fitting gallery cleared"));
 }
 
 /* Leave the clip-replay view: pause + detach the history clip from #aiVideo and
@@ -21725,7 +21763,7 @@ function exitClipReplay() {
    and loop it. Refuses to hijack a paid live session. Poster-only items (no clip
    after reload) fall back to the lightbox image. */
 function playClipInMainPlayer(url, idx, ts) {
-  if (isLive()) { toast("עצור מדידה חיה כדי לצפות בהיסטוריה"); return; }
+  if (isLive()) { toast(byLang("עצור מדידה חיה כדי לצפות בהיסטוריה", "Stop the live fitting to view your history")); return; }
   const ai = $("aiVideo");
   if (!ai || !url) { if (idx != null) openFitLightbox(idx); return; }
 
@@ -21756,7 +21794,7 @@ function playClipInMainPlayer(url, idx, ts) {
 
   const cc = $("cameraCard");
   if (cc) cc.scrollIntoView({ behavior: "smooth", block: "center" });
-  toast("▶ מציג מדידה קודמת");
+  toast(byLang("▶ מציג מדידה קודמת", "▶ Showing a previous fitting"));
 }
 
 /* The fit currently open in the large modal (so the delegated action buttons
@@ -21790,7 +21828,7 @@ function openFitLightbox(idx) {
     lb.innerHTML =
       `<div class="pear-lightbox__backdrop" data-lb-close></div>` +
       `<figure class="pear-lightbox__fig">` +
-        `<button class="pear-lightbox__close" type="button" aria-label="סגור" data-lb-close>×</button>` +
+        `<button class="pear-lightbox__close" type="button" aria-label="${byLang("סגור", "Close")}" data-lb-close>×</button>` +
         `<div class="pear-lightbox__stage"></div>` +
         `<figcaption class="pear-lightbox__cap">` +
           `<span class="pear-lightbox__name"></span>` +
@@ -21798,11 +21836,11 @@ function openFitLightbox(idx) {
         `</figcaption>` +
         `<div class="pear-lightbox__actions">` +
           `<button class="plb-btn plb-btn--replay" type="button" data-lb-replay hidden>` +
-            `<span class="plb-btn__icon" aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.2 12a6.8 6.8 0 1 0 2-4.8"/><path d="M4.6 4.6v3.9h3.9"/></svg></span><span>צפה שוב</span><span class="plb-btn__en">Replay</span></button>` +
+            `<span class="plb-btn__icon" aria-hidden="true"><svg class="lg-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.2 12a6.8 6.8 0 1 0 2-4.8"/><path d="M4.6 4.6v3.9h3.9"/></svg></span>${byLang('<span>צפה שוב</span><span class="plb-btn__en">Replay</span>', "<span>Replay</span>")}</button>` +
           `<button class="plb-btn plb-btn--live" type="button" data-lb-live>` +
-            `<span class="plb-btn__icon" aria-hidden="true">▶</span><span>מדוד שוב</span><span class="plb-btn__en">Try again live</span></button>` +
+            `<span class="plb-btn__icon" aria-hidden="true">▶</span>${byLang('<span>מדוד שוב</span><span class="plb-btn__en">Try again live</span>', "<span>Try again live</span>")}</button>` +
           `<a class="plb-btn plb-btn--dl" data-lb-dl hidden download>` +
-            `<span class="plb-btn__icon" aria-hidden="true">⤓</span><span>הורד</span><span class="plb-btn__en">Download</span></a>` +
+            `<span class="plb-btn__icon" aria-hidden="true">⤓</span>${byLang('<span>הורד</span><span class="plb-btn__en">Download</span>', "<span>Download</span>")}</a>` +
         `</div>` +
       `</figure>`;
     document.body.appendChild(lb);
@@ -21847,12 +21885,12 @@ function openFitLightbox(idx) {
    still in the catalog) and open a fresh, optimized 5-second live session. */
 function replayFitLive(it) {
   if (isDemoLocked()) { toast(t("demoAlreadyUsed")); return; }
-  if (isLive()) { toast("עצור מדידה חיה כדי להתחיל מחדש"); return; }
+  if (isLive()) { toast(byLang("עצור מדידה חיה כדי להתחיל מחדש", "Stop the live fitting to start over")); return; }
   if (it && it.itemId != null) {
     const p = PEAR_CATALOG.find((x) => x.id === it.itemId);
     if (p) setActiveItem(toItem(p));               // sets active garment + resets to live standby
   }
-  if (!activeItem) { toast("בחר בגד מהקטלוג כדי למדוד שוב"); return; }
+  if (!activeItem) { toast(byLang("בחר בגד מהקטלוג כדי למדוד שוב", "Choose a garment from the catalog to try on again")); return; }
   const cc = $("cameraCard");
   if (cc) cc.scrollIntoView({ behavior: "smooth", block: "center" });
   goLive();                                         // fresh 5s WebRTC try-on (billing starts here)
@@ -21888,6 +21926,15 @@ function init() {
     const sizeFormEl = $("sizeForm");
     if (sizeFormEl && !sizeFormEl.hidden) { try { calculateSize(); } catch {} }
     try { injectSizeSelector(); } catch {}
+    /* The lines that STAY on screen and were written from runtime state: the walk in
+       i18n.js has just painted their static fallback, so repaint the real state over it
+       in the new language. Toasts and one-off messages need nothing - they are written
+       in whatever language is active when they fire. */
+    try { if (activeItem || (activeOutfit.top && activeOutfit.bottom)) renderActiveGarment(); } catch {}
+    try { setConn(connState); } catch {}
+    try { assetPrepRender(); } catch {}
+    try { if (scanTimerInterval) { scanStepIndex = -1; updateScanTimer(); } } catch {}
+    try { const h = $("otp-email-hint"); if (h && h.dataset.email) h.textContent = `${t("otpSentTo")} ${h.dataset.email}`; } catch {}
   });
   // (Floating contextual help beacon: help-widget.js is loaded as its own
   // <script type="module"> in index.html and self-initializes independently
@@ -21947,7 +21994,7 @@ function init() {
 
   if (handoff) {
     const hint = $("focusCalcHint");
-    if (hint) { hint.hidden = false; hint.innerHTML = `נבחר הפריט <strong>${handoff.name}</strong> - מלא מידות כדי להמשיך למדידה הוירטואלית.`; }
+    if (hint) { hint.hidden = false; hint.innerHTML = byLang(`נבחר הפריט <strong>${handoff.name}</strong> - מלא מידות כדי להמשיך למדידה הוירטואלית.`, `<strong>${handoff.name}</strong> selected - fill in your measurements to continue to the virtual fitting.`); }
     /* TIER 3 of the pants gate, started here and DELIBERATELY NOT AWAITED - init() must
        not hold the measurement form behind a network round trip. The text tiers have
        already produced a recommendation by the time this resolves; applyGarmentCategoryHint()
