@@ -2615,7 +2615,6 @@ function setupPhotoEstimate() {
    (galleryOf(item).front || item.img) - a full look sends both pieces. The person photo
    is a raw camera frame, un-mirrored (the model sees reality, as Decart does - see
    MIRROR_POLICY), so the result's printed text reads correctly. */
-const PHOTO_FIT_TIMER_S = 5;
 const PHOTO_FIT_TIMEOUT_MS = 90_000;
 let fitMode = "live";
 let photoFitBusy = false;
@@ -2636,7 +2635,8 @@ function setFitMode(mode) {
   }
   card().classList.toggle("is-photo-mode", mode === "photo");
   const hint = $("fitModeHint"); if (hint) hint.hidden = mode !== "photo";
-  if (mode === "live") clearPhotoFit();
+  if (mode === "live") { clearPhotoFit(); stopBodyGuide(); }
+  else startBodyGuide();
   paintCaptureForMode();
 }
 
@@ -2679,23 +2679,27 @@ function clearPhotoFit() {
   card().classList.remove("has-photo-result");
 }
 
-/* The 5s self-timer, then one raw frame of #webcam. */
+/* The SAME self-timer as the live fitting (#timerBtn: off / 3 / 5 / 10s) and its stage
+   countdown - one timer in the room, never a second one. Off shoots at once. Then one raw
+   frame of #webcam. */
 async function takeFitPhoto() {
   const video = $("webcam");
   if (photoFitBusy || !localStream || !video || !video.videoWidth) return;
   photoFitBusy = true;
   clearPhotoFit();
-  const count = $("photoFitCount");
   card().classList.add("is-photo-busy");   // the gallery button steps aside for the countdown
+  let go = true;
   try {
-    for (let n = PHOTO_FIT_TIMER_S; n > 0; n--) {
-      if (count) { count.hidden = false; count.textContent = String(n); }
-      await new Promise((r) => setTimeout(r, 1000));
+    const seconds = typeof liveTimerSec === "number" ? liveTimerSec : 0;
+    if (seconds > 0) {
+      const cd = runGoCountdown(seconds, "during");
+      go = await cd.zero;
+      cd.close();
     }
   } finally {
-    if (count) count.hidden = true;
     card().classList.remove("is-photo-busy");
   }
+  if (!go) { photoFitBusy = false; return; }   // the countdown was cancelled
   const canvas = document.createElement("canvas");
   canvas.width = video.videoWidth; canvas.height = video.videoHeight;
   canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -2737,22 +2741,16 @@ function photoFullBodyVerdict(result) {
   return { ok: missing.length === 0, missing };
 }
 
-async function photoShowsFullBody(canvas) {
-  const detector = await Promise.race([
-    loadPoseLandmarker(),
-    new Promise((resolve) => setTimeout(() => resolve(null), PHOTO_FULL_BODY_LOAD_MS)),
-  ]);
-  if (!detector) return null;
+/* One verdict for one image: VIDEO mode re-detects on a new image within a call or two. Goes
+   through detectPoseFrame(), the one guarded call site (its monotonic timestamp); the live loop's
+   POSE FOCUS WINDOW state is set aside and put back, so a still neither uses nor teaches it. */
+function photoVerdictOf(detector, image) {
   let verdict = null;
   for (let i = 0; i < PHOTO_FULL_BODY_TRIES; i++) {
-    /* Through detectPoseFrame(), the one guarded call site (its monotonic timestamp). The
-       live loop's POSE FOCUS WINDOW state is set aside for the call and put back after, so a
-       still photo neither uses a window learned on the live feed nor teaches it one: the whole
-       photo is read, and the live pose loop resumes exactly where it was. */
     const focus = _poseFocus, misses = _poseFullMisses;
     _poseFocus = null;
     try {
-      verdict = photoFullBodyVerdict(detectPoseFrame(detector, canvas));
+      verdict = photoFullBodyVerdict(detectPoseFrame(detector, image));
     } catch (e) {
       console.warn("[PEAR] photo fit - full-body check failed:", e?.message || e);
       verdict = null;
@@ -2762,6 +2760,36 @@ async function photoShowsFullBody(canvas) {
     if (verdict && verdict.ok) break;
   }
   return verdict;
+}
+
+/* THE WHOLE IMAGE, THEN A SQUARE AROUND THE BODY (reported 2026-10-24: "it doesn't recognise the
+   body"). A full-length figure in a wide 16:9 camera frame is what POSE FOCUS WINDOW above was
+   written for: the detector shrinks the frame to 224px and a shopper who stepped back far enough
+   to be seen head to feet is ~55px tall - too small to find. So a landscape image is also read in
+   squares the frame's height (centre, then either side); a square holds the same body at twice the
+   size. "Inside the frame" stays true in a crop: a joint inside the square is inside the photo. */
+async function photoShowsFullBody(canvas) {
+  const detector = await Promise.race([
+    loadPoseLandmarker(),
+    new Promise((resolve) => setTimeout(() => resolve(null), PHOTO_FULL_BODY_LOAD_MS)),
+  ]);
+  if (!detector) return null;
+  let best = photoVerdictOf(detector, canvas);
+  if (best && best.ok) return best;
+  const w = canvas.width, h = canvas.height;
+  if (w > h * 1.2) {
+    const crop = document.createElement("canvas");
+    crop.width = h; crop.height = h;
+    const ctx = crop.getContext("2d");
+    for (const cx of POSE_FOCUS_SCAN) {
+      const sx = Math.max(0, Math.min(w - h, Math.round(cx * w - h / 2)));
+      ctx.drawImage(canvas, sx, 0, h, h, 0, 0, h, h);
+      const v = photoVerdictOf(detector, crop);
+      if (v && v.ok) return v;
+      if (v && (!best || v.missing.length < best.missing.length)) best = v;
+    }
+  }
+  return best;
 }
 
 /* A File, a Blob or a canvas → a canvas no larger than PHOTO_ESTIMATE_MAX_SIDE. */
@@ -2784,7 +2812,8 @@ async function runPhotoFit(source) {
   photoFitBusy = true;
   clearPhotoFit();
   const busy = $("photoFitBusy"); if (busy) busy.hidden = false;
-  card().classList.add("is-photo-busy");
+  card().classList.add("is-photo-busy", "is-photo-processing");
+  clearBodyGuide();
 
   let answer = null;
   const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -2823,7 +2852,7 @@ async function runPhotoFit(source) {
   } finally {
     if (timer) clearTimeout(timer);
     if (busy) busy.hidden = true;
-    card().classList.remove("is-photo-busy");
+    card().classList.remove("is-photo-busy", "is-photo-processing");
     photoFitBusy = false;
   }
 
@@ -2842,6 +2871,108 @@ async function runPhotoFit(source) {
   const dl = $("photoFitDownload"); if (dl) dl.href = answer.image;
   const actions = $("photoFitActions"); if (actions) actions.hidden = false;
   card().classList.add("has-photo-result");
+}
+
+/* ── THE BODY GUIDE - lines on the shopper while they frame the photo ─────────────
+   In photo mode, with the camera open, the room draws the skeleton the pose model sees over
+   the preview: GREEN when every joint the photo needs is in frame (the same verdict as the
+   capture check, photoFullBodyVerdict()), WHITE while something is missing, with one line
+   saying which. It is a guide, never a gate on the button - the capture is checked again.
+   Through detectPoseFrame() with the POSE FOCUS WINDOW live (it is what finds a far-back
+   body in a wide frame); the window is reset when the guide stops, so a live session that
+   follows starts from the whole frame exactly as before. Never while a live session runs -
+   the live pose loop owns the detector then. */
+const BODY_GUIDE_MS = 160;
+const BODY_GUIDE_BONES = [
+  [11, 12], [11, 23], [12, 24], [23, 24],             // torso
+  [11, 13], [13, 15], [12, 14], [14, 16],             // arms
+  [23, 25], [25, 27], [24, 26], [26, 28],             // legs
+  [27, 31], [28, 32],                                 // feet
+];
+let _bodyGuideTimer = null;
+
+function bodyGuideShouldRun() {
+  const c = card();
+  return fitMode === "photo" && !isLive() && !!localStream && c && c.classList.contains("live") &&
+    !c.classList.contains("has-photo-result") && !c.classList.contains("is-photo-processing");
+}
+
+function clearBodyGuide() {
+  const cv = $("photoBodyGuide");
+  if (cv) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
+  const chip = $("photoBodyStatus"); if (chip) chip.hidden = true;
+}
+
+function drawBodyGuide(result, video) {
+  const cv = $("photoBodyGuide");
+  if (!cv) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const cw = cv.clientWidth, ch = cv.clientHeight;
+  if (cv.width !== Math.round(cw * dpr) || cv.height !== Math.round(ch * dpr)) {
+    cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+  }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  const verdict = photoFullBodyVerdict(result);
+  const lms = result && result.landmarks && result.landmarks[0];
+  /* #webcam is object-fit: cover - the same mapping takes a frame coordinate to the card. The
+     canvas is mirrored by CSS exactly as #webcam is, so no flip here. */
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const k = Math.max(cw / vw, ch / vh), ox = (cw - vw * k) / 2, oy = (ch - vh * k) / 2;
+  const at = (p) => [ox + p.x * vw * k, oy + p.y * vh * k];
+  const seen = (p) => p && Number(p.visibility ?? 0) >= PHOTO_FULL_BODY_MIN_VIS;
+  const ok = !!(verdict && verdict.ok);
+  if (Array.isArray(lms)) {
+    ctx.lineCap = "round";
+    ctx.strokeStyle = ok ? "rgba(141, 182, 0, .95)" : "rgba(255, 255, 255, .9)";
+    ctx.shadowColor = "rgba(0, 0, 0, .35)"; ctx.shadowBlur = 6;
+    ctx.lineWidth = ok ? 5 : 4;
+    for (const [a, b] of BODY_GUIDE_BONES) {
+      if (!seen(lms[a]) || !seen(lms[b])) continue;
+      const [x1, y1] = at(lms[a]), [x2, y2] = at(lms[b]);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+    ctx.fillStyle = ctx.strokeStyle;
+    if (seen(lms[0])) { const [x, y] = at(lms[0]); ctx.beginPath(); ctx.arc(x, y, ok ? 9 : 7, 0, Math.PI * 2); ctx.fill(); }
+  }
+  const chip = $("photoBodyStatus");
+  if (chip) {
+    const key = ok ? "photoBodyOk" : !Array.isArray(lms) ? "photoBodyNone"
+      : verdict.missing.some((m) => /ANKLE|KNEE/.test(m)) ? "photoBodyFeet"
+      : verdict.missing.includes("NOSE") ? "photoBodyHead" : "photoBodyNone";
+    chip.textContent = t(key);
+    chip.setAttribute("data-i18n", key);
+    chip.classList.toggle("is-ok", ok);
+    chip.hidden = false;
+  }
+}
+
+async function bodyGuideTick() {
+  _bodyGuideTimer = null;
+  if (fitMode !== "photo") { stopBodyGuide(); return; }
+  const video = $("webcam");
+  if (bodyGuideShouldRun() && video && video.videoWidth) {
+    const detector = await loadPoseLandmarker();
+    if (detector && bodyGuideShouldRun()) {
+      try { drawBodyGuide(detectPoseFrame(detector, video), video); }
+      catch (e) { /* one frame the model could not read - the next tick tries again */ }
+    }
+  } else {
+    clearBodyGuide();
+  }
+  if (fitMode === "photo") _bodyGuideTimer = setTimeout(bodyGuideTick, BODY_GUIDE_MS);
+}
+
+function startBodyGuide() {
+  if (_bodyGuideTimer) return;
+  _bodyGuideTimer = setTimeout(bodyGuideTick, 0);
+}
+
+function stopBodyGuide() {
+  if (_bodyGuideTimer) { clearTimeout(_bodyGuideTimer); _bodyGuideTimer = null; }
+  clearBodyGuide();
+  _poseFocus = null; _poseFullMisses = 0;   // the live fitting starts from the whole frame
 }
 
 function setupFitMode() {

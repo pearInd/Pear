@@ -2238,11 +2238,25 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   position: absolute; inset: 0; z-index: 6; width: 100%; height: 100%;
   object-fit: cover; background: #050505;   /* un-mirrored: the garment's text reads correctly */
 }
-.photo-fit__result[hidden], .photo-fit__count[hidden], .photo-fit__busy[hidden], .photo-fit__actions[hidden] { display: none; }
-.photo-fit__count {
-  position: absolute; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 6rem; font-weight: 800; text-shadow: 0 2px 24px rgba(0, 0, 0, .45); pointer-events: none;
+.photo-fit__result[hidden], .photo-fit__status[hidden], .photo-fit__busy[hidden], .photo-fit__actions[hidden] { display: none; }
+/* The body guide: mirrored exactly as the camera preview is, so the lines sit on the body. */
+.photo-fit__guide {
+  position: absolute; inset: 0; z-index: 6; width: 100%; height: 100%;
+  transform: scaleX(-1); pointer-events: none; display: none;
 }
+.camera-card.is-photo-mode.live .photo-fit__guide { display: block; }
+.camera-card.is-photo-mode.live.has-photo-result .photo-fit__guide { display: none; }
+.photo-fit__status {
+  position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 7; margin: 0;
+  padding: 8px 16px; border-radius: var(--pill); white-space: nowrap; pointer-events: none;
+  background: rgba(10, 10, 11, .55); color: #fff; font-size: .82rem; font-weight: 700;
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.photo-fit__status.is-ok { background: rgba(95, 125, 0, .85); }
+.camera-card.has-photo-result .photo-fit__status { display: none; }
+/* One timer in the room: the self-timer stays for photos, steps aside for the result. */
+.camera-card.live.has-photo-result .cam-timer,
+.camera-card.live.is-photo-processing .cam-timer { display: none; }   /* outranks .camera-card.live .cam-timer */
 .photo-fit__busy {
   position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
   background: rgba(10, 10, 11, .45); color: #fff; font-size: .95rem; font-weight: 600;

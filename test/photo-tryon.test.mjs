@@ -88,7 +88,7 @@ console.log("\n── §4 the room ──");
 
   check("§4.1 live is the default", /let fitMode = "live";/.test(APP) && /id="fitModeToggle"[^>]*data-active="live"/.test(HTML));
   check("§4.2 the mode is locked while a session runs", /if \(photoFitBusy \|\| isLive\(\)\) return;/.test(setMode));
-  check("§4.3 the still is cleared on the way back to live", /if \(mode === "live"\) clearPhotoFit\(\);/.test(setMode));
+  check("§4.3 the still is cleared on the way back to live", /if \(mode === "live"\) \{ clearPhotoFit\(\);/.test(setMode));
   check("§4.4 a late still never lands on live", /if \(fitMode !== "photo" \|\| isLive\(\)\) return;/.test(run));
   check("§4.5 the capture button only branches outside a session",
     /if \(typeof fitMode !== "undefined" && fitMode === "photo" && !isLive\(\)\) \{ takeFitPhoto\(\); return; \}/.test(APP));
@@ -131,6 +131,29 @@ console.log("\n── §5 full body or nothing ──");
   check("§5.8 it fails closed: no verdict or a partial body never sends",
     /if \(!body \|\| !body\.ok\) \{[\s\S]*?throw new Error\("not a full-body photo"\);/.test(run));
   check("§5.9 the photo sent is the very canvas that was checked", /const person = personCanvas\.toDataURL\("image\/jpeg", 0\.85\);/.test(run));
+}
+
+console.log("\n── §6 one timer, a body guide, a far-back body ──");
+{
+  const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8");
+  const HTML = readFileSync(new URL("../fitting-room/index.html", import.meta.url), "utf8");
+  const CSS = readFileSync(new URL("../fitting-room/style.css", import.meta.url), "utf8");
+  const slice = (from, to) => { const a = APP.indexOf(from); return a < 0 ? "" : APP.slice(a, APP.indexOf(to, a)); };
+  const take = slice("async function takeFitPhoto() {", "\n}\n");
+  check("§6.1 the photo uses the room's self-timer and its countdown - no timer of its own",
+    /typeof liveTimerSec === "number" \? liveTimerSec : 0/.test(take) && /runGoCountdown\(seconds, "during"\)/.test(take) &&
+    !/PHOTO_FIT_TIMER_S/.test(APP) && !/photoFitCount/.test(HTML));
+  check("§6.2 a cancelled countdown takes no photo", /if \(!go\) \{ photoFitBusy = false; return; \}/.test(take));
+  const guide = slice("function bodyGuideShouldRun() {", "function setupFitMode() {");
+  check("§6.3 the guide reads the body through the one guarded call site", /detectPoseFrame\(detector, video\)/.test(guide) && !/detectForVideo/.test(guide));
+  check("§6.4 the guide never runs during a live session", /fitMode === "photo" && !isLive\(\) && !!localStream/.test(guide));
+  check("§6.5 stopping it hands the live fitting a clean focus window", /function stopBodyGuide\(\) \{[\s\S]*?_poseFocus = null; _poseFullMisses = 0;/.test(guide));
+  check("§6.6 the guide is the capture's own verdict", /const verdict = photoFullBodyVerdict\(result\);/.test(guide));
+  check("§6.7 the guide canvas is mirrored like #webcam", /\.photo-fit__guide \{[^}]*transform: scaleX\(-1\)/.test(CSS));
+  check("§6.8 back to live stops the guide", /if \(mode === "live"\) \{ clearPhotoFit\(\); stopBodyGuide\(\); \}/.test(APP));
+  const full = slice("async function photoShowsFullBody(canvas) {", "\n}\n");
+  check("§6.9 a wide frame is also read in squares around the body (POSE FOCUS WINDOW)",
+    /if \(w > h \* 1\.2\)/.test(full) && /for \(const cx of POSE_FOCUS_SCAN\)/.test(full));
 }
 
 console.log("");
