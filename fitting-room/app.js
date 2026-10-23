@@ -14249,13 +14249,11 @@ function lockDemoAfterFirstMeasurement() {
   try { localStorage.setItem(PEAR_DEMO_LOCK_KEY, "true"); } catch {}
   notifyParentDemoLocked();
   /* ONE MEASUREMENT, NO "MEASURE AGAIN" (2026-10-23). Reported from the marketing site's demo:
-     after the measurement "Go Live" and "Measure again" were still there and a second session
-     started. The result and its panel stay; the two buttons that would start another go away,
-     and goLive() refuses a locked demo as a backstop. */
-  for (const id of ["captureBtn", "retakeBtn"]) {
-    const b = $(id);
-    if (b) b.style.display = "none";
-  }
+     after the measurement a second session started. The result and its panel stay; "Measure
+     again" goes away, and "Go Live" stays (the owner's call) but goLive() refuses a locked demo
+     with the already-used toast. */
+  const retake = $("retakeBtn");
+  if (retake) retake.style.display = "none";
 }
 
 /* =============================================================================
