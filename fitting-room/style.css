@@ -385,11 +385,83 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .photo-cam__frame { position: relative; width: min(92vw, 520px); max-height: 70vh; aspect-ratio: 3 / 4; border-radius: var(--radius); overflow: hidden; background: #000; }
 .photo-cam__video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-.photo-cam__count {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 5rem; font-weight: 800; text-shadow: 0 2px 16px rgba(0, 0, 0, .5); pointer-events: none;
+/* The body guide over the estimate's camera (createBodyGuide() in app.js): mirrored like the video. */
+.photo-cam__guide { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); pointer-events: none; }
+.photo-cam__status {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); margin: 0; z-index: 2;
+  padding: 7px 14px; border-radius: 999px; white-space: nowrap; pointer-events: none;
+  background: rgba(10, 10, 11, .55); color: #fff; font-size: .8rem; font-weight: 700;
 }
-.photo-cam__hint { margin: 0; max-width: 520px; color: rgba(255, 255, 255, .85); font-size: .9rem; text-align: center; }
+.photo-cam__status.is-ok { background: rgba(95, 125, 0, .85); }
+.photo-cam__status[hidden] { display: none; }
+/* ── The estimate camera's framing animations (openPhotoCamera() in app.js) ──────
+   searching: a dashed figure shrinks into the frame - "step back" - and the corners breathe.
+   holding:   the body is in; the corners turn green and close in, a ring fills over
+              --hold-ms while the shopper holds still.
+   shot:      a flash, a pop of the check, then the sheet closes on the frame. */
+.photo-cam__ghost {
+  position: absolute; left: 50%; top: 50%; width: 34%; height: auto; z-index: 1;
+  transform: translate(-50%, -50%); pointer-events: none;
+  fill: none; stroke: rgba(255, 255, 255, .7); stroke-width: 2.2; stroke-dasharray: 6 5; stroke-linejoin: round;
+  filter: drop-shadow(0 1px 6px rgba(0, 0, 0, .4));
+  animation: pc-step-back 2.6s cubic-bezier(.45, 0, .25, 1) infinite;
+  transition: opacity .35s ease;
+}
+@keyframes pc-step-back {
+  0%   { transform: translate(-50%, -50%) scale(1.55); opacity: 0; }
+  18%  { opacity: .9; }
+  70%  { transform: translate(-50%, -50%) scale(.92); opacity: .9; }
+  100% { transform: translate(-50%, -50%) scale(.92); opacity: 0; }
+}
+.photo-cam:not(.is-searching) .photo-cam__ghost { animation: none; opacity: 0; }
+
+.photo-cam__corners { position: absolute; inset: 7%; z-index: 2; pointer-events: none; transition: inset .45s cubic-bezier(.2, .9, .3, 1.2); }
+.photo-cam__corners i {
+  position: absolute; width: 34px; height: 34px; border: 3px solid rgba(255, 255, 255, .85);
+  transition: border-color .3s ease;
+  animation: pc-breathe 1.8s ease-in-out infinite;
+}
+.photo-cam__corners i:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; border-top-left-radius: 12px; }
+.photo-cam__corners i:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; border-top-right-radius: 12px; }
+.photo-cam__corners i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; border-bottom-left-radius: 12px; }
+.photo-cam__corners i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; border-bottom-right-radius: 12px; }
+@keyframes pc-breathe { 50% { opacity: .45; } }
+.photo-cam.is-holding .photo-cam__corners, .photo-cam.is-shot .photo-cam__corners { inset: 4%; }
+.photo-cam.is-holding .photo-cam__corners i, .photo-cam.is-shot .photo-cam__corners i { border-color: #8db600; animation: none; }
+
+.photo-cam__hold {
+  position: absolute; left: 50%; bottom: 18px; z-index: 3; width: 58px; height: 58px;
+  transform: translateX(-50%) scale(.6); opacity: 0; pointer-events: none;
+  transition: opacity .25s ease, transform .35s cubic-bezier(.2, .9, .3, 1.3);
+}
+.photo-cam__hold svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.photo-cam__hold circle { fill: none; stroke-width: 4; }
+.photo-cam__hold-track { stroke: rgba(255, 255, 255, .3); }
+.photo-cam__hold-fill { stroke: #8db600; stroke-linecap: round; stroke-dasharray: 119.4; stroke-dashoffset: 119.4; }
+.photo-cam__hold b {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 1.4rem; transform: scale(0); transition: transform .3s cubic-bezier(.2, .9, .3, 1.5);
+}
+.photo-cam.is-holding .photo-cam__hold, .photo-cam.is-shot .photo-cam__hold { opacity: 1; transform: translateX(-50%) scale(1); }
+.photo-cam.is-holding .photo-cam__hold-fill { animation: pc-hold var(--hold-ms, 1500ms) linear forwards; }
+.photo-cam.is-shot .photo-cam__hold-fill { stroke-dashoffset: 0; }
+.photo-cam.is-shot .photo-cam__hold b { transform: scale(1); }
+@keyframes pc-hold { to { stroke-dashoffset: 0; } }
+
+.photo-cam__flash { position: absolute; inset: 0; z-index: 4; background: #fff; opacity: 0; pointer-events: none; }
+.photo-cam.is-shot .photo-cam__flash { animation: pc-flash .38s ease-out; }
+@keyframes pc-flash { 0% { opacity: 0; } 20% { opacity: .85; } 100% { opacity: 0; } }
+
+.photo-cam__shoot[hidden] { display: none; }
+.photo-cam.is-holding .photo-cam__hint { color: #c9e86b; }
+
+@media (prefers-reduced-motion: reduce) {
+  .photo-cam__ghost { animation: none; opacity: .6; transform: translate(-50%, -50%) scale(.92); }
+  .photo-cam__corners i { animation: none; }
+  .photo-cam.is-holding .photo-cam__hold-fill { animation-duration: var(--hold-ms, 1500ms); }
+  .photo-cam.is-shot .photo-cam__flash { animation: none; }
+}
+.photo-cam__hint { margin: 0; max-width: 520px; color: rgba(255, 255, 255, .92); font-size: 1.02rem; font-weight: 700; text-align: center; transition: color .3s ease; }
 .photo-cam__actions { display: flex; gap: 12px; }
 .photo-cam__actions button {
   padding: 13px 24px; border-radius: var(--pill); font-family: inherit; font-size: .92rem; font-weight: 700; cursor: pointer;
@@ -2238,22 +2310,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   position: absolute; inset: 0; z-index: 6; width: 100%; height: 100%;
   object-fit: cover; background: #050505;   /* un-mirrored: the garment's text reads correctly */
 }
-.photo-fit__result[hidden], .photo-fit__status[hidden], .photo-fit__busy[hidden], .photo-fit__actions[hidden] { display: none; }
-/* The body guide: mirrored exactly as the camera preview is, so the lines sit on the body. */
-.photo-fit__guide {
-  position: absolute; inset: 0; z-index: 6; width: 100%; height: 100%;
-  transform: scaleX(-1); pointer-events: none; display: none;
-}
-.camera-card.is-photo-mode.live .photo-fit__guide { display: block; }
-.camera-card.is-photo-mode.live.has-photo-result .photo-fit__guide { display: none; }
-.photo-fit__status {
-  position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 7; margin: 0;
-  padding: 8px 16px; border-radius: var(--pill); white-space: nowrap; pointer-events: none;
-  background: rgba(10, 10, 11, .55); color: #fff; font-size: .82rem; font-weight: 700;
-  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-}
-.photo-fit__status.is-ok { background: rgba(95, 125, 0, .85); }
-.camera-card.has-photo-result .photo-fit__status { display: none; }
+.photo-fit__result[hidden], .photo-fit__busy[hidden], .photo-fit__actions[hidden] { display: none; }
 /* One timer in the room: the self-timer stays for photos, steps aside for the result. */
 .camera-card.live.has-photo-result .cam-timer,
 .camera-card.live.is-photo-processing .cam-timer { display: none; }   /* outranks .camera-card.live .cam-timer */
