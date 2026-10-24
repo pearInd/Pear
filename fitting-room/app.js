@@ -2340,7 +2340,6 @@ function setGender(gender) {
 const PHOTO_ESTIMATE_MAX_SIDE = 1024;
 const PHOTO_ESTIMATE_TIMEOUT_MS = 25_000;
 const PHOTO_ESTIMATE_FIELDS = ["height", "weight", "chest", "waist", "legs"];
-const PHOTO_CAM_TIMER_S = 5;
 
 /* A File, an ImageBitmap-able Blob, or a canvas already holding the frame → JPEG data URL. */
 async function photoToJpegDataUrl(source) {
@@ -2354,9 +2353,117 @@ async function photoToJpegDataUrl(source) {
   return canvas.toDataURL("image/jpeg", 0.85);
 }
 
+/* ── THE BODY GUIDE - lines on the body while a photo is framed ─────────────────────
+   Used by the size estimate's camera sheet (openPhotoCamera()): the skeleton the pose model
+   sees is drawn over the preview - GREEN when head to ankles are all in frame (the photo
+   try-on's own full-body verdict, photoFullBodyVerdict()), WHITE while something is missing,
+   with one line saying what. A guide only, never a gate. Through detectPoseFrame(), the one
+   guarded call site, with the POSE FOCUS WINDOW live (it is what finds a far-back body in a
+   wide frame); stop() resets the window, so whatever reads the pose next starts from the
+   whole frame. Only ever runs before the fitting room's live session, never during one. */
+const BODY_GUIDE_MS = 160;
+const BODY_GUIDE_BONES = [
+  [11, 12], [11, 23], [12, 24], [23, 24],             // torso
+  [11, 13], [13, 15], [12, 14], [14, 16],             // arms
+  [23, 25], [25, 27], [24, 26], [26, 28],             // legs
+  [27, 31], [28, 32],                                 // feet
+];
+
+/* One frame of the guide onto `canvas` (mirrored by CSS exactly as its video is). */
+function drawBodyGuide(result, video, canvas, chip) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  if (canvas.width !== Math.round(cw * dpr) || canvas.height !== Math.round(ch * dpr)) {
+    canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  const verdict = photoFullBodyVerdict(result);
+  const lms = result && result.landmarks && result.landmarks[0];
+  // The video is object-fit: cover - the same mapping takes a frame coordinate onto the canvas.
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const k = Math.max(cw / vw, ch / vh), ox = (cw - vw * k) / 2, oy = (ch - vh * k) / 2;
+  const at = (p) => [ox + p.x * vw * k, oy + p.y * vh * k];
+  const seen = (p) => p && Number(p.visibility ?? 0) >= PHOTO_FULL_BODY_MIN_VIS;
+  const ok = !!(verdict && verdict.ok);
+  if (Array.isArray(lms)) {
+    ctx.lineCap = "round";
+    ctx.strokeStyle = ok ? "rgba(141, 182, 0, .95)" : "rgba(255, 255, 255, .9)";
+    ctx.shadowColor = "rgba(0, 0, 0, .35)"; ctx.shadowBlur = 6;
+    ctx.lineWidth = ok ? 5 : 4;
+    for (const [a, b] of BODY_GUIDE_BONES) {
+      if (!seen(lms[a]) || !seen(lms[b])) continue;
+      const [x1, y1] = at(lms[a]), [x2, y2] = at(lms[b]);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+    ctx.fillStyle = ctx.strokeStyle;
+    if (seen(lms[0])) { const [x, y] = at(lms[0]); ctx.beginPath(); ctx.arc(x, y, ok ? 9 : 7, 0, Math.PI * 2); ctx.fill(); }
+  }
+  if (chip) {
+    const key = ok ? "photoBodyOk" : !Array.isArray(lms) ? "photoBodyNone"
+      : verdict.missing.some((m) => /ANKLE|KNEE/.test(m)) ? "photoBodyFeet"
+      : verdict.missing.includes("NOSE") ? "photoBodyHead" : "photoBodyNone";
+    chip.textContent = t(key);
+    chip.setAttribute("data-i18n", key);
+    chip.classList.toggle("is-ok", ok);
+    chip.hidden = false;
+  }
+  return verdict;
+}
+
+/** @param {{onVerdict?: (v: {ok: boolean, missing: string[]}|null) => void}} opts  each tick's verdict
+    @returns {{start: () => void, stop: () => void}} */
+function createBodyGuide({ video, canvas, chip, shouldRun = () => true, onVerdict = null }) {
+  let timer = null, running = false;
+  const clear = () => {
+    if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    if (chip) chip.hidden = true;
+  };
+  async function tick() {
+    timer = null;
+    if (!running) return;
+    if (shouldRun() && video && video.videoWidth && !isLive()) {
+      const detector = await loadPoseLandmarker();
+      if (running && detector && shouldRun()) {
+        let verdict = null;
+        try { verdict = drawBodyGuide(detectPoseFrame(detector, video), video, canvas, chip); }
+        catch (e) { /* one frame the model could not read - the next tick tries again */ }
+        if (running && onVerdict) onVerdict(verdict);
+      }
+    } else {
+      clear();
+    }
+    if (running) timer = setTimeout(tick, BODY_GUIDE_MS);
+  }
+  /* Named functions rather than shorthand methods: a test finds the orientation watcher's
+     own stop method by its text, first occurrence in the file (CLAUDE.md §2.6). */
+  function startGuide() { if (running) return; running = true; timer = setTimeout(tick, 0); }
+  function stopGuide() {
+    running = false;
+    if (timer) { clearTimeout(timer); timer = null; }
+    clear();
+    _poseFocus = null; _poseFullMisses = 0;   // the next reader starts from the whole frame
+  }
+  return { start: startGuide, stop: stopGuide };
+}
+
 /* The camera sheet. Resolves a canvas holding the frame, null on cancel, or "denied" when
    there is no camera to open. Built on <body> so no glass ancestor's backdrop-filter
-   becomes its containing block. */
+   becomes its containing block.
+   NO TIMER (2026-10-24: "take the timer out, don't shoot until the whole body is in frame").
+   The sheet SHOOTS ITSELF: once THE BODY GUIDE's verdict says head to ankles are in frame and
+   it has stayed so for PHOTO_CAM_HOLD_MS, it flashes and captures. Until then it says "step
+   back until your whole body is in frame", with a dashed figure that shrinks into the frame
+   (stepping back), corner brackets that turn green on the body, a ring that fills while the
+   shopper holds still, and a flash at the capture. Any miss restarts the hold.
+   If the pose model has not answered within PHOTO_CAM_MODEL_WAIT_MS (it could not load), a
+   plain "take photo" button appears instead - a guide that cannot see must not trap the
+   shopper (§2.5). */
+const PHOTO_CAM_HOLD_MS = 1500;
+const PHOTO_CAM_MODEL_WAIT_MS = 10_000;
+const PHOTO_CAM_FLASH_MS = 380;
+
 function openPhotoCamera() {
   return new Promise(async (resolve) => {
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") { resolve("denied"); return; }
@@ -2372,29 +2479,84 @@ function openPhotoCamera() {
     }
 
     const sheet = document.createElement("div");
-    sheet.className = "photo-cam";
+    sheet.className = "photo-cam is-searching";
     sheet.setAttribute("role", "dialog");
     sheet.setAttribute("aria-modal", "true");
     sheet.innerHTML =
       '<div class="photo-cam__frame"><video class="photo-cam__video" playsinline muted autoplay></video>' +
-      '<span class="photo-cam__count" aria-live="assertive"></span></div>' +
-      '<p class="photo-cam__hint"></p>' +
+      '<svg class="photo-cam__ghost" viewBox="0 0 100 220" aria-hidden="true"><circle cx="50" cy="22" r="14"/>' +
+        '<path d="M50 38c-15 0-25 6-27 18l-6 46c-1 5 7 7 8 1l6-38v52l-5 86c-1 7 9 8 10 1l8-76h12l8 76c1 7 11 6 10-1l-5-86v-52l6 38c1 6 9 4 8-1l-6-46c-2-12-12-18-27-18z"/></svg>' +
+      '<span class="photo-cam__corners" aria-hidden="true"><i></i><i></i><i></i><i></i></span>' +
+      '<canvas class="photo-cam__guide" aria-hidden="true"></canvas>' +
+      '<p class="photo-cam__status" role="status" aria-live="polite" hidden></p>' +
+      '<span class="photo-cam__hold" aria-hidden="true"><svg viewBox="0 0 44 44"><circle class="photo-cam__hold-track" cx="22" cy="22" r="19"/>' +
+        '<circle class="photo-cam__hold-fill" cx="22" cy="22" r="19"/></svg><b>✓</b></span>' +
+      '<span class="photo-cam__flash" aria-hidden="true"></span></div>' +
+      '<p class="photo-cam__hint" aria-live="polite"></p>' +
       '<div class="photo-cam__actions"><button type="button" class="photo-cam__cancel"></button>' +
-      '<button type="button" class="photo-cam__shoot"></button></div>';
-    const video = sheet.querySelector("video"), count = sheet.querySelector(".photo-cam__count");
+      '<button type="button" class="photo-cam__shoot" hidden></button></div>';
+    const video = sheet.querySelector("video"), hint = sheet.querySelector(".photo-cam__hint");
     const shoot = sheet.querySelector(".photo-cam__shoot"), cancel = sheet.querySelector(".photo-cam__cancel");
+    const hold = sheet.querySelector(".photo-cam__hold");
     // data-i18n as well as the text, so a language toggle while the sheet is open repaints it.
-    [[sheet.querySelector(".photo-cam__hint"), "photoCamHint"], [shoot, "photoCamShoot"], [cancel, "photoCamCancel"]]
-      .forEach(([el, key]) => { el.textContent = t(key); el.setAttribute("data-i18n", key); });
+    const say = (el, key) => { el.textContent = t(key); el.setAttribute("data-i18n", key); };
+    say(hint, "photoCamHint"); say(shoot, "photoCamShoot"); say(cancel, "photoCamCancel");
+    hold.style.setProperty("--hold-ms", `${PHOTO_CAM_HOLD_MS}ms`);
     video.srcObject = stream;
     document.body.appendChild(sheet);
-    shoot.focus();
+    cancel.focus();
 
-    let timer = null, done = false;
+    let done = false, holdSince = null, answered = false;
+    const setState = (state) => {
+      sheet.classList.toggle("is-searching", state === "searching");
+      sheet.classList.toggle("is-holding", state === "holding");
+      sheet.classList.toggle("is-shot", state === "shot");
+      say(hint, state === "holding" ? "photoCamHold" : state === "shot" ? "photoCamShot"
+        : shoot.hidden ? "photoCamHint" : "photoCamManualHint");
+    };
+    const grab = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 960;
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    };
+    const capture = () => {
+      if (done || sheet.classList.contains("is-shot")) return;
+      const canvas = grab();                       // the frame the shopper held still for
+      setState("shot");
+      setTimeout(() => close(canvas), PHOTO_CAM_FLASH_MS);   // let the flash land
+    };
+    const guide = createBodyGuide({
+      video,
+      canvas: sheet.querySelector(".photo-cam__guide"),
+      chip: sheet.querySelector(".photo-cam__status"),
+      shouldRun: () => !done && !sheet.classList.contains("is-shot"),
+      onVerdict(v) {
+        if (done || sheet.classList.contains("is-shot")) return;
+        answered = true;
+        if (v && v.ok) {
+          if (holdSince === null) { holdSince = Date.now(); setState("holding"); }
+          else if (Date.now() - holdSince >= PHOTO_CAM_HOLD_MS) capture();
+        } else if (holdSince !== null || !sheet.classList.contains("is-searching")) {
+          holdSince = null;
+          setState("searching");
+        }
+      },
+    });
+    guide.start();
+    const modelWait = setTimeout(() => {
+      if (done || answered) return;
+      shoot.hidden = false;                        // the guide cannot see - let the shopper shoot
+      say(hint, "photoCamManualHint");
+      shoot.focus();
+    }, PHOTO_CAM_MODEL_WAIT_MS);
+
     const close = (result) => {
       if (done) return;
       done = true;
-      if (timer) clearInterval(timer);
+      clearTimeout(modelWait);
+      guide.stop();
       stream.getTracks().forEach((tr) => tr.stop());
       document.removeEventListener("keydown", onKey);
       sheet.remove();
@@ -2403,22 +2565,7 @@ function openPhotoCamera() {
     const onKey = (e) => { if (e.key === "Escape") close(null); };
     document.addEventListener("keydown", onKey);
     cancel.addEventListener("click", () => close(null));
-    shoot.addEventListener("click", () => {
-      if (timer) return;
-      shoot.disabled = true;
-      let left = PHOTO_CAM_TIMER_S;
-      count.textContent = String(left);
-      timer = setInterval(() => {
-        left -= 1;
-        if (left > 0) { count.textContent = String(left); return; }
-        clearInterval(timer); timer = null;
-        const canvas = document.createElement("canvas");
-        canvas.width = video.videoWidth || 1280;
-        canvas.height = video.videoHeight || 960;
-        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-        close(canvas);
-      }, 1000);
-    });
+    shoot.addEventListener("click", capture);
   });
 }
 
@@ -2576,8 +2723,7 @@ function setFitMode(mode) {
   }
   card().classList.toggle("is-photo-mode", mode === "photo");
   const hint = $("fitModeHint"); if (hint) hint.hidden = mode !== "photo";
-  if (mode === "live") { clearPhotoFit(); stopBodyGuide(); }
-  else startBodyGuide();
+  if (mode === "live") clearPhotoFit();
   paintCaptureForMode();
 }
 
@@ -2754,7 +2900,6 @@ async function runPhotoFit(source) {
   clearPhotoFit();
   const busy = $("photoFitBusy"); if (busy) busy.hidden = false;
   card().classList.add("is-photo-busy", "is-photo-processing");
-  clearBodyGuide();
 
   let answer = null;
   const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -2812,108 +2957,6 @@ async function runPhotoFit(source) {
   const dl = $("photoFitDownload"); if (dl) dl.href = answer.image;
   const actions = $("photoFitActions"); if (actions) actions.hidden = false;
   card().classList.add("has-photo-result");
-}
-
-/* ── THE BODY GUIDE - lines on the shopper while they frame the photo ─────────────
-   In photo mode, with the camera open, the room draws the skeleton the pose model sees over
-   the preview: GREEN when every joint the photo needs is in frame (the same verdict as the
-   capture check, photoFullBodyVerdict()), WHITE while something is missing, with one line
-   saying which. It is a guide, never a gate on the button - the capture is checked again.
-   Through detectPoseFrame() with the POSE FOCUS WINDOW live (it is what finds a far-back
-   body in a wide frame); the window is reset when the guide stops, so a live session that
-   follows starts from the whole frame exactly as before. Never while a live session runs -
-   the live pose loop owns the detector then. */
-const BODY_GUIDE_MS = 160;
-const BODY_GUIDE_BONES = [
-  [11, 12], [11, 23], [12, 24], [23, 24],             // torso
-  [11, 13], [13, 15], [12, 14], [14, 16],             // arms
-  [23, 25], [25, 27], [24, 26], [26, 28],             // legs
-  [27, 31], [28, 32],                                 // feet
-];
-let _bodyGuideTimer = null;
-
-function bodyGuideShouldRun() {
-  const c = card();
-  return fitMode === "photo" && !isLive() && !!localStream && c && c.classList.contains("live") &&
-    !c.classList.contains("has-photo-result") && !c.classList.contains("is-photo-processing");
-}
-
-function clearBodyGuide() {
-  const cv = $("photoBodyGuide");
-  if (cv) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
-  const chip = $("photoBodyStatus"); if (chip) chip.hidden = true;
-}
-
-function drawBodyGuide(result, video) {
-  const cv = $("photoBodyGuide");
-  if (!cv) return;
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const cw = cv.clientWidth, ch = cv.clientHeight;
-  if (cv.width !== Math.round(cw * dpr) || cv.height !== Math.round(ch * dpr)) {
-    cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
-  }
-  const ctx = cv.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, cw, ch);
-  const verdict = photoFullBodyVerdict(result);
-  const lms = result && result.landmarks && result.landmarks[0];
-  /* #webcam is object-fit: cover - the same mapping takes a frame coordinate to the card. The
-     canvas is mirrored by CSS exactly as #webcam is, so no flip here. */
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const k = Math.max(cw / vw, ch / vh), ox = (cw - vw * k) / 2, oy = (ch - vh * k) / 2;
-  const at = (p) => [ox + p.x * vw * k, oy + p.y * vh * k];
-  const seen = (p) => p && Number(p.visibility ?? 0) >= PHOTO_FULL_BODY_MIN_VIS;
-  const ok = !!(verdict && verdict.ok);
-  if (Array.isArray(lms)) {
-    ctx.lineCap = "round";
-    ctx.strokeStyle = ok ? "rgba(141, 182, 0, .95)" : "rgba(255, 255, 255, .9)";
-    ctx.shadowColor = "rgba(0, 0, 0, .35)"; ctx.shadowBlur = 6;
-    ctx.lineWidth = ok ? 5 : 4;
-    for (const [a, b] of BODY_GUIDE_BONES) {
-      if (!seen(lms[a]) || !seen(lms[b])) continue;
-      const [x1, y1] = at(lms[a]), [x2, y2] = at(lms[b]);
-      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-    }
-    ctx.fillStyle = ctx.strokeStyle;
-    if (seen(lms[0])) { const [x, y] = at(lms[0]); ctx.beginPath(); ctx.arc(x, y, ok ? 9 : 7, 0, Math.PI * 2); ctx.fill(); }
-  }
-  const chip = $("photoBodyStatus");
-  if (chip) {
-    const key = ok ? "photoBodyOk" : !Array.isArray(lms) ? "photoBodyNone"
-      : verdict.missing.some((m) => /ANKLE|KNEE/.test(m)) ? "photoBodyFeet"
-      : verdict.missing.includes("NOSE") ? "photoBodyHead" : "photoBodyNone";
-    chip.textContent = t(key);
-    chip.setAttribute("data-i18n", key);
-    chip.classList.toggle("is-ok", ok);
-    chip.hidden = false;
-  }
-}
-
-async function bodyGuideTick() {
-  _bodyGuideTimer = null;
-  if (fitMode !== "photo") { stopBodyGuide(); return; }
-  const video = $("webcam");
-  if (bodyGuideShouldRun() && video && video.videoWidth) {
-    const detector = await loadPoseLandmarker();
-    if (detector && bodyGuideShouldRun()) {
-      try { drawBodyGuide(detectPoseFrame(detector, video), video); }
-      catch (e) { /* one frame the model could not read - the next tick tries again */ }
-    }
-  } else {
-    clearBodyGuide();
-  }
-  if (fitMode === "photo") _bodyGuideTimer = setTimeout(bodyGuideTick, BODY_GUIDE_MS);
-}
-
-function startBodyGuide() {
-  if (_bodyGuideTimer) return;
-  _bodyGuideTimer = setTimeout(bodyGuideTick, 0);
-}
-
-function stopBodyGuide() {
-  if (_bodyGuideTimer) { clearTimeout(_bodyGuideTimer); _bodyGuideTimer = null; }
-  clearBodyGuide();
-  _poseFocus = null; _poseFullMisses = 0;   // the live fitting starts from the whole frame
 }
 
 function setupFitMode() {

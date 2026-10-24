@@ -88,7 +88,7 @@ console.log("\n── §4 the room ──");
 
   check("§4.1 live is the default", /let fitMode = "live";/.test(APP) && /id="fitModeToggle"[^>]*data-active="live"/.test(HTML));
   check("§4.2 the mode is locked while a session runs", /if \(photoFitBusy \|\| isLive\(\)\) return;/.test(setMode));
-  check("§4.3 the still is cleared on the way back to live", /if \(mode === "live"\) \{ clearPhotoFit\(\);/.test(setMode));
+  check("§4.3 the still is cleared on the way back to live", /if \(mode === "live"\) clearPhotoFit\(\);/.test(setMode));
   check("§4.4 a late still never lands on live", /if \(fitMode !== "photo" \|\| isLive\(\)\) return;/.test(run));
   check("§4.5 the capture button only branches outside a session",
     /if \(typeof fitMode !== "undefined" && fitMode === "photo" && !isLive\(\)\) \{ takeFitPhoto\(\); return; \}/.test(APP));
@@ -139,21 +139,48 @@ console.log("\n── §6 one timer, a body guide, a far-back body ──");
   const HTML = readFileSync(new URL("../fitting-room/index.html", import.meta.url), "utf8");
   const CSS = readFileSync(new URL("../fitting-room/style.css", import.meta.url), "utf8");
   const slice = (from, to) => { const a = APP.indexOf(from); return a < 0 ? "" : APP.slice(a, APP.indexOf(to, a)); };
+  const setModeOf = () => slice("function setFitMode(mode) {", "\n}\n");
   const take = slice("async function takeFitPhoto() {", "\n}\n");
   check("§6.1 the photo uses the room's self-timer and its countdown - no timer of its own",
     /typeof liveTimerSec === "number" \? liveTimerSec : 0/.test(take) && /runGoCountdown\(seconds, "during"\)/.test(take) &&
     !/PHOTO_FIT_TIMER_S/.test(APP) && !/photoFitCount/.test(HTML));
   check("§6.2 a cancelled countdown takes no photo", /if \(!go\) \{ photoFitBusy = false; return; \}/.test(take));
-  const guide = slice("function bodyGuideShouldRun() {", "function setupFitMode() {");
-  check("§6.3 the guide reads the body through the one guarded call site", /detectPoseFrame\(detector, video\)/.test(guide) && !/detectForVideo/.test(guide));
-  check("§6.4 the guide never runs during a live session", /fitMode === "photo" && !isLive\(\) && !!localStream/.test(guide));
-  check("§6.5 stopping it hands the live fitting a clean focus window", /function stopBodyGuide\(\) \{[\s\S]*?_poseFocus = null; _poseFullMisses = 0;/.test(guide));
-  check("§6.6 the guide is the capture's own verdict", /const verdict = photoFullBodyVerdict\(result\);/.test(guide));
-  check("§6.7 the guide canvas is mirrored like #webcam", /\.photo-fit__guide \{[^}]*transform: scaleX\(-1\)/.test(CSS));
-  check("§6.8 back to live stops the guide", /if \(mode === "live"\) \{ clearPhotoFit\(\); stopBodyGuide\(\); \}/.test(APP));
+  /* The lines on the body belong to the SIZE ESTIMATE's camera only (reported 2026-10-24: "the
+     lines only in the find-my-size part, not while measuring with a photo"). */
+  const guide = slice("function createBodyGuide({", "\n}\n");
+  const draw = slice("function drawBodyGuide(", "\n}\n");
+  const cam = slice("function openPhotoCamera() {", "\nfunction setupPhotoEstimate()");
+  check("§6.3 the guide reads the body through the one guarded call site", /detectPoseFrame\(detector, video\)/.test(guide) && !/detectForVideo/.test(guide + draw));
+  check("§6.4 the guide never runs during a live session", /video\.videoWidth && !isLive\(\)/.test(guide));
+  check("§6.5 stopping it hands the next reader a clean focus window", /function stopGuide\(\) \{[\s\S]*?_poseFocus = null; _poseFullMisses = 0;/.test(guide));
+  check("§6.6 the guide is the photo check's own verdict", /const verdict = photoFullBodyVerdict\(result\);/.test(draw));
+  check("§6.7 the guide canvas is mirrored like the video", /\.photo-cam__guide \{[^}]*transform: scaleX\(-1\)/.test(CSS));
+  check("§6.8 the size estimate's camera starts it and stops it on close",
+    /const guide = createBodyGuide\(\{\s*video,\s*canvas: sheet\.querySelector\("\.photo-cam__guide"\)/.test(cam) && /guide\.start\(\);/.test(cam) && /guide\.stop\(\);/.test(cam));
+  check("§6.8b the photo try-on draws no lines", !/createBodyGuide|drawBodyGuide/.test(setModeOf(APP) + slice("async function runPhotoFit(source) {", "\nfunction setupFitMode()")) &&
+    !/photoBodyGuide|photo-fit__guide/.test(HTML + CSS));
   const full = slice("async function photoShowsFullBody(canvas) {", "\n}\n");
   check("§6.9 a wide frame is also read in squares around the body (POSE FOCUS WINDOW)",
     /if \(w > h \* 1\.2\)/.test(full) && /for \(const cx of POSE_FOCUS_SCAN\)/.test(full));
+}
+
+console.log("\n── §7 the size estimate's camera: no timer, it shoots once the whole body holds ──");
+{
+  const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8");
+  const CSS = readFileSync(new URL("../fitting-room/style.css", import.meta.url), "utf8");
+  const a = APP.indexOf("function openPhotoCamera() {");
+  const cam = APP.slice(a, APP.indexOf("\nfunction setupPhotoEstimate()", a));
+  check("§7.1 no countdown in the size estimate", !/PHOTO_CAM_TIMER_S|setInterval/.test(cam));
+  check("§7.2 it captures only after the body has held in frame",
+    /if \(v && v\.ok\) \{[\s\S]*?Date\.now\(\) - holdSince >= PHOTO_CAM_HOLD_MS\) capture\(\);/.test(cam));
+  check("§7.3 any miss restarts the hold", /holdSince = null;\s*setState\("searching"\);/.test(cam));
+  check("§7.4 a guide that cannot see falls back to a plain button (§2.5)",
+    /setTimeout\(\(\) => \{\s*if \(done \|\| answered\) return;\s*shoot\.hidden = false;/.test(cam));
+  check("§7.5 it tells the shopper to step back", /say\(hint, "photoCamHint"\)/.test(cam));
+  check("§7.6 the animations are there and respect reduced motion",
+    /@keyframes pc-step-back/.test(CSS) && /@keyframes pc-hold/.test(CSS) && /@keyframes pc-flash/.test(CSS) &&
+    /prefers-reduced-motion: reduce\) \{\s*\.photo-cam__ghost \{ animation: none;/.test(CSS));
+  check("§7.7 the camera stream stops on close", /guide\.stop\(\);\s*stream\.getTracks\(\)\.forEach\(\(tr\) => tr\.stop\(\)\);/.test(cam));
 }
 
 console.log("");
