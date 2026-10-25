@@ -2783,6 +2783,8 @@ function setFitMode(mode) {
   card().classList.toggle("is-photo-mode", mode === "photo");
   const hint = $("fitModeHint"); if (hint) hint.hidden = mode !== "photo";
   if (mode === "live") clearPhotoFit();
+  // Photo mode checks every photo with the pose model: start its load now, not at the first photo.
+  else if (typeof loadPoseLandmarker === "function") loadPoseLandmarker();
   paintCaptureForMode();
 }
 
@@ -2882,7 +2884,11 @@ const PHOTO_FULL_BODY = Object.freeze({
 });
 const PHOTO_FULL_BODY_MIN_VIS = 0.5;
 const PHOTO_FULL_BODY_TRIES = 3;           // VIDEO mode re-detects on a new image within a call or two
-const PHOTO_FULL_BODY_LOAD_MS = 10_000;
+/* How long the check waits for the pose model. Measured 2026-10-25 on production: the model and its
+   runtime are ~15 MB from our edge, 9.4s to download on a ~1 MB/s line before compiling - a 10s cap
+   refused every photo on that line with "we couldn't check the photo". The busy screen is up while it
+   waits, the load is memoised and started when photo mode opens, so a fast line never waits this long. */
+const PHOTO_FULL_BODY_LOAD_MS = 45_000;
 
 /**
  * @param {{landmarks?: Array<Array<{x:number,y:number,visibility?:number}>>}|null} result

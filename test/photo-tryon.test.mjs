@@ -193,6 +193,15 @@ console.log("\n── §8 a result stays until the garment changes ──");
   check("§8.3 the result remembers the garment it was made for, read before the wait", /const forLook = photoFitLookKey\(\);/.test(APP) && /_photoFitFor = forLook;/.test(APP));
 }
 
+console.log("\n── §9 a slow line still gets its photo checked ──");
+{
+  const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8");
+  const ms = Number((/const PHOTO_FULL_BODY_LOAD_MS = ([\d_]+);/.exec(APP) || [])[1]?.replace(/_/g, ""));
+  check("§9.1 the check waits long enough for a ~15 MB model on a ~1 MB/s line", ms >= 30000, ms);
+  const setMode = APP.slice(APP.indexOf("function setFitMode(mode) {"), APP.indexOf("\n}\n", APP.indexOf("function setFitMode(mode) {")));
+  check("§9.2 photo mode starts the model's load", /else if \(typeof loadPoseLandmarker === "function"\) loadPoseLandmarker\(\);/.test(setMode));
+}
+
 console.log("");
 if (fails) { console.log(`${fails} check(s) FAILED`); process.exit(1); }
 console.log("photo-tryon: all checks passed.");
