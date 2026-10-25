@@ -2759,7 +2759,20 @@ function paintCaptureForMode() {
   }
 }
 
+/* Which garment(s) a result was made for: the same front references runPhotoFit() sends. */
+let _photoFitFor = null;
+function photoFitLookKey() {
+  const look = resolveLook();
+  const items = look ? [look.top, look.bottom] : (activeItem ? [activeItem] : []);
+  return items.map((it) => galleryOf(it).front || it.img || "").join("|");
+}
+
+function clearPhotoFitIfStale() {
+  if (_photoFitFor !== null && _photoFitFor !== photoFitLookKey()) clearPhotoFit();
+}
+
 function clearPhotoFit() {
+  _photoFitFor = null;
   const img = $("photoFitResult");
   if (img) { img.hidden = true; img.removeAttribute("src"); }
   const actions = $("photoFitActions"); if (actions) actions.hidden = true;
@@ -2898,6 +2911,7 @@ async function runPhotoFit(source) {
   if (!items.length) { toast(t("photoFitNoGarment")); return; }
   photoFitBusy = true;
   clearPhotoFit();
+  const forLook = photoFitLookKey();   // the garment(s) this photo is being made for
   const busy = $("photoFitBusy"); if (busy) busy.hidden = false;
   card().classList.add("is-photo-busy", "is-photo-processing");
 
@@ -2954,6 +2968,7 @@ async function runPhotoFit(source) {
   console.log(`[PEAR] photo fit - done in ${answer.ms}ms`);
   const img = $("photoFitResult");
   if (img) { img.src = answer.image; img.hidden = false; }
+  _photoFitFor = forLook;
   const dl = $("photoFitDownload"); if (dl) dl.href = answer.image;
   const actions = $("photoFitActions"); if (actions) actions.hidden = false;
   card().classList.add("has-photo-result");
@@ -4806,8 +4821,11 @@ function renderColorSwatches() {
  * @returns {void}
  */
 function renderActiveGarment() {
-  // A still made for the previous garment must not stay up beside the new one.
-  if (typeof clearPhotoFit === "function") clearPhotoFit();
+  /* A still made for the previous garment must not stay up beside the new one - but this
+     function also repaints for reasons that change nothing (a late classification, a language
+     toggle), and clearing on every call wiped a fresh result seconds after it landed (measured
+     on the preview, 2026-10-25). So only a different garment clears it. */
+  if (typeof clearPhotoFitIfStale === "function") clearPhotoFitIfStale();
   const { top, bottom } = activeOutfit;
   const chip = $("activeGarment");
   chip.hidden = false;

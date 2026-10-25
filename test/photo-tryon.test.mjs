@@ -183,6 +183,16 @@ console.log("\n── §7 the size estimate's camera: no timer, it shoots once t
   check("§7.7 the camera stream stops on close", /guide\.stop\(\);\s*stream\.getTracks\(\)\.forEach\(\(tr\) => tr\.stop\(\)\);/.test(cam));
 }
 
+console.log("\n── §8 a result stays until the garment changes ──");
+{
+  const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8");
+  const rag = APP.slice(APP.indexOf("function renderActiveGarment() {"), APP.indexOf("function renderActiveGarment() {") + 900);
+  check("§8.1 a repaint clears only a stale result", /clearPhotoFitIfStale\(\)/.test(rag) && !/typeof clearPhotoFit === "function"\) clearPhotoFit\(\)/.test(rag));
+  check("§8.2 stale means made for a different garment",
+    /function clearPhotoFitIfStale\(\) \{\s*if \(_photoFitFor !== null && _photoFitFor !== photoFitLookKey\(\)\) clearPhotoFit\(\);/.test(APP));
+  check("§8.3 the result remembers the garment it was made for, read before the wait", /const forLook = photoFitLookKey\(\);/.test(APP) && /_photoFitFor = forLook;/.test(APP));
+}
+
 console.log("");
 if (fails) { console.log(`${fails} check(s) FAILED`); process.exit(1); }
 console.log("photo-tryon: all checks passed.");
