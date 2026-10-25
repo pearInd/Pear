@@ -13,9 +13,9 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Suggested size when no exact size fits (183/73 "no size" report) | merged ([PR #2](https://github.com/pearInd/Pear/pull/2), `d69562d`); follow-up [PR #3](https://github.com/pearInd/Pear/pull/3) (152/77 -> M; everyone between S and XXL gets a size); then a `wrangler deploy` | main + branch |
+| Suggested size when no exact size fits (183/73 "no size" report) | merged ([PR #2](https://github.com/pearInd/Pear/pull/2), `d69562d`); follow-up [PR #3](https://github.com/pearInd/Pear/pull/3) (152/77 -> M; everyone between S and XXL gets a size); PR #4 (smaller than S -> suggested S); then a `wrangler deploy` | main + branch |
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
-| Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch after two more review rounds (54 findings fixed), **[PR #1](https://github.com/pearInd/Pear/pull/1) waiting on your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
+| Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done — merged to main 2026-10-13 ([PR #1](https://github.com/pearInd/Pear/pull/1), `306173f`); 2026-10-14: fox men's pants + castro men's jeans saved and live; no new stores unless you ask | main |
 | Go-live wait (classification 18-22s) + the verdict reaching the room | done on the branch, **merge waiting on you** (CLAUDE.md §2.46) | `fix/classify-latency` |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
@@ -23,7 +23,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | garment_cache rows missing `age_group` | code done — full backfill **deferred by choice** (demo products only for now) | main `ef1d28d` |
 | `DECART_ALLOWED_ORIGINS` / token origin | done (Vercel env set + redeployed 2026-10-02); the preview-origin fix is on main with the merge | main |
 | Back-image orientation (front/back on a turn) | in progress — the back gate (§2.28) ends "back print on the chest", but on the PEAK tee the engine is too slow for a normal turn and the back print does not appear (4 real sessions 2026-10-04); neither a smaller image nor pre-uploading speeds the engine; the cause is the engine's region (Michigan, US since ~09-30); **raising it with the vendor is yours** | main |
-| Hebrew/English i18n | done (core) | main |
+| Hebrew/English i18n | done (core); 2026-10-15: Screen 1's "item selected" banner follows the EN/עב toggle (was Hebrew-only) - branch `claude/item-banner-language-e3ft7f`, waiting on your approval | main + branch |
 | Security hardening + client-code hiding | done on main with the merge (engines server-side, minified/cloaked build, the render engine behind our edge - CLAUDE.md §2.11-§2.24); **the GitHub repo is still public** and **key rotation pending on you** | main |
 | Render engine account | the Decart key was replaced by you 2026-10-04 (Vercel Production + Preview); the old account had run out of credits ("Insufficient credits", now shown to a shopper as "unavailable right now" within ~1.5s) | Vercel env |
 | Landing / brand video | done | main `e8d2c7f` |
@@ -39,12 +39,10 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 - [ ] **Re-save adidas** when it answers you: `node scan-store.js --size-charts --save https://www.adidas.co.il`
       (from `scanner/`). It refused your machine in the 2026-10-03 sweep (HTTP 403 on the static and the
       browser stage); its 2 charts from the 2026-10-03 capture are still live.
-- [ ] **Review the Phase 2 PR** ([PR #1](https://github.com/pearInd/Pear/pull/1), `claude/project-thread-cr4uyn` → main) — the capture CLI. Nothing merges
-      or saves without you.
-- [ ] **Decide which sweep charts to save** (none saved; dry runs only, see *Phase 2 coverage*): delta's 4
-      store-wide charts look ready; hoodies (men's tops with only L/XXL), twentyfourseven (bottoms
-      0/1/2/3/4) and terminalx's image chart (women/kids tops 92/98) look wrong - check before saving;
-      renuar, twentyfourseven and terminalx are product-scoped (the room does not serve those yet).
+- [x] **Review the Phase 2 PR** — merged 2026-10-13 ([PR #1](https://github.com/pearInd/Pear/pull/1), `306173f`).
+- [x] **Which sweep charts to save** — decided 2026-10-14: no new stores ("Don't add more stores to the tables
+      unless I ask - only what is there now"), then the two new charts of the existing stores ("add them"): fox
+      men's pants and castro men's jeans, saved and live the same evening. delta and renuar were not saved.
 
 - [x] Size-guide dry runs for all 4 stores — done 2026-10-02 (results under *Store size guides*).
 - [x] fox.co.il captured with `--save` — 11 rows in `store_size_charts`, 5 store-level served by the API.
@@ -111,7 +109,8 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
   or smaller than the smallest gets none (160/100 -> XL). PR #3, merged with the owner's approval. CLAUDE.md §2.45.
 - A body in a gap between chart rows (183/73, short or slim adults) got "no match" - 65% of realistic adults on the
   letters chart. Now it gets the nearest size, labelled "No exact size for you. Suggested size:", and can continue.
-  Bodies smaller than the smallest size (155/50, 135/75) and above the largest still get "no size".
+  Bodies above the largest size still get "no size". Since 2026-10-14 (PR #4, owner's call) a body smaller than the
+  smallest size gets the smallest size as a suggestion (150/50 -> S, 135/75 -> S) instead of "no size".
 - **Waiting on you:** `cd cloudflare/orient && npx wrangler deploy` (the Worker answers /size).
 
 ## Children's sizing
@@ -128,7 +127,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 ## Store size guides
 - **Stage:** in progress. Phase 0 (measure) + Phase 1 (stored fallback) shipped in `bd766b2`;
   **§2.5b changed 2026-10-03 (`0fccee8`): a confident stored chart now DECIDES the adult size**.
-  Phase 2 (capture any store) built on `claude/project-thread-cr4uyn`, waiting on your review (below).
+  Phase 2 (capture any store) merged to main 2026-10-13 (`306173f`, below).
   Phases 3–6 not started.
 - **Done:** widget reads the PDP chart (`2026-09-17` spec); scanner `--size-charts`
   dry run + `--save` capture; `store_size_charts` (v15, run); `GET /api/store-size-chart`;
@@ -166,7 +165,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
      `k·sqrt(weight/height)` estimate (±4–6cm); abstains below 35% / within a 10-point margin, on
      unknown garment gender with gendered charts, or with nothing comparable. Runs after the
      kernel's adult/child + no-match decisions (guard untouched). `trace:prompt` byte-identical.
-- **Remaining:** the adidas re-save above; Phase 2's review (below). Widget sightings (the earlier
+- **Remaining:** the adidas re-save above. Widget sightings (the earlier
   Phase 2 idea) not started - the browser path now reaches terminalx without it. Phase 3 (vision)
   has zero measured demand. Known limits: (a) a product sold in NUMERIC tops sizes (EU 34–46) is routed
   to bottoms by `isPantsProduct()`'s size-run tier (pre-existing), so a numeric women's TOPS
@@ -179,8 +178,9 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 - **Open decisions:** none on the code shape - server-side (`lib/sizing.js`) since the `hide/edge`
   merge (CLAUDE.md §2.27).
 
-### Phase 2 — capture any store (branch `claude/project-thread-cr4uyn`, [PR #1](https://github.com/pearInd/Pear/pull/1))
-- **Stage:** done on the branch, PR #1 open since 2026-10-06, waiting on your review. Not on main; nothing saved by it.
+### Phase 2 — capture any store ([PR #1](https://github.com/pearInd/Pear/pull/1), merged)
+- **Stage:** done — merged to main 2026-10-13 as `306173f`. On 2026-10-14 you decided no new stores go into the
+  tables unless you ask; the two new charts of fox and castro were saved on your word (below).
 - **Commands:** `npm run capture -- <store-url> [--dry-run]` (static → browser → image OCR,
   summary, y/n, save, then reads `GET /api/store-size-chart` back); `npm run import:chart --
   --host <h> (--url|--html|--image) <src> [--gender/--age/--type] [--only n]` (manual, store-wide);
@@ -241,8 +241,26 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
   | golfco | BLOCKED (403) |
 
   The sweep predates the last 8 fixes; re-run a dry run before saving any of them.
-- **Remaining:** your review + merge; which sweep charts to save (Waiting on you). Product-scoped
-  charts are stored but not served (Phase 1 serves store-wide only).
+- **Dry runs again, 2026-10-14 (main `21b5205`, your second machine):**
+  fox 8 charts (the sample missed men's tops and kids' pants; those read as live); castro 3; both
+  regression-free, each with one new correct store-wide chart (fox men's pants XS-5XL, castro men's
+  jeans 26-40). delta 4 store-wide, correct. renuar 3 store-wide image charts with the right numbers
+  but no gender (they are the men's chart); its women's chart was left untyped. hoodies, twentyfourseven
+  wrong (below); terminalx product-scoped only; golfco has no size guide. Nothing blocked us.
+- **Saved 2026-10-14 (your word: "add them"), from your second machine, after a matching dry run:**
+  fox.co.il - men / adult / bottoms, alpha XS-5XL, waist 73-116 cm, store-wide; castro.com - men / adult /
+  bottoms, numeric 26-40, waist 70.5-107 cm, store-wide. Live check against app.pear-ai.io: fox now serves 6
+  charts, castro 4, each "all 1 store-wide chart(s) just saved are live". No errors; no other store or chart
+  was written (delta, renuar not saved).
+- **Known capture limits (found 2026-10-14, not fixed):**
+  1. A table with merged group cells inside it ("נערים"/"גברים") shifts the columns - hoodies kept only L/XXL.
+  2. An image chart read right to left with blank leading cells shifts columns - twentyfourseven read 0-4
+     where the image says 32/XXS-44/XXL.
+  3. An image chart with no gender is saved store-wide as unlabelled; the room serves an unlabelled chart only
+     to a store with no gendered chart, but renuar's men's chart would reach women's products there.
+  4. jsdom prints ~19,600 lines of CSS on hoodies' stylesheet ("Could not parse CSS stylesheet") - noise only.
+- **Remaining:** nothing, unless you ask for a store. Product-scoped charts are stored but not served
+  (Phase 1 serves store-wide only).
 
 ## Ready-signal product signals fix
 - **Stage:** done — merged as `137188d`.
@@ -486,8 +504,8 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 ## Other branches (not merged)
 | Branch | Ahead / behind main | Note |
 |---|---|---|
-| `claude/project-thread-cr4uyn` | Phase 2 capture, main `be93232` merged in | size-guide capture CLI - [PR #1](https://github.com/pearInd/Pear/pull/1), your review |
-| `size-capture-phase2-local` | — | the 2026-10-03 WIP as pushed from your machine; superseded by the branch above |
+| `claude/project-thread-cr4uyn` | merged as `306173f` (PR #1) | restarted from main for this status note |
+| `size-capture-phase2-local` | fully in main | the 2026-10-03 WIP as pushed from your machine; safe to delete |
 | `hide/edge` | merged into main 2026-10-04 | the hidden build - main now |
 | `hide/main-v2` | superseded by `hide/edge` | not to be merged |
 | `harden/hide-client-logic` | 46 / 10 | experiments |

@@ -22455,7 +22455,13 @@ function init() {
 
   if (handoff) {
     const hint = $("focusCalcHint");
-    if (hint) { hint.hidden = false; hint.innerHTML = byLang(`נבחר הפריט <strong>${handoff.name}</strong> - מלא מידות כדי להמשיך למדידה הוירטואלית.`, `<strong>${handoff.name}</strong> selected - fill in your measurements to continue to the virtual fitting.`); }
+    if (hint) {
+      /* In the active language, and repainted on the EN/עב toggle (it was Hebrew-only). */
+      const paintHint = () => { hint.innerHTML = tf("focusCalcHint", { name: handoff.name }); };
+      hint.hidden = false;
+      paintHint();
+      document.addEventListener("pear:languagechanged", paintHint);
+    }
     /* TIER 3 of the pants gate, started here and DELIBERATELY NOT AWAITED - init() must
        not hold the measurement form behind a network round trip. The text tiers have
        already produced a recommendation by the time this resolves; applyGarmentCategoryHint()

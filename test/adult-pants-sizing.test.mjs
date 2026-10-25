@@ -293,15 +293,16 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
     genuineGap.els["btn-next-screen"].disabled === false,
     { size: genuineGap.api.getUserSize(), label: genuineGap.els.resultLabel.innerText });
 
-  /* ...but a body FAR from every row (and not above the ceiling) still gets the GENERIC
-     no-match copy, distinguishing "no bigger size exists" from "this body sits in no
-     chart's band". */
+  /* A body SMALLER than the smallest size (135cm: 20cm under EU 36's shortest row) - since
+     2026-10-14 (owner: "smaller than the smallest size - no exact size, suggest S") it is
+     offered the SMALLEST size as a suggestion; until then it read "no match". */
   const farGap = harness({ height: 135, weight: 75, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
   await farGap.api.calculateSize();
-  check("a body far from every chart row (not above the ceiling) gets the GENERIC\n" +
-        "        no-match copy, not the overflow copy, and Continue stays locked",
-    farGap.els.sizeResult.innerText === "sizeResultNoMatch" && farGap.els["btn-next-screen"].disabled === true,
-    farGap.els.sizeResult.innerText);
+  check("a body smaller than the smallest size is offered the SMALLEST size (36), labelled\n" +
+        "        as a suggestion, and Continue is enabled",
+    farGap.api.getUserSize() === "36" && farGap.els.resultLabel.innerText === "resultLabelApprox" &&
+    farGap.els["btn-next-screen"].disabled === false,
+    { size: farGap.api.getUserSize(), label: farGap.els.resultLabel.innerText });
 
   /* SNAP TO THE PRODUCT'S OWN LIST, EU chart, end to end. NOTE: this used to run against
      a "26-40" style list, back when isAdultPantsProduct() was widened to treat ANY
