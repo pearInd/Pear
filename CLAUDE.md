@@ -1946,6 +1946,11 @@ d6cd8c3 (§2.47, with the whole camera and an add-nothing clause) and went out w
 - **A shopper's wire is unchanged:** `trace:prompt --json` byte-identical, `prompt-engine` §1 on its pin; the fingerprint moved
   (the engine file changed), so the Worker is deployed with it. `garment-facts` pins all of it.
 - **What a TEST PEAK prompt gains:** front 584 -> 619 chars (`Fabric: dark brown. Print: "PEAK".`), back 506 -> 526.
+- **BLOCKED ON THE CACHE (checked 2026-10-31 on production):** a repeat `/api/classify-images` for CHICAGO 3108650200 answers
+  `primary_color_hex: null, front_text_ocr: "", back_is_plain: null` - production's `garment_cache` still lacks the v12 columns,
+  so a cached product brings no facts and the TEST prompt is the shopper's (an empty text adds nothing). The owner runs
+  `archive/supabase_setup_v12.sql` (additive: five columns + a check); rows re-classify on their next visit. Until then the
+  measurement shows nothing - `ctx.facts` reads null.
 - **The check:** a TEST session on PEAK and on the CHICAGO shorts, frame by frame (§7.1) - the colour as the photo, the print
   unchanged, the plain back still plain; `ctx.facts` non-null. Worse on any frame: revert first.
 

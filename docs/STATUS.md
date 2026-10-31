@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-31 · main: the edge Worker was running a reverted engine (ba53a7f, 10-15) and has been redeployed from main and verified (fingerprint + replayed turns). The garment's colour/print/plain-back facts now reach the prompt in TEST sessions, with "dark brown" for PEAK instead of "charcoal" (CLAUDE.md §7.14) - **waiting on your TEST measurement**; shoppers' wire unchanged._
+_Last updated: 2026-10-31 · main: the edge Worker was running a reverted engine (ba53a7f, 10-15) and has been redeployed from main and verified (fingerprint + replayed turns). The garment's colour/print/plain-back facts now reach the prompt in TEST sessions, with "dark brown" for PEAK instead of "charcoal" (CLAUDE.md §7.14) - **live on production (eed37f3, Worker 0f81922d), but inert until you run `archive/supabase_setup_v12.sql`** (production's garment_cache still lacks the v12 columns: a cached product's colour/text/plain-back come back empty - checked 2026-10-31); then your TEST measurement. Shoppers' wire unchanged._
 
 _Earlier (2026-10-14): 2026-10-14 · branch `fix/classify-latency` (3 commits on main a38357f, **waiting on your approval to merge**): the go-live button waited 11-25s after the camera opened on production (classification 18-22s - a garment_cache schema probe on every read); now 0.7s, and the two room/widget bugs the faster verdict exposed are fixed with it (the verdict lost before the room loaded, and lost on the size screen - the close-up front photo as the back) - CLAUDE.md §2.46. Measured on the FOX shorts 1154009415: front, sides, back and front again correct, no wait, no stall. The engine refused every session 2026-10-13 17:16Z to ~09:00Z 10-14 and has worked since._
 
@@ -87,6 +87,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
       must block going live, and an adult garment + child measurements must block too (the reverse).
       Code-level coverage exists (`kids-adult-size-guard`); this is the end-to-end check.
 - [x] Migration **v15** (`store_size_charts`) — run (confirmed 2026-10-01).
+- [ ] **Run `archive/supabase_setup_v12.sql` in Supabase** - confirmed missing 2026-10-31 (a repeat classify returns no colour/text/plain-back); it blocks CLAUDE.md §7.14. Then confirm v8, v13, v14.
 - [ ] **Confirm which `garment_cache` migrations production has** (v8, v12, v13, v14).
       Code comments record production as *v9 + v11 without v8*; the `age_group` fix
       below no longer depends on the answer, but the diagnostics in v8 do.
