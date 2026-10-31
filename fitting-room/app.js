@@ -4513,10 +4513,17 @@ function hotSwapIfLive(toastMsg) {
    origin ahead of time, so e.source is the check, same as any iframe↔parent bridge). */
 /* THE EARLY VERDICT's hold - see the listener below. One message, the newest; consumed by replayEarlyGarmentUpdate(). */
 let _earlyGarmentUpdate = null;
+/* THE GARMENT'S FACTS (TEST sessions only - see the listener): a verdict's colour / text / plain-rear that landed before the
+   room had a garment, the ready signal's included (it carries no photos, so _earlyGarmentUpdate never holds it). */
+let _earlyGarmentFacts = null;
 /* The garment the room was opened for (enterRoom) - every widget correction is about it (THE VERDICT IS FOR THE ROOM'S OWN GARMENT). */
 let _handoffItem = null;
 /** Replay a correction that arrived before the room had a garment, through the listener itself (its own checks, its own order). */
 function replayEarlyGarmentUpdate() {
+  const facts = _earlyGarmentFacts;
+  _earlyGarmentFacts = null;
+  const room = (typeof _handoffItem !== "undefined" && _handoffItem) || (typeof activeItem !== "undefined" ? activeItem : null);
+  if (facts && room) Object.assign(room, facts);
   const data = _earlyGarmentUpdate;
   _earlyGarmentUpdate = null;
   if (!data || typeof activeItem === "undefined" || !activeItem) return false;
@@ -4698,6 +4705,25 @@ window.addEventListener("message", (e) => {
   /* The verdict is in - a ready signal included (the classifier agreed with the gallery the room opened on): the gallery is
      validated (THE GARMENTS YOU TRIED). typeof: suites run this handler standalone. */
   if (typeof _galleryValidated !== "undefined") _galleryValidated = true;
+  /* ── THE GARMENT'S FACTS, KEPT WHEN ITS PHOTOS DID NOT CHANGE (2026-10-31, TEST sessions only) ──────────────────────────
+     The fabric colour, the printed text and the plain-rear verdict arrive ONLY on this message, and two paths dropped them:
+     the widget's ready signal (the classifier agreed with the photos the room opened on - the common case since the verdict
+     lands in ~0.7s, §2.46) carried no facts at all, and a correction whose photos matched returned at `unchanged` below
+     before reading them. So colorLockSentence/identityLockSentence/PLAIN_BACK_ANCHOR abstained on most products (FOX PEAK
+     #4e3b38, CHICAGO #000000: no fabric sentence in any prompt). Kept here, above the `!front` guard, for a TEST session
+     only - a shopper's wire stays the approved one until a measurement says otherwise (CLAUDE.md §7.1). A verdict that lands
+     before the room has its garment is held (_earlyGarmentFacts) and applied by replayEarlyGarmentUpdate(). An absent
+     field never clears a known one; "" is a real text verdict (plain). typeof: suites run this handler standalone. */
+  if (typeof traceEnabled === "function" && traceEnabled()) {
+    const facts = {};
+    if (typeof e.data.garment_color_hex === "string" && e.data.garment_color_hex) facts.colorHex = e.data.garment_color_hex;
+    if (typeof e.data.garment_text_ocr === "string") facts.textOcr = e.data.garment_text_ocr;
+    if (typeof e.data.garment_back_is_plain === "boolean") facts.backIsPlain = e.data.garment_back_is_plain;
+    if (Object.keys(facts).length) {
+      if (target) Object.assign(target, facts);
+      else if (typeof _earlyGarmentFacts !== "undefined") _earlyGarmentFacts = Object.assign(_earlyGarmentFacts || {}, facts);
+    }
+  }
   const front = e.data.garment_url;
   const back = e.data.garment_back;
   if (!front) return;
@@ -13536,6 +13562,8 @@ function wirePrompt(item, angle, where, opts = {}) {
     angle: angle === "back" ? "back" : "front",
     inProfile: opts.inProfile === true,
     delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0,
+    /* A TEST session asks for the wording not yet measured on a shopper's wire (lib/prompts.js _requestTest). */
+    ...(typeof traceEnabled === "function" && traceEnabled() ? { test: true } : {}),
   }, where);
 }
 
@@ -17928,6 +17956,10 @@ async function goLive() {
       exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP ? PEAR_EXP : undefined,
       /* What the rear reference's mask did before go-live (maskReferenceBand) - numbers and reasons only. */
       ref: typeof _refMaskLog !== "undefined" && _refMaskLog.length ? _refMaskLog.slice(-3) : undefined,
+      /* THE GARMENT'S FACTS the prompt can name (the colour, the printed text's length, the plain-rear verdict) - null when
+         the classifier's verdict never brought them. */
+      facts: activeItem ? { color: activeItem.colorHex || null, ocr: typeof activeItem.textOcr === "string" ? activeItem.textOcr.length : null,
+        plainBack: typeof activeItem.backIsPlain === "boolean" ? activeItem.backIsPlain : null } : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the

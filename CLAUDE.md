@@ -1927,6 +1927,28 @@ at 1.03-1.07); vneck fails on ankles at y 1.10-1.15 with visibility up to 0.81 -
 clips u20/u21/u22/vneck/yellow are cut too: rig runs on them pass `ROOM_PARAMS=full_body=0`. `body-presence-gate` §9 runs it.
 ---
 
+### 7.14 The garment's facts reach the prompt; a dark brown is not charcoal (2026-10-31, TEST sessions only - NOT YET MEASURED)
+The fabric colour, the printed text and the plain-rear verdict come only on the classifier's PEAR_UPDATE_GARMENT, and on the
+common path none reached a prompt: the widget's ready signal (the classifier agreed with the photos the room opened on - most
+products since §2.46's 0.7s verdict) carried no facts, and a correction whose photos matched returned at `unchanged` before
+reading them. So `Fabric:` / `Print:` / PLAIN_BACK_ANCHOR abstained (PEAK #4e3b38, CHICAGO #000000). It was fixed once inside
+d6cd8c3 (§2.47, with the whole camera and an add-nothing clause) and went out with that week (§7.2) - never measured alone.
+- **The room** (`THE GARMENT'S FACTS, KEPT...`, above the listener's `!front` guard): a TEST session keeps the three facts from
+  any verdict; one that lands before the room has its garment is held (`_earlyGarmentFacts`) and applied at room entry
+  (`replayEarlyGarmentUpdate()`). A TEST record's `ctx.facts` says what the prompt could name. **The widget's** ready signal
+  now carries the facts (the room ignores them in a shopper's session).
+- **The engine** (`lib/prompts.js`, `_requestTest`): the room sends `test: true` in a TEST session only; with it
+  `colorNameFromHex()` reads a dark colour's chroma relative to its brightness (64 <= max < 128) and knows "dark brown" -
+  PEAK was "charcoal", a word that greys a brown tee. Over a 140,608-colour grid the flag changes 1,415: "dark brown" where there was
+  charcoal, brown or nothing (351), "olive" where there was nothing (9), and otherwise it abstains where the shopper's namer
+  named (1,055: dark tinted greys, browns/burgundies now inside the margin) - never a different confident name;
+  near-black stays black (the floor - the first cut stripped "black" from 1,973 colours).
+- **A shopper's wire is unchanged:** `trace:prompt --json` byte-identical, `prompt-engine` §1 on its pin; the fingerprint moved
+  (the engine file changed), so the Worker is deployed with it. `garment-facts` pins all of it.
+- **What a TEST PEAK prompt gains:** front 584 -> 619 chars (`Fabric: dark brown. Print: "PEAK".`), back 506 -> 526.
+- **The check:** a TEST session on PEAK and on the CHICAGO shorts, frame by frame (§7.1) - the colour as the photo, the print
+  unchanged, the plain back still plain; `ctx.facts` non-null. Worse on any frame: revert first.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:

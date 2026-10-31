@@ -3643,8 +3643,15 @@
               console.log("[PEAR widget] classifier agreed with the DOM-order guess - " +
                 "sending a ready signal with product signals only (no re-anchor)");
               try {
+                /* The garment's facts ride along (2026-10-31): this signal was their only
+                   delivery on the common path and carried none, so the prompt never named
+                   the colour. Same omit-when-unknown rules as the correction below; the
+                   room reads them in a TEST session only until they are measured. */
                 postVerdictToRoom(openedIframe, Object.assign(
-                  { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true },
+                  { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true,
+                    garment_color_hex: res.colorHex || undefined,
+                    garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
+                    garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined },
                   productSignals(res)));
               } catch (e) {
                 console.warn("[PEAR widget] ready signal failed to post:", e && e.message);
