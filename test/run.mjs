@@ -554,6 +554,7 @@ const SUITES = [
   ["body-estimate", "body-estimate.test.mjs"],
   ["photo-tryon", "photo-tryon.test.mjs"],
   ["garment-facts", "garment-facts.test.mjs"],
+  ["classify-reply", "classify-reply.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

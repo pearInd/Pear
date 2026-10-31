@@ -1951,6 +1951,14 @@ d6cd8c3 (§2.47, with the whole camera and an add-nothing clause) and went out w
   so a cached product brings no facts and the TEST prompt is the shopper's (an empty text adds nothing). The owner runs
   `archive/supabase_setup_v12.sql` (additive: five columns + a check); rows re-classify on their next visit. Until then the
   measurement shows nothing - `ctx.facts` reads null.
+- **v12 RAN 2026-10-31 (the owner, SQL Editor) - and found the next cause, THE WHOLE REPLY (`server.js`):** every pre-v12 row
+  was re-classified on its next visit (un-versioned = stale), but CHICAGO's front came back "unparseable" - the reader took
+  `parts[0]` of Gemini's reply alone and the answer was cut at `"cue":"drawstring waistband and front-fa` - and that non-answer
+  was saved as an uncertain FRONT, no colour, no lettering, AT v3: never asked again. Now `geminiReplyText()` joins every
+  non-thought part, `parseGeminiJson()` cuts to the outermost object, a non-answer is saved un-versioned (asked again on the
+  next visit) and logs its finishReason/part count, and `CLASSIFIER_PROMPT_VERSION` is 4 so the rows cut since the migration
+  are re-asked once. `classify-reply`. Still reading `parts[0]` alone, same risk, not changed here: `lib/garment-box.js`,
+  `lib/garment-category.js`, `lib/body-estimate.js`, server.js's size-run call, the scanner.
 - **The check:** a TEST session on PEAK and on the CHICAGO shorts, frame by frame (§7.1) - the colour as the photo, the print
   unchanged, the plain back still plain; `ctx.facts` non-null. Worse on any frame: revert first.
 

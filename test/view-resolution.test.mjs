@@ -345,7 +345,8 @@ console.log("\n── §CACHE: a verdict from an older prompt is a miss ──")
      "a missing column (migration pending) is NOT stale - no Gemini storm");
   is(isStaleClassification(null, 3), false, "no cached row is not a stale row");
   const SERVER = readFileSync(new URL("../server.js", import.meta.url), "utf8");
-  is(/classifierVersion: CLASSIFIER_PROMPT_VERSION/.test(SERVER), true,
+  /* A non-answer (an unparseable reply) is left un-versioned on purpose, so it is asked again - classify-reply §2. */
+  is(/classifierVersion: (?:\w+\.unparseable \? null : )?CLASSIFIER_PROMPT_VERSION/.test(SERVER), true,
      "every write stamps the current prompt version");
   is(/isStaleClassification\(cached, CLASSIFIER_PROMPT_VERSION\)/.test(SERVER), true,
      "the cache-hit path actually consults it");

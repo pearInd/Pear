@@ -515,9 +515,11 @@ console.log("\n── §8 the vision tier: endpoint, classifier, migration, back
     (detailFn.match(/return [^;]*\{ \.\.\.CACHED_ROW_DEFAULTS/g) || []).length === 2 &&
     !/return data \|\| null|return data;/.test(detailFn));
 
+  /* 4 since 2026-10-31 (THE WHOLE REPLY, server.js): a reader fix, not the category - every row older than the v12
+     migration is un-versioned and re-asked anyway; the bump re-asks only the rows written that day. */
   check("CLASSIFIER_PROMPT_VERSION is NOT bumped - the category is its own call, so no\n" +
         "        catalog-wide front/back re-classification is triggered",
-    /const CLASSIFIER_PROMPT_VERSION = 3;/.test(SRV));
+    /const CLASSIFIER_PROMPT_VERSION = 4;/.test(SRV));
 
   check("the classifier is a shared module, imported rather than copied",
     /import \{ classifyGarmentFull \} from "\.\/lib\/garment-category\.js";/.test(SRV) &&

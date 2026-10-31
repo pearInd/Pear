@@ -1279,8 +1279,12 @@ function fetchImageAsBase64Cached(imageUrl) {
      1 - original front/back + kids/adult
      2 - text_ocr, is_true_back_view, primary_color_hex, has_graphic
      3 - lettering orientation and print prominence removed as front/back cues;
-         neckline depth made decisive for flat-lays */
-const CLASSIFIER_PROMPT_VERSION = 3;
+         neckline depth made decisive for flat-lays
+     4 - (2026-10-31) no prompt change: the answer is read from EVERY part of the reply
+         (geminiReplyText). v3 rows written since the v12 migration include answers that
+         were cut at the first part and saved as "uncertain" with no colour/text - the bump
+         re-asks them once. */
+const CLASSIFIER_PROMPT_VERSION = 4;
 
 const FRONT_BACK_SYSTEM_PROMPT = `You are a garment-orientation classifier for a virtual try-on pipeline. You decide which SIDE of a garment a product photograph shows.
 
@@ -1425,6 +1429,28 @@ legible enough to sample, answer "".
 Respond ONLY with JSON matching this schema:
 {"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0,"text_ocr":"<garment lettering, verbatim, or empty>","is_true_back_view":true|false,"has_graphic":true|false,"primary_color_hex":"#rrggbb"}`;
 
+/* ── THE WHOLE REPLY (2026-10-31) ─────────────────────────────────────────────────────────
+   The model can split one JSON answer over several `parts` (and a thinking model adds parts
+   flagged `thought`). Reading parts[0] alone cut CHICAGO 3108650200's front verdict at
+   `"cue":"drawstring waistband and front-fa` - logged as "unparseable", saved as an uncertain
+   FRONT with no colour, no lettering, at the current prompt version, so it was never asked
+   again and the room's colour lock abstained on that product for good. Joins every non-thought
+   text part; a body that still does not parse is cut to its outermost {...} before giving up.
+   Pure: classify-reply.test.mjs slices it from this banner to `async function classifyFrontBackDetailed(`. */
+function geminiReplyText(data) {
+  const parts = data?.candidates?.[0]?.content?.parts;
+  const text = Array.isArray(parts)
+    ? parts.filter((p) => p && !p.thought && typeof p.text === "string").map((p) => p.text).join("")
+    : "";
+  return text;
+}
+function parseGeminiJson(text) {
+  try { return JSON.parse(text); } catch (_) { /* fall through */ }
+  const a = text.indexOf("{"), b = text.lastIndexOf("}");
+  if (a !== -1 && b > a) { try { return JSON.parse(text.slice(a, b + 1)); } catch (_) { /* fall through */ } }
+  return null;
+}
+
 /* Classify one image. Returns the full record - the caller decides what an
    `uncertain` verdict means (see resolveGarmentViews), rather than the prompt
    quietly rounding it to "front" the way the old version did.
@@ -1481,19 +1507,22 @@ async function classifyFrontBackDetailed(imageUrl) {
     throw err;
   }
   const data = await resp.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
+  const text = geminiReplyText(data);
+  const parsed = parseGeminiJson(text);
+  if (!parsed || typeof parsed !== "object") {
     // responseMimeType should make this unreachable; treat a malformed body as
     // uncertain rather than string-matching it (the old .includes("back") test read
-    // "not the back" as a back).
-    console.warn(`[classify] unparseable Gemini body for ${secureUrl}: ${text.slice(0, 120)}`);
+    // "not the back" as a back). `unparseable` keeps the row un-versioned, so the next
+    // visit asks again instead of serving this non-answer forever (THE WHOLE REPLY).
+    const finish = data?.candidates?.[0]?.finishReason || "?";
+    const nParts = data?.candidates?.[0]?.content?.parts?.length ?? 0;
+    console.warn(`[classify] unparseable Gemini body for ${secureUrl} (finish=${finish}, parts=${nParts}, ${text.length} chars): ` +
+      `${text.slice(0, 120)} ... ${text.slice(-60)}`);
     return {
       view: "uncertain", confidence: 0, cue: "unparseable response",
       age_group: "uncertain", age_group_confidence: 0,
       text_ocr: null, is_true_back_view: false, primary_color_hex: null,
+      unparseable: true,
     };
   }
   const view = ["front", "back", "uncertain"].includes(parsed?.view) ? parsed.view : "uncertain";
@@ -2692,7 +2721,8 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
           ageGroup: rec.age_group, ageGroupConfidence: rec.age_group_confidence,
           textOcr: rec.text_ocr, isTrueBackView: rec.is_true_back_view, primaryColorHex: rec.primary_color_hex,
           hasGraphic: rec.has_graphic,
-          classifierVersion: CLASSIFIER_PROMPT_VERSION,
+          /* A non-answer is not a verdict of this version: left un-versioned (stale), it is asked again (THE WHOLE REPLY). */
+          classifierVersion: rec.unparseable ? null : CLASSIFIER_PROMPT_VERSION,
           /* Rides along on this row's write rather than a separate upsert - this call
              already satisfies garment_cache.classification's NOT NULL constraint, which
              a size_run_type-only write to a brand-new row cannot (see
@@ -2985,7 +3015,7 @@ app.get("/api/garment-category", classifyLimiter, async (req, res) => {
           isTrueBackView: detail.is_true_back_view,
           hasGraphic: detail.has_graphic,
           primaryColorHex: detail.primary_color_hex,
-          classifierVersion: CLASSIFIER_PROMPT_VERSION,
+          classifierVersion: detail.unparseable ? null : CLASSIFIER_PROMPT_VERSION,
           garmentCategory: verdict.garment_category,
         });
       } catch (e) {
