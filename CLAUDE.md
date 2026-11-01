@@ -1961,8 +1961,17 @@ d6cd8c3 (§2.47, with the whole camera and an add-nothing clause) and went out w
   `cue` ("...front-fa" then "23 23 23 ..." for ~2 minutes), and re-asking it made every visit to that product wait on the loop.
   A BOUNDED ANSWER: `maxOutputTokens` 4096, `cue` last (`propertyOrdering` + the prompt's template), and
   `salvageGeminiFields()` keeps every field completed before a cut - the verdict, colour and lettering come out before the
-  loop. `classify-reply` §1b. Still reading `parts[0]` alone, same risk, not changed here: `lib/garment-box.js`,
-  `lib/garment-category.js`, `lib/body-estimate.js`, server.js's size-run call, the scanner.
+  loop. `classify-reply` §1b.
+- **ONE READER FOR EVERY MODEL CALL (2026-11-01, `lib/model-reply.js`):** the garment box (`lib/garment-box.js`), the garment
+  category (`lib/garment-category.js`), the photo estimate (`lib/body-estimate.js`) and the title category
+  (`/api/classify-garment`) read the reply the same way now - every part, the cap, free text last (`propertyOrdering`), the
+  completed fields of a cut reply only when the caller's `required` ones completed. The box asks for NO salvage: a cut array is
+  not a box. Found on the way: an EMPTY reply was parsed as `null`/`{}` and cached as a real answer - "no box" for a month at
+  the CDN, "unknown" category in garment_cache; it is an error now (never cached). `classify-reply` §4 drives each caller through
+  a fake fetch (a split reply, a looping cut, an empty one); putting `parts[0]` back in the box fails §4.1/§4.4. Still on
+  `parts[0]` - offline tools, not changed: `scanner/scan-store.js`, `scanner/backfill-age-group.js`,
+  `scripts/batch-scan-clothes.js`. Seen while checking, not changed: `/api/garment-box` answers in 1.9-5.2s and the room
+  waits 3.5s for it (REF_BAND_TIMEOUT_MS), so a cold answer sends the rear photo whole ("no-answer" in four of the 11-01 runs).
 - **Verified on production 2026-11-01 (023aab6):** CHICAGO 3108650200 -> `#000000`, "CHICAGO", plain back (5s); PEAK 1824346900
   -> `#4b3a36` (TEST names it "dark brown", the shopper's namer "charcoal"), its long print (too long for `Print:`, so not sent),
   printed back. No Gemini error in the logs. **With facts on the wire the size sentence sheds at +-2 sizes** (front, both

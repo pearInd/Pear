@@ -32,6 +32,7 @@ import { supabase } from "./lib/supabase.js";
    field on classifyFrontBackDetailed() (short version: that one is stamped with
    CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
 import { classifyGarmentFull } from "./lib/garment-category.js";
+import { geminiReplyText, geminiReplyShape, parseGeminiJson, MODEL_REPLY_MAX_TOKENS } from "./lib/model-reply.js";
 /* Where the garment is in a store photo, so the room can paint the store's model out of the rear
    reference before it is sent (2026-10-08 - see lib/garment-box.js and GET /api/garment-box). */
 import { detectGarmentBand, GARMENT_BOX_VERSION } from "./lib/garment-box.js";
@@ -1430,39 +1431,12 @@ Respond ONLY with JSON matching this schema:
 {"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0,"primary_color_hex":"#rrggbb","has_graphic":true|false,"is_true_back_view":true|false,"text_ocr":"<garment lettering, verbatim, or empty>","cue":"<the single cue that decided it, max 12 words>"}`;
 
 /* ── THE WHOLE REPLY (2026-10-31) ─────────────────────────────────────────────────────────
-   The model can split one JSON answer over several `parts` (and a thinking model adds parts
-   flagged `thought`). Reading parts[0] alone cut CHICAGO 3108650200's front verdict at
-   `"cue":"drawstring waistband and front-fa` - logged as "unparseable", saved as an uncertain
-   FRONT with no colour, no lettering, at the current prompt version, so it was never asked
-   again and the room's colour lock abstained on that product for good. Joins every non-thought
-   text part; a body that still does not parse is cut to its outermost {...} before giving up.
-   Pure: classify-reply.test.mjs slices it from this banner to the `Classify one image` comment. */
-function geminiReplyText(data) {
-  const parts = data?.candidates?.[0]?.content?.parts;
-  const text = Array.isArray(parts)
-    ? parts.filter((p) => p && !p.thought && typeof p.text === "string").map((p) => p.text).join("")
-    : "";
-  return text;
-}
-function parseGeminiJson(text) {
-  try { return JSON.parse(text); } catch (_) { /* fall through */ }
-  const a = text.indexOf("{"), b = text.lastIndexOf("}");
-  if (a !== -1 && b > a) { try { return JSON.parse(text.slice(a, b + 1)); } catch (_) { /* fall through */ } }
-  return salvageGeminiFields(text);
-}
-/* A reply cut by the token cap (A BOUNDED ANSWER) is a valid JSON PREFIX: every field before the cut is complete. Keep those
-   - a string only when its closing quote arrived - and nothing else; no `view`, no answer. `cue` is last, so a loop there
-   costs the cue alone. */
-function salvageGeminiFields(text) {
-  if (typeof text !== "string" || text.indexOf("{") === -1) return null;
-  const out = {};
-  const re = /"([a-z_]+)"\s*:\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|true|false|null)\s*(?=[,}])/g;
-  let m;
-  while ((m = re.exec(text))) {
-    try { out[m[1]] = JSON.parse(m[2]); } catch (_) { /* a field that does not decode is not kept */ }
-  }
-  return typeof out.view === "string" ? out : null;
-}
+   The model can split one JSON answer over several `parts`, and can loop inside a free-text field until its token cap.
+   Reading parts[0] alone cut CHICAGO 3108650200's front verdict at `"cue":"drawstring waistband and front-fa` - logged as
+   "unparseable", saved as an uncertain FRONT with no colour, no lettering, at the current prompt version, so it was never
+   asked again and the room's colour lock abstained on that product for good. The reader (every non-thought part joined,
+   the outermost {...}, the completed fields of a cut reply) lives in lib/model-reply.js since 2026-11-01 - one reader for
+   every model call; the classifier asks it to salvage only a reply whose `view` completed. */
 
 /* Classify one image. Returns the full record - the caller decides what an
    `uncertain` verdict means (see resolveGarmentViews), rather than the prompt
@@ -1492,7 +1466,7 @@ async function classifyFrontBackDetailed(imageUrl) {
            visit to that product waited on it. The cap ends a loop in seconds; the order below (and the prompt's template)
            puts `cue` LAST, so the verdict, the colour and the lettering are out before any loop, and
            salvageGeminiFields() keeps every field that completed. */
-        maxOutputTokens: 4096,
+        maxOutputTokens: MODEL_REPLY_MAX_TOKENS,
         responseMimeType: "application/json",
         responseSchema: {
           type: "OBJECT",
@@ -1529,14 +1503,13 @@ async function classifyFrontBackDetailed(imageUrl) {
   }
   const data = await resp.json();
   const text = geminiReplyText(data);
-  const parsed = parseGeminiJson(text);
+  const parsed = parseGeminiJson(text, { required: ["view"] });
   if (!parsed || typeof parsed !== "object") {
     // responseMimeType should make this unreachable; treat a malformed body as
     // uncertain rather than string-matching it (the old .includes("back") test read
     // "not the back" as a back). `unparseable` keeps the row un-versioned, so the next
     // visit asks again instead of serving this non-answer forever (THE WHOLE REPLY).
-    const finish = data?.candidates?.[0]?.finishReason || "?";
-    const nParts = data?.candidates?.[0]?.content?.parts?.length ?? 0;
+    const { finish, parts: nParts } = geminiReplyShape(data);
     console.warn(`[classify] unparseable Gemini body for ${secureUrl} (finish=${finish}, parts=${nParts}, ${text.length} chars): ` +
       `${text.slice(0, 120)} ... ${text.slice(-60)}`);
     return {
@@ -3150,6 +3123,7 @@ app.post("/api/classify-garment", classifyLimiter, async (req, res) => {
           // Deterministic, for the same reason classifyFrontBackDetailed() is: the same
           // product must not classify differently between two sessions.
           temperature: 0,
+          maxOutputTokens: MODEL_REPLY_MAX_TOKENS,   // A BOUNDED ANSWER (lib/model-reply.js)
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
@@ -3164,8 +3138,8 @@ app.post("/api/classify-garment", classifyLimiter, async (req, res) => {
       return res.json({ category: "unknown", source: "error" });
     }
     const data = await resp.json();
-    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-    const category = JSON.parse(raw)?.category;
+    /* THE WHOLE REPLY (lib/model-reply.js): every part, not parts[0]; a reply that does not parse is "unknown", as before. */
+    const category = parseGeminiJson(geminiReplyText(data), { required: ["category"] })?.category;
     const ok = category === "top" || category === "bottom";
     console.log(`[classify-garment] "${title}" → ${ok ? category : "unknown"}`);
     return res.json({ category: ok ? category : "unknown", source: "ai" });
