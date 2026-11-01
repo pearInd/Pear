@@ -1984,6 +1984,15 @@ d6cd8c3 (§2.47, with the whole camera and an add-nothing clause) and went out w
   - Not clean, kept for the ledger: m1 (the input clip already wore a brown PEAK - proves nothing on colour; it also showed the
     red shorts turned light grey through the back view), m2 (the engine's signalling socket closed 1006 0.8s after the reveal),
     m3 (the rig's camera starved - fixed, §7.15). 5 credits in all.
+  - **THE PEAK A/B (m6, the owner's call before any shopper change; record mvxmqhoj):** the same clip, product, rig and TEST
+    record, every prompt answer with its `Fabric:` sentence taken out by the rig (`--no-fabric`, §7.15). The front fabric:
+    #210d01 / #220f01 without the sentence against #200e02 / #200d02 with it - the same colour within 2 of 255, and the same by
+    eye. **The sentence does not move PEAK's colour;** the render is darker than the studio photo with or without it (the
+    engine on a dim scene, not the wording). m6 itself was a degraded session - the rear-mask service did not answer (photos
+    sent whole), the engine acknowledged the back reference after 4.1s and the output froze from ~0.5s (3.8s stalled) - so
+    only its front frames compare; its turn shows nothing. 6 credits in all.
+  - **So:** no harm seen and no gain shown on PEAK's colour. CHICAGO's lettering/plain back was right WITH the facts, but it
+    was not run without them, so their gain there is not shown either. Kept TEST-only until a measurement shows a gain.
 
 ### 7.15 The real-session rig lives in scripts/rig/ (2026-11-01)
 It was rebuilt twice from a session scratchpad that was wiped. Now in the repo: `scripts/rig/rig.mjs <product> <clip.mp4> <out>
@@ -2002,6 +2011,11 @@ colour beside the product photo), `peek.mjs` (what a clip WEARS, before spending
   fed to a PEAK test proves nothing about colour (m1). Pick a clip whose garment differs from the one under test.
 - **The network gate** (`check-network-before-measuring`): upload is what a session spends; the rig checks up/down/loss before
   each billed run and does not run on a collapsed link.
+- **An A/B of one sentence without a code change (`--no-fabric`):** the rig fetches each prompt answer itself and hands the room
+  the same answer minus `Fabric: ...` - every header kept but length/encoding (a kept `content-encoding` failed the room's
+  fetch and sent it to the origin). The rig's extra hop can exceed the room's 1.5s edge timeout for an odd request, which then
+  comes from the origin: same code, same text, prefetched before go-live. A dry run proves the rewrite (prompts with the colour
+  in the request and no `Fabric:` in the answer) before the credit is spent.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 

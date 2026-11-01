@@ -2,13 +2,16 @@
    EVERY RUN WITHOUT --dry IS A BILLED ENGINE SESSION. A real FOX product page, the production widget injected with the TEST key in
    demo mode (no registration), a recorded 360 clip as the camera (MediaStreamTrackGenerator, one VideoFrame per tick - never
    canvas.captureStream), and a frame grab of the room's output and input through the billed window.
-   usage: node rig.mjs <product> <clip.mp4> <outDir> [--dry]
+   usage: node rig.mjs <product> <clip.mp4> <outDir> [--dry] [--no-fabric]
+     --no-fabric  the A/B arm: every prompt answer reaches the room with its `Fabric: ...` sentence taken out - the same session,
+                  TEST record included, without the colour sentence (2026-11-01, the PEAK A/B).
      --dry  stops before go-live: proves the camera, the widget's facts and the room, bills nothing. */
 import { chromium } from "/Users/yairgertner/pear interface/node_modules/playwright/index.mjs";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 
-const [product, clip, out, flag] = process.argv.slice(2);
-const DRY = flag === "--dry";
+const [product, clip, out, ...flags] = process.argv.slice(2);
+const DRY = flags.includes("--dry");
+const NO_FABRIC = flags.includes("--no-fabric");
 mkdirSync(out, { recursive: true });
 const log = (...a) => { const l = `[rig ${new Date().toISOString().slice(11, 23)}] ${a.join(" ")}`; console.log(l); };
 
@@ -19,6 +22,20 @@ const browser = await chromium.launch({
 });
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ["camera"] });
 const clipBytes = readFileSync(clip);
+if (NO_FABRIC) {
+  /* The edge's (or the origin's) real answer, its colour sentence removed; every header kept but the length and encoding (the room checks
+     X-Pear-Api, the browser the CORS headers). */
+  await context.route((u) => /^\/(api\/)?prompt$/.test(u.pathname) && /^(rt|app)\.pear-ai\.io$/.test(u.host), async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const resp = await route.fetch();
+    /* the body is re-sent decoded: a kept content-encoding made the room's fetch fail and fall back to the origin */
+    const headers = { ...resp.headers() };
+    for (const h of ["content-length", "content-encoding", "transfer-encoding"]) delete headers[h];
+    let body = await resp.text();
+    try { const j = JSON.parse(body); if (typeof j.prompt === "string") j.prompt = j.prompt.replace(/ ?Fabric: [^.]*\./, ""); body = JSON.stringify(j); } catch (_) {}
+    await route.fulfill({ status: resp.status(), headers, body });
+  });
+}
 await context.route("https://app.pear-ai.io/__rig/clip.mp4", (r) => r.fulfill({ status: 200, contentType: "video/mp4", body: clipBytes,
   headers: { "Access-Control-Allow-Origin": "*" } }));
 
@@ -74,7 +91,7 @@ page.on("response", async (r) => {
   }
 });
 
-log("product", product, "clip", clip, DRY ? "(dry)" : "(BILLED)");
+log("product", product, "clip", clip, DRY ? "(dry)" : "(BILLED)", NO_FABRIC ? "NO-FABRIC" : "");
 await page.goto(`https://fox.co.il/products/${product}`, { waitUntil: "domcontentloaded", timeout: 60000 });
 await page.waitForTimeout(3000);
 await page.evaluate(() => {
@@ -155,6 +172,6 @@ for (const f of frames) {
 }
 writeFileSync(`${out}/frames.json`, JSON.stringify(frames.map((f) => ({ t: f.t, clipT: f.clipT }))));
 await room.waitForTimeout(8000);   // the session ends and posts its TEST record
-writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
+writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, noFabric: NO_FABRIC, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
 log("frames", frames.length, "prompts seen", prompts.length);
 await browser.close();
