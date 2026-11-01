@@ -1970,6 +1970,38 @@ d6cd8c3 (§2.47, with the whole camera and an add-nothing clause) and went out w
   keeps it. So measure at the RECOMMENDED size; the size steps are a separate question before this goes to shoppers.
 - **The check:** a TEST session on PEAK and on the CHICAGO shorts, frame by frame (§7.1) - the colour as the photo, the print
   unchanged, the plain back still plain; `ctx.facts` non-null. Worse on any frame: revert first.
+- **MEASURED 2026-11-01 on the real engine (the rig, §7.15; production 0b0f9bf, recommended size):**
+  - **m5, CHICAGO 3108650200** (input: the owner in blue/yellow pants; record mvxkmd7q): the wire carried `Fabric: black.
+    Print: "CHICAGO".` / `Fabric: black.` + the plain-back anchor; `ctx.facts` {#000000, 7, plain}. Black shorts from the first
+    frame (fabric ~#180c0c vs the photo's #131212), CHICAGO on the front 0.4-3.6s, the red/white side stripe 4.0-4.4s, the back
+    plain black with its white trim 4.7-5.0s - no lettering on the back. Swaps acked 299/314ms, 6 output fps, no stall.
+  - **m4, PEAK 1824346900** (input: the owner in a WHITE tee, a dim evening room; record mvxkivim): `Fabric: dark brown.` on
+    both sides, `ctx.facts` {#4b3a36, 136, printed}. PEAK on the chest from the first frame, no size/length jump, the side plain,
+    the back print on the back from 4.3s (the BACK sent at +3.0s, acked 334ms); the FRONT went out at +4.5s and landed after
+    the window. The fabric reads a WARM very dark brown (~#200e02, red over green over blue), not a neutral charcoal - but much
+    darker than the studio photo (#58302b); how much of that is the room's light is not separable without an A/B on the same
+    clip without the sentence (not run).
+  - Not clean, kept for the ledger: m1 (the input clip already wore a brown PEAK - proves nothing on colour; it also showed the
+    red shorts turned light grey through the back view), m2 (the engine's signalling socket closed 1006 0.8s after the reveal),
+    m3 (the rig's camera starved - fixed, §7.15). 5 credits in all.
+
+### 7.15 The real-session rig lives in scripts/rig/ (2026-11-01)
+It was rebuilt twice from a session scratchpad that was wiped. Now in the repo: `scripts/rig/rig.mjs <product> <clip.mp4> <out>
+[--dry]` opens the real FOX product page, injects the production widget with `data-pear-key="TEST"` and `data-pear-demo="true"`
+(no registration; a fresh browser per run, so demo mode's one measurement is always free), feeds the clip as the camera and grabs
+the output every 100ms through the window; `sheet.mjs` (input above output), `zoom.mjs` (a cropped region + its median fabric
+colour beside the product photo), `peek.mjs` (what a clip WEARS, before spending a credit). The TEST record is read with wrangler
+(§2.16). **Every run without `--dry` is a billed session.** What it took, so it is not re-learned:
+- **A visible window, not headless:** headless Chromium here renders and runs the pose model in software; one session's camera
+  fell to 1 fps (the page frozen 8s) and the engine got nothing. Headed with the GPU: 30 fps, at most 32ms of main-thread lag.
+- **The camera paced without awaits:** one VideoFrame per 33ms tick from the clip's current picture, a write still in flight
+  drops the next frame instead of stacking timers; the clip holds its first frame until the reveal, then plays the turn.
+- **The store's popups** (`popup-message`, `flashy-popup`) cover the page in a visible window - removed by the rig; the consent
+  box is ticked through the element itself.
+- **Check what the clip wears first (`peek.mjs`):** every clip in ~/Downloads is an earlier try-on OUTPUT. A brown-PEAK clip
+  fed to a PEAK test proves nothing about colour (m1). Pick a clip whose garment differs from the one under test.
+- **The network gate** (`check-network-before-measuring`): upload is what a session spends; the rig checks up/down/loss before
+  each billed run and does not run on a collapsed link.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
