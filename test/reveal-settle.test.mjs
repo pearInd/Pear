@@ -78,9 +78,11 @@ function fakeTime(start = 10_000_000) {
    applyActive() models a full upload: the wire is busy until the ack lands ackMs later, and the
    ack is stamped through the real noteImageUploadAcked() - exactly what applyGarment() does. */
 function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_HOLD_MS,
-                       selectedId = "G1", floorId = "G1", floorAckAgoMs = 3000, primeFrontAckMs = null, arm = ARM } = {}) {
+                       selectedId = "G1", floorId = "G1", floorAckAgoMs = 3000, primeFrontAckMs = null, arm = ARM,
+                       primeInFlightMs = null, primeFrontAfterMs = 300 } = {}) {
   const T = fakeTime();
   let frameCb = null, firedAt = null, busy = false;
+  let inFlight = false;   // THE BACK IN FLIGHT: the primed back sent and not yet acknowledged
   const acks = [];
   const logs = [];
   const sandbox = {
@@ -112,6 +114,7 @@ function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_
     console: { log: (...a) => logs.push(a.join(" ")), warn: (...a) => logs.push(a.join(" ")) },
     window: {},
     Date: T.Date,
+    primeBackInFlight: () => inFlight,
   };
   const body = SETTLE + "\n" + arm +
     "\nreturn {" +
@@ -135,6 +138,15 @@ function liveHarness({ search = "", ackMs = 400, holdMs = CONFIG.COLD_START_MIN_
     api.note("primeBack");
     busy = true;
     T.setTimeout(() => { busy = false; acks.push(T.now()); api.note("applyGarment", selectedId); }, primeFrontAckMs);
+  }
+  /* THE BACK IN FLIGHT (f2): the primed BACK still on its way when the gate arms - acknowledged primeInFlightMs later, the
+     front after it primeFrontAfterMs after that. */
+  if (primeInFlightMs !== null) {
+    inFlight = true; busy = true;
+    T.setTimeout(() => {
+      inFlight = false; api.note("primeBack");
+      T.setTimeout(() => { busy = false; acks.push(T.now()); api.note("applyGarment", selectedId); }, primeFrontAfterMs);
+    }, primeInFlightMs);
   }
   const armedAt = T.now();
   api.arm();
@@ -231,6 +243,34 @@ console.log("\n── §1c NEVER ON THE PRIMED BACK (2026-10-17, x2) ──");
   check("the ceiling sits under the first-frame teardown",
     /const PRIME_BACK_HOLD_MAX_MS = 11000;/.test(APP) && /const FIRST_FRAME_TIMEOUT_MS = 15000;/.test(APP) &&
     /_wireHoldsPrimedBack = where === "primeBack";/.test(APP));
+}
+
+console.log("\n── §1d THE BACK IN FLIGHT (2026-11-01, rig session f2) ──");
+{
+  /* f2: the primed BACK acknowledged 3.3s after its send - after the settle ceiling had let the reveal open - and the engine
+     then drew it on a chest facing the lens. Here the back is acknowledged 9s after the gate arms - past the settle ceiling
+     (REVEAL_SETTLE_MAX_MS, 7s) - and the front 0.3s later. */
+  const BACK = 9000;
+  const noFlight = ARM.replace(' ||\n      (typeof primeBackInFlight === "function" && primeBackInFlight() === true))', ")");
+  const neg = liveHarness({ primeInFlightMs: BACK, arm: noFlight });
+  neg.run(14000);
+  check("§1d.1 negative control: without the in-flight clause the reveal opens on the settle ceiling WHILE the back is on its way",
+    noFlight !== ARM && neg.firedAt() !== null && neg.firedAt() - neg.armedAt >= CONFIG.REVEAL_SETTLE_MAX_MS && neg.firedAt() - neg.armedAt < BACK,
+    `revealed ${neg.firedAt() === null ? "never" : neg.firedAt() - neg.armedAt}ms after arming`);
+  const h = liveHarness({ primeInFlightMs: BACK });
+  h.run(14000);
+  check("§1d.2 THE FIX: it waits for the back's acknowledgement, the front after it and the front's render switch",
+    h.firedAt() !== null && h.firedAt() - (h.armedAt + BACK + 300) >= CONFIG.REFERENCE_RENDER_SETTLE_MS,
+    `revealed ${h.firedAt() === null ? "never" : h.firedAt() - h.armedAt}ms after arming`);
+  const stuck = liveHarness({ primeInFlightMs: 60000 });
+  stuck.run(16000);
+  check("§1d.3 ...a back that never comes cannot hold it past PRIME_BACK_HOLD_MAX_MS (11s) - under the 15s teardown",
+    stuck.firedAt() !== null && stuck.firedAt() - stuck.armedAt >= 11000 && stuck.firedAt() - stuck.armedAt < 12000,
+    `revealed ${stuck.firedAt() === null ? "never" : stuck.firedAt() - stuck.armedAt}ms after arming`);
+  const quick = liveHarness({ primeInFlightMs: 300 });
+  quick.run(8000);
+  check("§1d.4 ...while a back acknowledged in 0.3s reveals as before (the hold costs nothing on a quick engine)",
+    quick.firedAt() !== null && quick.firedAt() - quick.armedAt < CONFIG.REVEAL_SETTLE_MAX_MS, `${quick.firedAt() - quick.armedAt}ms`);
 }
 
 console.log("\n── §1b THE OTHER HOLDS THE SETTLE GATE ADDS ──");

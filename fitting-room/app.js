@@ -7290,7 +7290,7 @@ async function connectRealtime({ force = false } = {}) {
   /* ...nor any render window, nor any garment identity - a stamp left by the last session
      would let this session's reveal gate judge its first frame against the wrong upload.
      typeof-guarded: signaling-retry.test.mjs runs this function standalone. */
-  if (typeof lastImageUploadAckAt !== "undefined") { lastImageUploadAckAt = 0; wireGarmentId = null; if (typeof _wireHoldsPrimedBack !== "undefined") { _wireHoldsPrimedBack = false; _primedBackReplacedAt = 0; } }
+  if (typeof lastImageUploadAckAt !== "undefined") { lastImageUploadAckAt = 0; wireGarmentId = null; if (typeof _wireHoldsPrimedBack !== "undefined") { _wireHoldsPrimedBack = false; _primedBackReplacedAt = 0; } if (typeof _primeBackInFlight !== "undefined") _primeBackInFlight = false; }
   /* ...and the QUEUE with them. A write left pending against the client we just
      disconnected would otherwise make this session's very first apply see wireBusy() and
      wait behind a promise that can no longer settle - the go-live hang, reintroduced by
@@ -16964,6 +16964,12 @@ const MODEL_READY_STABLE_MS     = 300;   // ...spanning at least this many ms
    applyLook() sends on the turn - with the look's wire prompt (angle-free, the same string). A look whose halves have
    no back of their own has a back composite that IS the front one: nothing to prime. */
 let _primedBackGen = -1;
+/* THE BACK IN FLIGHT (2026-11-01, rig session f2): the reveal held only from the primed back's ACKNOWLEDGEMENT
+   (_wireHoldsPrimedBack). f2's engine acknowledged it 3.3s after the send - 1.6s after the reveal, which had opened on the
+   settle ceiling while the back was still in flight - and drew the back print on a chest facing the lens (2.0s of the clip).
+   A back on its way is held exactly like one acknowledged: true from the send to its acknowledgement or failure. */
+let _primeBackInFlight = false;
+function primeBackInFlight() { return _primeBackInFlight; }
 /* How long, from the reveal gate's arming, the reveal may wait for the front to replace the primed back (armFirstFrameBilling,
    NEVER ON THE PRIMED BACK) - past REVEAL_SETTLE_MAX_MS (6s), 4s+ under FIRST_FRAME_TIMEOUT_MS's teardown. x2's front landed
    7.3s after arming. */
@@ -16993,10 +16999,12 @@ async function primeBackReference(gen) {
   if (!prompt || gen !== sessionGen || !rtClient) return false;
   const t0 = Date.now();
   if (typeof traceOrient === "function") traceOrient("prime-sent", { kb: Math.round((blob.size || 0) / 1024) });
+  _primeBackInFlight = true;   // THE BACK IN FLIGHT - the reveal holds from here
   try {
     const sent = await sendCondition("primeBack", () => rtClient.set({ image: blob, prompt, enhance: false }));
-    if (!sent) return false;
+    if (!sent) { _primeBackInFlight = false; return false; }
   } catch (e) {
+    _primeBackInFlight = false;
     console.warn("[PEAR] back prime failed - the turn will send it as before:", e?.message || e);
     if (typeof traceOrient === "function") traceOrient("prime-fail", { ms: Date.now() - t0 });
     return false;
@@ -17004,6 +17012,7 @@ async function primeBackReference(gen) {
   /* The wire holds the back now: the re-assert that follows must re-upload the front (it clears the
      no-op refs itself), and the settle hold counts this acknowledgement like any other upload. */
   noteImageUploadAcked("primeBack");
+  _primeBackInFlight = false;  // ...held on by _wireHoldsPrimedBack from the acknowledgement on
   lastSentImageRef = null;
   lastSentPrompt = null;
   console.log(`[PEAR] back reference primed before the reveal (${Date.now() - t0}ms) - the turn's swap is now a repeat`);
@@ -17321,7 +17330,9 @@ function armFirstFrameBilling(video, gen) {
        (_wireHoldsPrimedBack), and then REFERENCE_RENDER_SETTLE_MS more for the front's render to switch, the reveal waits -
        past REVEAL_SETTLE_MAX_MS, up to PRIME_BACK_HOLD_MAX_MS from arming, under FIRST_FRAME_TIMEOUT_MS's teardown. Past that
        it reveals as before (a torn-down session is worse). typeof-guarded: this function runs standalone in its suites. */
-    const primeBackOnWire = settleHoldEnabled && typeof _wireHoldsPrimedBack !== "undefined" && _wireHoldsPrimedBack === true;
+    /* ...and a primed back still IN FLIGHT holds the same way (THE BACK IN FLIGHT, 2026-11-01). */
+    const primeBackOnWire = settleHoldEnabled && ((typeof _wireHoldsPrimedBack !== "undefined" && _wireHoldsPrimedBack === true) ||
+      (typeof primeBackInFlight === "function" && primeBackInFlight() === true));
     if (primeBackOnWire && !heldForPrimedBack) {
       heldForPrimedBack = true;
       if (typeof traceOrient === "function") traceOrient("reveal-hold-prime", { ms: Date.now() - armedAt });

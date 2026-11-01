@@ -14,6 +14,29 @@ const DRY = flags.includes("--dry");
 const NO_FABRIC = flags.includes("--no-fabric");
 /* --size=<label>: the size button the rig clicks in the room before go-live (the shopper's own size choice - getSizeDelta). */
 const SIZE = (flags.find((f) => f.startsWith("--size=")) || "").slice(7) || null;
+/* THE STORE PAGE, CACHED (2026-11-01): FOX answers 429 after a few loads of its product pages, and a rig run that cannot load
+   the page measures nothing. The product page's HTML is fetched once and kept in RIG_PAGE_CACHE; every later run is served
+   from the file (the page's own assets and photos still load as usual). */
+const PAGE_CACHE = process.env.RIG_PAGE_CACHE || "/private/tmp/pear-rig-pages";
+/* --hw=<cm>,<kg>: the height and weight typed on the size screen (default 178,74) - the recommended size the --size= delta is
+   measured from (getSizeDelta). */
+const HW = ((flags.find((f) => f.startsWith("--hw=")) || "").slice(5) || "178,74").split(",").map((x) => x.trim());
+/* --synthetic=<spec.json>: {title, images[], sizes[]} - when the store blocks its product pages (FOX answered 429 on every
+   /products/* path for hours on 2026-11-01), the rig serves a minimal product page at the product's own address: the real
+   photos from the store's CDN as JSON-LD Product.image (a DECLARED source for the widget), a size picker and a Shopify
+   add-to-cart form. The widget, the classifier, the room and the engine are the real ones. */
+const SYNTH = (() => { const f = (flags.find((x) => x.startsWith("--synthetic=")) || "").slice(12); return f ? JSON.parse(readFileSync(f, "utf8")) : null; })();
+function syntheticPage(spec) {
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const ld = { "@context": "https://schema.org", "@type": "Product", name: spec.title, sku: String(product), image: spec.images,
+    offers: spec.sizes.map((sz) => ({ "@type": "Offer", name: sz, availability: "https://schema.org/InStock", price: "99.90", priceCurrency: "ILS" })) };
+  return `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>${esc(spec.title)} | FOX</title>
+<script type="application/ld+json">${JSON.stringify(ld)}</script></head><body>
+<main class="product"><h1 class="product__title">${esc(spec.title)}</h1>
+<div class="product__media">${spec.images.map((u) => `<img src="${esc(u)}" alt="${esc(spec.title)}" width="600">`).join("")}</div>
+<form action="/cart/add" method="post"><label>מידה <select name="options[מידה]">${spec.sizes.map((sz) => `<option value="${esc(sz)}">${esc(sz)}</option>`).join("")}</select></label>
+<button type="submit" name="add">הוסף לסל</button></form></main></body></html>`;
+}
 mkdirSync(out, { recursive: true });
 const log = (...a) => { const l = `[rig ${new Date().toISOString().slice(11, 23)}] ${a.join(" ")}`; console.log(l); };
 
@@ -38,6 +61,20 @@ if (NO_FABRIC) {
     await route.fulfill({ status: resp.status(), headers, body });
   });
 }
+{
+  const { existsSync, mkdirSync: mk } = await import("node:fs");
+  mk(PAGE_CACHE, { recursive: true });
+  const file = `${PAGE_CACHE}/${String(product).replace(/[^0-9a-z_-]/gi, "")}.html`;
+  await context.route((u) => u.host === "fox.co.il" && u.pathname === `/products/${product}`, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    if (SYNTH) return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: syntheticPage(SYNTH) });
+    if (existsSync(file)) return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: readFileSync(file) });
+    const resp = await route.fetch();
+    const body = await resp.text();
+    if (resp.status() === 200 && body.length > 10000) writeFileSync(file, body);
+    return route.fulfill({ status: resp.status(), contentType: "text/html; charset=utf-8", body });
+  });
+}
 await context.route("https://app.pear-ai.io/__rig/clip.mp4", (r) => r.fulfill({ status: 200, contentType: "video/mp4", body: clipBytes,
   headers: { "Access-Control-Allow-Origin": "*" } }));
 
@@ -60,8 +97,12 @@ await context.addInitScript(() => {
     const v = document.createElement("video");
     v.src = "/__rig/clip.mp4"; v.muted = true; v.playsInline = true; v.crossOrigin = "anonymous";
     await new Promise((ok, no) => { v.onloadeddata = ok; v.onerror = () => no(new Error("clip")); v.load(); });
-    v.pause(); v.currentTime = 0;
-    window.__rigPlay = () => { if (!window.__rig.playing) { window.__rig.playing = true; window.__rig.playAt = performance.now(); v.play(); } };
+    /* Before the reveal the camera is the clip's first 0.8s IN A LOOP - a person standing, with a real camera's small motion -
+       not one frozen frame: ~15s of pixel-identical input is nothing a real camera sends, and the sessions that drew a giant
+       shirt (m2, f1, 2026-11-01) both started from it. At the reveal the clip restarts and plays the turn. */
+    v.currentTime = 0; v.play();
+    setInterval(() => { if (!window.__rig.playing && v.currentTime > 0.8) v.currentTime = 0; }, 50);
+    window.__rigPlay = () => { if (!window.__rig.playing) { window.__rig.playing = true; window.__rig.playAt = performance.now(); v.currentTime = 0; v.play(); } };
     const gen = new MediaStreamTrackGenerator({ kind: "video" });
     const w = gen.writable.getWriter();
     let ts = 0, busy = false;
@@ -107,7 +148,7 @@ page.on("response", async (r) => {
     const body = await r.text();
     net.responses++;
     netScan(`${u.host}${u.pathname.replace(/[0-9a-f]{12,}/g, "*")}`, body);
-    if (/realtime-token|tryon/.test(u.pathname)) {
+    if (/^\/api\/(realtime-token|tryon)$/.test(u.pathname)) {
       try { const j = JSON.parse(body); net.token = { keys: Object.keys(j), sealed: typeof j.t === "string" && j.t[0] === "p", tLen: (j.t || "").length,
         lifetimeS: j.exp ? Math.round((new Date(typeof j.exp === "number" && j.exp < 1e12 ? j.exp * 1000 : j.exp) - Date.now()) / 1000) : null }; } catch (_) {}
     }
@@ -154,8 +195,8 @@ await room.waitForLoadState("domcontentloaded");
 const click = async (sel, t = 30000) => { const l = room.locator(sel); await l.waitFor({ state: "visible", timeout: t }); await l.click(); };
 await room.locator("#height").waitFor({ state: "visible", timeout: 60000 });
 try { await click("#cookieAcceptAll", 15000); } catch (_) { log("no cookie banner"); }
-await room.locator("#height").fill("178");
-await room.locator("#weight").fill("74");
+await room.locator("#height").fill(HW[0]);
+await room.locator("#weight").fill(HW[1]);
 await room.waitForTimeout(2500);
 await room.evaluate(() => { const c = document.getElementById("consentTerms"); if (!c.checked) c.click();
   if (!c.checked) { c.checked = true; c.dispatchEvent(new Event("change", { bubbles: true })); c.dispatchEvent(new Event("input", { bubbles: true })); } });
@@ -173,6 +214,8 @@ const pre = await room.evaluate(() => {
 log("preview", JSON.stringify(pre));
 writeFileSync(`${out}/preview.json`, JSON.stringify({ pre, prompts, boxes: [...boxes.values()] }, null, 1));
 await page.screenshot({ path: `${out}/preview.png` });
+const sizesOffered = await room.evaluate(() => [...document.querySelectorAll(".pear-sz-btn")].map((b) => b.dataset.sz + (/active|is-on|selected|chosen|recommended/.test(b.className) ? "*" : "")));
+log("sizes offered (* = active)", JSON.stringify(sizesOffered), "for", HW.join("cm/") + "kg");
 if (DRY) {
   const pace = await room.evaluate(async () => {
     window.__rigPlay(); const f0 = window.__rig.camFrames, l0 = window.__rig.lag.length; await new Promise((r) => setTimeout(r, 8000));
@@ -205,7 +248,19 @@ await click("#captureBtn");
 const goLiveAt = Date.now();
 log("GO LIVE pressed");
 /* The turn plays from the reveal, and every 100ms the output and the input are grabbed (both at 320 wide) for 7s. */
-await room.waitForFunction(() => document.querySelector(".camera-card.show-live"), null, { timeout: 60000 });
+/* A reveal OR the room's own error - whichever comes first; a stuck go-live leaves its screen and words behind. */
+const outcome = await room.waitForFunction(() => {
+  if (document.querySelector(".camera-card.show-live")) return "live";
+  const e = document.getElementById("camError");
+  return e && !e.hidden && e.textContent.trim() ? "error: " + e.textContent.trim().slice(0, 200) : false;
+}, null, { timeout: 90000 }).then((h) => h.jsonValue()).catch(() => "timeout");
+if (outcome !== "live") {
+  await page.screenshot({ path: `${out}/stuck.png` });
+  log("NO REVEAL -", outcome);
+  await room.waitForTimeout(3000);
+  await browser.close();
+  process.exit(3);
+}
 const revealMs = Date.now() - t0;
 log("revealed after", revealMs, "ms");
 await room.evaluate(() => {
@@ -235,6 +290,6 @@ const boxTimes = [...boxes.values()].map((b) => ({ photo: b.url, askedBeforeGoLi
 log("boxes", JSON.stringify(boxTimes));
 writeFileSync(`${out}/network-audit.json`, JSON.stringify(net, null, 1));
 log("network audit", JSON.stringify({ responses: net.responses, frames: net.frames, secrets: net.secrets, words: net.words, promptIn: net.promptIn, token: net.token }));
-writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, noFabric: NO_FABRIC, size: SIZE, sizeInfo, boxTimes, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
+writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, synthetic: !!SYNTH, hw: HW, noFabric: NO_FABRIC, size: SIZE, sizeInfo, boxTimes, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
 log("frames", frames.length, "prompts seen", prompts.length);
 await browser.close();

@@ -3028,9 +3028,11 @@ app.get("/api/garment-category", classifyLimiter, async (req, res) => {
 
   console.log(`[garment-category] ${verdict.garment_category} (conf ${verdict.confidence}` +
               `${verdict.cue ? ", " + verdict.cue : ""}) for ${imageUrl.slice(0, 120)}`);
+  /* NO VENDOR WORD IN THE ANSWER (2026-11-01, §2.24/§7.18): the verdict's own source is "gemini" - kept for the cache row's
+     provenance - and it went to the page as-is: the rig's Network audit found it in DevTools. The page reads "ai". */
   return res.json({
     garment_category: verdict.garment_category,
-    source: verdict.source,
+    source: verdict.source === "gemini" ? "ai" : verdict.source,
     cached: false,
   });
 });

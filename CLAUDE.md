@@ -2063,6 +2063,17 @@ Backs and bottoms keep it. True-to-size - the one rung every test uses - always 
   never the body. `image-first` and `garment-category-prompt` accept the optional third element.
 - **The check:** a TEST session sized down and one sized up on a top's front, against the same session at true size (§7.15's
   rig, `--size=`): the render must move with the size. Then it goes to shoppers.
+- **MEASURED 2026-11-01 (PEAK, the white-tee clip, 185cm/86kg -> XL recommended; m4 the true-size reference):** the size reached
+  the wire on every dispatch (f1/f4 at M: the full -2 sentence on the front, the compact one on the back; f2 at 3XL: the full +2
+  sentence both sides). **On the render it is not visible:** the front of the tee at M, at the true size and at 3XL looks the same
+  frame by frame - the engine follows the reference photo, not the fit words. (A pixel width count first said +65% at 3XL; it
+  was an artifact - the clip's copied "AI Generated" badge crosses m4's chest - and is withdrawn.) So the compact form stays
+  TEST-only: it fixes a silent drop on the wire, but it does not make refitting work. A real size change would have to come
+  through the REFERENCE (the image the engine follows), not the prompt - not attempted.
+- **Seen in the same sessions, the engine's own failures (not the size):** f1's front was a frozen GIANT SHIRT torso filling the
+  frame for 3.5s (m2 at the true size did the same); f4's back view drew the rear photo into the scene as a giant panel beside
+  the shopper (§7.10's failure); f3 and one 3XL attempt never produced a first frame (torn down at 15s). With m2 (signalling
+  1006) and m6 (a 4.1s acknowledgement, the output frozen), 6 of the day's 12 billed sessions failed on the engine's side.
 
 ### 7.18 What a shopper's browser can read (2026-11-01, audited)
 Asked: "nothing in DevTools may show the engine's key or any other key; no source maps; are the prompts readable?"
@@ -2078,7 +2089,20 @@ Asked: "nothing in DevTools may show the engine's key or any other key; no sourc
   answer and the frames to the edge - because the page hands it to the engine. Hiding that would need the edge to inject it on
   the signalling relay (§2.24); not done.
 - **The rig audits the Network tab:** every response body and WebSocket frame of a session, scanned the same way
-  (`network-audit.json`, names and counts only).
+  (`network-audit.json`, names and counts only). Its first run FOUND A LEAK: `/api/garment-category` answered
+  `source: "gemini"` (the verdict's provenance, sent to the page as-is) - it answers `"ai"` now (`classify-reply` §5). Live checks
+  after the token fix: the page receives only `{t, exp}`, sealed, expiring in 298s; no key, no vendor word in 40-46 responses and
+  129-157 frames per session.
+
+### 7.19 The back in flight holds the reveal (2026-11-01, rig session f2)
+f2's engine acknowledged the primed BACK 3.3s after its send - 1.6s AFTER the reveal: the settle ceiling (REVEAL_SETTLE_MAX_MS,
+7s) had let the reveal open while the back was still in flight, and `_wireHoldsPrimedBack` (§7.9) only counts from the back's
+acknowledgement. The engine then drew the back print on a chest facing the lens (2.0s of the clip). `_primeBackInFlight` /
+`primeBackInFlight()` (the back-prime slice) is true from the prime's send to its acknowledgement or failure, and the reveal gate
+holds on it exactly as on an acknowledged back - same ceiling (PRIME_BACK_HOLD_MAX_MS, 11s from arming, under the 15s teardown);
+a new session starts clear (connectRealtime). `reveal-settle` §1d replays it (the back acknowledged at 9s: without the clause the
+reveal opens at the ceiling with the back on its way; with it, after the back, the front and the front's render switch; a back
+that never comes is let go at 11s; a 0.3s back reveals as before). Not yet measured live: a slow-ack session is the check.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 

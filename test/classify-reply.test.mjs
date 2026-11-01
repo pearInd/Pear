@@ -148,5 +148,12 @@ console.log("\n── §4 every other model call reads the same way ──");
     /parseGeminiJson\(geminiReplyText\(data\), \{ required: \["category"\] \}\)\?\.category/.test(SRV));
 }
 
+console.log("\n── §5 no answer to the page names the vendor (§2.24, found by the rig's Network audit 2026-11-01) ──");
+{
+  const route = SRV.slice(SRV.indexOf('app.get("/api/garment-category"'), SRV.indexOf("/* GET /api/garment-box"));
+  check("§5.1 /api/garment-category answers source \"ai\" for a model verdict (the cache row keeps its own provenance)",
+    /source: verdict\.source === "gemini" \? "ai" : verdict\.source,/.test(route) && !/\bsource: verdict\.source,/.test(route));
+}
+
 console.log(fails === 0 ? "\nclassify-reply: OK" : `\nclassify-reply: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);
