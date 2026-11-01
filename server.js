@@ -63,7 +63,11 @@ const PORT     = Number(process.env.PORT) || 3000;
 // scopes the minted ek_ token (trySDK/tryREST below); the browser's actual
 // realtime.connect() call uses its own separate literal, unaffected by this env var.
 const VTON_MODEL  = process.env.DECART_VTON_MODEL  || "lucy-vton-3.5";
-const TOKEN_TTL   = Math.min(3600, Math.max(1, Number(process.env.DECART_TOKEN_TTL) || 600));
+/* THE BROWSER'S TOKEN LIVES MINUTES, NOT AN HOUR (2026-11-01). The page gets a short-lived engine token, sealed (§2.24) -
+   and the seal is obfuscation only (its code is public), so the lifetime and the scope ARE the protection. A session is
+   capped at 90s by the edge (§2.32) and the room re-mints 30s before expiry (mintEphemeralToken), so 300s is ample; an
+   environment value above it is clamped, never trusted. */
+const TOKEN_TTL   = Math.min(300, Math.max(30, Number(process.env.DECART_TOKEN_TTL) || 300));
 const ALLOWED_ORIGINS = (process.env.DECART_ALLOWED_ORIGINS || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
 
@@ -264,7 +268,10 @@ async function trySDK(extraOrigins = []) {
     token = await decart.tokens.create(opts);
   } catch (errScoped) {
     console.warn(`[tier1-sdk] scoped create failed: ${errScoped?.message || errScoped}`);
-    token = await decart.tokens.create();   // bare call - no scope
+    /* NEVER BARE (2026-11-01): this retry was a create with no argument at all - the engine's default lifetime, every
+       model - and that token went to the browser. It keeps its lifetime and its one model; only the origin list (the part
+       an engine may refuse to parse) is dropped. If this fails too, the REST tiers (lifetime + model) are next. */
+    token = await decart.tokens.create({ expiresIn: TOKEN_TTL, allowedModels: [VTON_MODEL] });
   }
 
   if (!token?.apiKey) throw Object.assign(new Error("SDK returned no apiKey"), { tier: "sdk" });

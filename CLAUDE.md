@@ -56,6 +56,11 @@ so this restore does not reopen that bug. Do not re-run the restore
 procedure for this clause — it is already wired. See imageOnlyPrompt()'s
 `SIZE-OVERRIDE RESTORE` comment in app.js for the full rationale.
 
+**SUPERSEDED IN PART (2026-11-01, §7.17):** the shedding below is no longer limited to closure
+tops - since the front anchors grew, sizing DOWN on ANY top's front sheds the fit sentence on
+the shopper path. A TEST request now carries a compact form instead (THE SIZE ALWAYS REACHES THE
+WIRE, `lib/prompts.js`); a shopper's request still sheds until that is measured.
+
 **Known, deliberate limitation:** on a top that also carries
 `FRONT_CLOSURE_LOCK` (P.HIGH), the fit sentence (P.MED) is the first thing
 `fitPrompt()` sheds under budget pressure — by design, since a shirt
@@ -2041,6 +2046,39 @@ deploy: the memo and the CDN cache start empty). The shopper spends 10-15s on th
   ask is old; waiting again after the session; a failed ask is null) and where the calls sit; starting in the hurried state
   (the old behaviour) fails §9.1. `trace:prompt` unchanged (no prompt file touched); unit, build, `qa:visual` 40/40.
 - **The rig records it:** `scripts/rig/rig.mjs` logs every `/api/garment-box` ask and answer against the go-live press.
+
+### 7.17 The size always reaches the wire (2026-11-01, Layer A, TEST requests only until measured)
+Asked: "check that the fit modifier really affects the result - if it drops silently under budget pressure, refitting looks good
+in a test and fails at a customer." It did drop. The fit sentence (P.MED) is the first part `fitPrompt()` sheds, and the front
+anchors grew after §0's "219-330 free chars, it always survives" figures: on the common shopper path (no colour facts) SIZING
+DOWN on any top's front ships no size at all; a closure top or a coat also loses +2; with facts a closure top loses every rung.
+Backs and bottoms keep it. True-to-size - the one rung every test uses - always fit.
+- **The compact form (`getCompactFitModifier`/`compactFitSentence`):** 29-41 chars, the same five steps, tightness on the
+  garment (§2.4). `fitPrompt()` tries a part's third element once before shedding it; only the fit part has one, and only on a
+  TEST request (`_requestTest`). A prompt that carries its size today is byte-identical; a shopper's request is untouched
+  (`trace:prompt --json` identical, `prompt-engine` on its pin). Not raised instead: `PROMPT_MAX_CHARS` - it is the margin
+  under the engine's 226-token hard reject, which drops the garment altogether.
+- **Pinned by `fit-ladder`:** all 160 rungs (8 garment kinds x facts x front/back x 5 sizes) end with a size on a TEST request;
+  without colour a TEST prompt is the shopper's or the shopper's plus the compact size alone; the wording names the garment and
+  never the body. `image-first` and `garment-category-prompt` accept the optional third element.
+- **The check:** a TEST session sized down and one sized up on a top's front, against the same session at true size (§7.15's
+  rig, `--size=`): the render must move with the size. Then it goes to shoppers.
+
+### 7.18 What a shopper's browser can read (2026-11-01, audited)
+Asked: "nothing in DevTools may show the engine's key or any other key; no source maps; are the prompts readable?"
+- **`scripts/audit-shipped.mjs`** fetches the deployed widget and room as a browser does (16 files: the page, every script and
+  stylesheet, the lazily loaded pose modules, the edge's scrambled binaries) and scans for key-shaped strings (by pattern - it
+  never reads a real key), `sourceMappingURL`/served `.map` files, engine words and prompt wording. 2026-11-01: none of any.
+- **The engine key never leaves the server.** The browser gets a short-lived engine token minted server-side
+  (`tokens.create` with a lifetime, one model and the allowed origins), sealed (§2.24 - obfuscation only, the seal's code is
+  public). Fixed the same day: a failed scoped create fell back to `tokens.create()` with NO argument (the engine's default
+  lifetime, every model) - now it keeps the lifetime and the model (`token-origin`); and the lifetime is capped at 300s (was
+  600 by default, up to 3600 from the environment) - a session lasts at most 90s and the room re-mints 30s before expiry.
+- **Prompts:** no wording in any shipped file (§2.13). The ASSEMBLED prompt still reaches the page at run time - the `/prompt`
+  answer and the frames to the edge - because the page hands it to the engine. Hiding that would need the edge to inject it on
+  the signalling relay (§2.24); not done.
+- **The rig audits the Network tab:** every response body and WebSocket frame of a session, scanned the same way
+  (`network-audit.json`, names and counts only).
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 

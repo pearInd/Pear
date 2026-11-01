@@ -567,7 +567,8 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
      sheds before FRONT_CLOSURE_LOCK (P.HIGH) or the anchor (P.CORE) ever would - see
      imageOnlyPrompt()'s SIZE-OVERRIDE RESTORE comment in app.js. */
   check("the size-override modifier is wired back in, at P.MED",
-    /\[P\.MED,\s*fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],/.test(codeOnly),
+    /* ...with, on a TEST request only, its compact form as a third element (THE SIZE ALWAYS REACHES THE WIRE, 2026-11-01). */
+    /\[P\.MED,\s*fitSentence\(bottoms \? "lower_body" : "upper_body"\)(,[\s\S]{0,260}?compactFitSentence\(bottoms \? "lower_body" : "upper_body"\)\] : \[\]\))?\],/.test(codeOnly),
     "documented in IMAGE_ONLY_PROMPT's retirement list, and in imageOnlyPrompt()'s own SIZE-OVERRIDE RESTORE comment");
 }
 

@@ -12,6 +12,8 @@ import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 const [product, clip, out, ...flags] = process.argv.slice(2);
 const DRY = flags.includes("--dry");
 const NO_FABRIC = flags.includes("--no-fabric");
+/* --size=<label>: the size button the rig clicks in the room before go-live (the shopper's own size choice - getSizeDelta). */
+const SIZE = (flags.find((f) => f.startsWith("--size=")) || "").slice(7) || null;
 mkdirSync(out, { recursive: true });
 const log = (...a) => { const l = `[rig ${new Date().toISOString().slice(11, 23)}] ${a.join(" ")}`; console.log(l); };
 
@@ -82,6 +84,40 @@ await context.addInitScript(() => {
 const page = await context.newPage();
 page.on("pageerror", (e) => log("pageerror", e.message.slice(0, 160)));
 const prompts = [];
+/* THE NETWORK TAB, AUDITED (2026-11-01): every response body and WebSocket frame the page sees, scanned for anything
+   shaped like a key, an engine/vendor word and the prompt's own wording - names and counts only, never a value. */
+const NET_SECRETS = [["google api key", /AIza[0-9A-Za-z\-_]{35}/], ["jwt", /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/],
+  ["secret key", /\bsk[-_](?:live_|test_|proj-)?[A-Za-z0-9]{20,}/], ["raw ephemeral token", /\bek_[A-Za-z0-9]{12,}/],
+  ["supabase key", /\bsb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}/], ["private key", /-----BEGIN [A-Z ]*PRIVATE KEY-----/]];
+const NET_WORDS = /\b(decart|lucy|gemini|generativelanguage|mediapipe|livekit)\b/i;
+const NET_PROMPT = /Drape and fit the EXACT|Strictly preserve|REAR\/BACK/;
+const net = { responses: 0, frames: 0, secrets: {}, words: {}, promptIn: {}, token: null };
+const netScan = (where, text) => {
+  if (typeof text !== "string" || !text) return;
+  for (const [name, re] of NET_SECRETS) if (re.test(text)) net.secrets[`${name} @ ${where}`] = (net.secrets[`${name} @ ${where}`] || 0) + 1;
+  const w = text.match(NET_WORDS); if (w) net.words[`${w[0].toLowerCase()} @ ${where}`] = (net.words[`${w[0].toLowerCase()} @ ${where}`] || 0) + 1;
+  if (NET_PROMPT.test(text)) net.promptIn[where] = (net.promptIn[where] || 0) + 1;
+};
+page.on("response", async (r) => {
+  try {
+    const u = new URL(r.url());
+    if (!/pear-ai\.io$/.test(u.host)) return;
+    const type = r.headers()["content-type"] || "";
+    if (!/json|text|javascript/.test(type)) return;
+    const body = await r.text();
+    net.responses++;
+    netScan(`${u.host}${u.pathname.replace(/[0-9a-f]{12,}/g, "*")}`, body);
+    if (/realtime-token|tryon/.test(u.pathname)) {
+      try { const j = JSON.parse(body); net.token = { keys: Object.keys(j), sealed: typeof j.t === "string" && j.t[0] === "p", tLen: (j.t || "").length,
+        lifetimeS: j.exp ? Math.round((new Date(typeof j.exp === "number" && j.exp < 1e12 ? j.exp * 1000 : j.exp) - Date.now()) / 1000) : null }; } catch (_) {}
+    }
+  } catch (_) {}
+});
+page.on("websocket", (ws) => {
+  const host = (() => { try { return new URL(ws.url()).host + new URL(ws.url()).pathname.replace(/\/k\/[^/]+/, "/k/*"); } catch (_) { return "ws"; } })();
+  const seen = (f) => { net.frames++; netScan(`ws ${host}`, typeof f.payload === "string" ? f.payload : ""); };
+  ws.on("framesent", seen); ws.on("framereceived", seen);
+});
 /* The rear/front mask's band requests (/api/garment-box): when each was asked and answered (epoch ms), so a run shows
    whether the mask was ready before go-live (THE BAND IS WAITED FOR UNTIL GO-LIVE, CLAUDE.md §7.16). */
 const boxes = new Map();
@@ -145,9 +181,24 @@ if (DRY) {
       clipAt: Math.round(window.__rigClip.currentTime * 1000), over100: lag.filter((x) => x > 100).length, top: lag.slice(-4).map(Math.round), firstBig: window.__rig.lag.slice(l0).findIndex((x) => x > 300) * 50 };
   });
   log("dry pace", JSON.stringify(pace)); writeFileSync(`${out}/pace.json`, JSON.stringify(pace));
+  writeFileSync(`${out}/network-audit.json`, JSON.stringify(net, null, 1));
+  log("network audit", JSON.stringify({ responses: net.responses, frames: net.frames, secrets: net.secrets, words: net.words, promptIn: net.promptIn }));
   log("dry run done - nothing billed"); await browser.close(); process.exit(0);
 }
 
+let sizeInfo = null;
+if (SIZE) {
+  sizeInfo = await room.evaluate((want) => {
+    const btns = [...document.querySelectorAll(".pear-sz-btn")];
+    const before = btns.filter((b) => /active|is-on|selected|chosen/.test(b.className)).map((b) => b.dataset.sz);
+    const b = btns.find((x) => x.dataset.sz === want);
+    if (b) b.click();
+    const after = btns.filter((x) => /active|is-on|selected|chosen/.test(x.className)).map((x) => x.dataset.sz);
+    return { offered: btns.map((x) => x.dataset.sz), recommendedOrActiveBefore: before, clicked: !!b, activeAfter: after };
+  }, SIZE);
+  log("size", JSON.stringify(sizeInfo));
+  if (!sizeInfo.clicked) { log("size", SIZE, "is not offered - stopping before go-live, nothing billed"); await browser.close(); process.exit(2); }
+}
 await room.waitForFunction(() => !document.getElementById("captureBtn").disabled, null, { timeout: 60000 });
 const t0 = Date.now();
 await click("#captureBtn");
@@ -182,6 +233,8 @@ await room.waitForTimeout(8000);   // the session ends and posts its TEST record
 const boxTimes = [...boxes.values()].map((b) => ({ photo: b.url, askedBeforeGoLiveMs: goLiveAt - b.asked,
   answeredBeforeGoLiveMs: b.answered ? goLiveAt - b.answered : null, tookMs: b.answered ? b.answered - b.asked : null, error: b.error || null }));
 log("boxes", JSON.stringify(boxTimes));
-writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, noFabric: NO_FABRIC, boxTimes, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
+writeFileSync(`${out}/network-audit.json`, JSON.stringify(net, null, 1));
+log("network audit", JSON.stringify({ responses: net.responses, frames: net.frames, secrets: net.secrets, words: net.words, promptIn: net.promptIn, token: net.token }));
+writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, noFabric: NO_FABRIC, size: SIZE, sizeInfo, boxTimes, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
 log("frames", frames.length, "prompts seen", prompts.length);
 await browser.close();

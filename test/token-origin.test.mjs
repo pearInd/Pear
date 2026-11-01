@@ -51,6 +51,24 @@ const L = ["https://app.pear-ai.io", "https://pear-git-old-branch-pear2.vercel.a
   await t.trySDK(["https://pear-git-hide-main-v2-pear2.vercel.app"]);
   check("no DECART_ALLOWED_ORIGINS at all - still unscoped, as main (nothing is narrowed)", !("allowedOrigins" in t.seen[0]));
 }
+{
+  /* NEVER BARE (2026-11-01): a scoped create that fails is retried with the lifetime and the model, never unscoped. */
+  const seen = [];
+  let first = true;
+  const decart = { tokens: { create: async (opts) => { seen.push(opts); if (first) { first = false; throw new Error("bad origins"); } return { apiKey: "ek_fake" }; } } };
+  const api = new Function("decart", "TOKEN_TTL", "VTON_MODEL", "ALLOWED_ORIGINS", "console",
+    src + "\nreturn { trySDK };")(decart, 300, "lucy-vton-3.5", L, { log() {}, warn() {}, error() {} });
+  await api.trySDK();
+  check("a failed scoped create is retried WITH its lifetime and model - never a bare create()",
+    seen.length === 2 && seen[1] && seen[1].expiresIn === 300 && JSON.stringify(seen[1].allowedModels) === '["lucy-vton-3.5"]',
+    JSON.stringify(seen));
+  check("...and no bare tokens.create() call is left in the token tiers", !/tokens\.create\(\s*\)/.test(SRV));
+}
+{
+  const m = SRV.match(/const TOKEN_TTL\s*=\s*Math\.min\((\d+), Math\.max\((\d+), Number\(process\.env\.DECART_TOKEN_TTL\) \|\| (\d+)\)\);/);
+  check("the browser's token lives at most 5 minutes (an environment value above it is clamped)",
+    !!m && Number(m[1]) <= 300 && Number(m[3]) <= 300 && Number(m[2]) >= 30, m && m[0]);
+}
 check("mintToken() passes the page's own origin into the waterfall",
   /const own = ownPageOrigin\(req\);\s*const token = await mintTokenWaterfall\(own \? \[own\] : \[\]\);/.test(SRV));
 console.log("");
