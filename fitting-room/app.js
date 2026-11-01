@@ -7804,6 +7804,40 @@ async function normalizeToSupportedImage(blob) {
   return blob;   // better to send the original than nothing
 }
 
+/* ── THE HEAVY REFERENCE (2026-11-01, the matrix's zip jacket - TEST sessions only until measured) ──────────────────────
+   A garment with no rear photo gets one generated (synthesizeBackView, server.js), and it comes back a PNG: 1,594 KB for
+   FOX 4327481085, where a store photo is 50-110 KB. It went to the engine as it was - the prime held the uplink for 4s and
+   failed (prime-fail 4012ms), and the render froze on one frame for the whole window (out-stats: 2 fps, a 3.1s stall), the
+   shopper turning under a still picture. An OPAQUE PNG over REF_HEAVY_BYTES goes as a JPEG of the same pixels instead:
+   same size, same picture, a fraction of the bytes. A PNG with a transparent pixel is a cut-out and keeps its PNG
+   (normalizeToSupportedImage's rule: a JPEG paints its background black); a JPEG that saves under a fifth is not worth it.
+   Never fails - the original on any error. A TEST record logs `ref-light`. */
+const REF_HEAVY_BYTES = 400 * 1024;
+async function lightenHeavyReference(blob) {
+  if (!blob || !(blob.size > REF_HEAVY_BYTES) || !/^image\/png$/i.test(blob.type || "")) return blob;
+  if (!(typeof traceEnabled === "function" && traceEnabled())) return blob;
+  const note = (o) => { if (typeof traceOrient === "function") traceOrient("ref-light", { from: Math.round(blob.size / 1024), ...o }); };
+  try {
+    const bmp = await createImageBitmap(blob);
+    const w = bmp.width, h = bmp.height;
+    const off = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(w, h)
+      : Object.assign(document.createElement("canvas"), { width: w, height: h });
+    const ctx = off.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close?.();
+    const px = ctx.getImageData(0, 0, w, h).data;
+    for (let i = 3; i < px.length; i += 4 * 7) if (px[i] < 255) { note({ did: "cutout" }); return blob; }
+    const out = off.convertToBlob ? await off.convertToBlob({ type: "image/jpeg", quality: 0.92 })
+      : await new Promise((res) => off.toBlob(res, "image/jpeg", 0.92));
+    if (!out || !out.size || out.size > blob.size * 0.8) { note({ did: "kept", to: out ? Math.round(out.size / 1024) : null }); return blob; }
+    note({ did: "jpeg", to: Math.round(out.size / 1024), w, h });
+    return out;
+  } catch (e) {
+    note({ did: "error", m: String(e?.message || e).slice(0, 80) });
+    return blob;
+  }
+}
+
 /* Cheap "is this basically a solid color?" check - catches a broken-image/gray
    placeholder graphic that fetches and decodes perfectly fine (so every check above
    this one passes) but has no real garment texture in it: a bad classification, or a
@@ -8237,6 +8271,9 @@ function garmentBlobCached(url) {
       if (normalized && bandJob && typeof maskReferenceBand === "function") {
         normalized = await maskReferenceBand(normalized, url, await bandJob);
       }
+      /* THE HEAVY REFERENCE (TEST sessions only): an opaque PNG over REF_HEAVY_BYTES - a generated rear - goes as a JPEG
+         of the same pixels. typeof-guarded: suites run this standalone. */
+      if (normalized && typeof lightenHeavyReference === "function") normalized = await lightenHeavyReference(normalized);
       /* THE ENGINE-SPEED EXPERIMENT's "small" mode (TEST sessions only). typeof-guarded: suites run this standalone. */
       const blob = typeof EXP_SMALL !== "undefined" && EXP_SMALL && typeof expDownscale === "function" ? await expDownscale(normalized) : normalized;
       /* Encoded NOW, while nothing is waiting on it, so a swap that sends this Blob later does no

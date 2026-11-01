@@ -2104,6 +2104,34 @@ a new session starts clear (connectRealtime). `reveal-settle` §1d replays it (t
 reveal opens at the ceiling with the back on its way; with it, after the back, the front and the front's render switch; a back
 that never comes is let go at 11s; a 0.3s back reveals as before). Not yet measured live: a slow-ack session is the check.
 
+### 7.20 The garment matrix - a skirt, a button-down, a zip jacket (2026-11-01, rig x1-x3) - two fixes, TEST only, NOT YET MEASURED
+Asked: "run a short matrix - shirt, pants, dress, coat, front and back". FOX sells no dress and no coat; the rig (§7.15, synthetic
+product pages, the white-tee / PEAK clips, 178cm/74kg) ran the three garment kinds not yet measured, one billed session each:
+- **x1, the maxi skirt (2501940200):** rendered as WIDE BLACK TROUSERS through the whole window, front and back. The photos are a
+  plain ankle-length skirt; the prompt said "the EXACT static pants/shorts", fitted to the "leg profile" - two trouser tokens
+  (the tuxedo mechanism). **Fixed for TEST requests:** `SKIRT_CATEGORY_ANCHOR` / `SKIRT_BACK_ANCHOR` / `SKIRT_PLAIN_BACK_ANCHOR`
+  (lib/prompts.js), selected by `isSkirtGarment()` on positive evidence (a skirt word and no leg word - culottes, a skort and
+  "skirt shorts" keep the pants/shorts anchor); the only change is "pants/shorts" -> "skirt" and "leg profile" -> "hips", each
+  anchor 14 chars shorter. A shopper's request is byte-identical (`trace:prompt --json`, `prompt-engine` §1); `skirt-anchor`
+  pins it. **Left as it is, deliberately:** the lower-body size sentence still says "clean break at the ankle" (every rung of
+  that ladder is trouser-shaped) - one change at a time; if the skirt still comes out as trousers, that sentence is the next
+  suspect. Fingerprint 6833aa50d5c42eb1: **a Worker deploy** before the room relies on the edge's /prompt.
+- **x3, the zip jacket (4327481085):** three front photos, no back, so the server generated one (`synthesizeBackView`) - a
+  **1,594 KB PNG** (store photos are 50-110 KB). The prime held the uplink 4s and failed; the render froze on ONE frame for the
+  whole window (2 fps out, a 3.1s stall) - the jacket itself was never seen. **Fixed for TEST sessions:**
+  `lightenHeavyReference()` (app.js, in `garmentBlobCached()` after the rear-photo mask): an OPAQUE PNG over 400 KB goes as a
+  JPEG of the same pixels (0.92); a cut-out keeps its PNG. On the real generated rear: 1,594 -> 116 KB, 832x1248 kept, mean pixel
+  difference 1/255, 22 ms. `heavy-reference` pins it; a TEST record logs `ref-light`.
+- **x2, the button-down (2352920100):** no reveal - the engine closed the signalling socket (1011) at 18.8s, after the prime was
+  acknowledged. The engine's failure (`engine-failure-modes`), not the garment.
+- **First visits are slow:** x1 revealed 78s after the page opened (the room's preload 35.8s), x3 94s (preload 47.8s: the
+  classifier, then a fresh rear generation ~27s, then the 1.6 MB download) - every garment-box request timed out at 12s
+  (`whole:no-answer`, nothing masked). A second visit reads the caches. Pre-generating rears in the scanner would remove it; not done.
+- **Also seen:** the zip jacket's title ("ג'קט רוכסן") does not match `STRUCTURED_TOP_TOKENS` (it knows ז'קט, not ג'קט, and no
+  "רוכסן"), so its front ships without FRONT_CLOSURE_LOCK - not changed (the render was frozen, nothing to judge it by).
+- **The check (2 billed sessions):** the skirt again - a skirt, front and back, frame by frame; the jacket again - `ref-light`
+  1594 -> ~116, the prime acknowledged, the output moving, the jacket on the body. Then both go to shoppers (and the Worker).
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:
