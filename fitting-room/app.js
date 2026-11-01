@@ -2975,6 +2975,8 @@ async function runPhotoFit(source) {
   const items = look ? [look.top, look.bottom] : (activeItem ? [activeItem] : []);
   if (!items.length) { toast(t("photoFitNoGarment")); return; }
   photoFitBusy = true;
+  /* THE BAND IS WAITED FOR UNTIL GO-LIVE: a photo fit waits on the garment photo too - a band still on its way is let go. */
+  if (typeof hurryReferenceBands === "function") hurryReferenceBands();
   clearPhotoFit();
   const forLook = photoFitLookKey();   // the garment(s) this photo is being made for
   const busy = $("photoFitBusy"); if (busy) busy.hidden = false;
@@ -3019,6 +3021,7 @@ async function runPhotoFit(source) {
     if (busy) busy.hidden = true;
     card().classList.remove("is-photo-busy", "is-photo-processing");
     photoFitBusy = false;
+    if (typeof relaxReferenceBands === "function" && !isLive()) relaxReferenceBands();   // back in the preview
   }
 
   if (blocked) { toast(t(blocked)); return; }
@@ -8344,9 +8347,49 @@ function garmentBlobIfWarm(url) {
    today, minus the person. The band comes from the server (GET /api/garment-box - never a pose model
    in the browser, CLAUDE.md §2.15), asked when the garment is chosen so it overlaps the download.
    IT ABSTAINS - the photo goes exactly as before - on no person (a packshot), an unsure box, a band
-   that fills the photo, no answer within REF_BAND_TIMEOUT_MS, a re-encode over 1.25x the photo, or
-   any failure. ?ref_mask=0 is the old behaviour; a TEST record carries what was done (ctx.ref). */
+   that fills the photo, no answer by go-live (THE BAND IS WAITED FOR UNTIL GO-LIVE, below), a re-encode
+   over 1.25x the photo, or any failure. ?ref_mask=0 is the old behaviour; a TEST record carries what was done (ctx.ref). */
 const REF_BAND_TIMEOUT_MS = 3500;
+/* ── THE BAND IS WAITED FOR UNTIL GO-LIVE (2026-11-01) ───────────────────────────────────────────────────────────────────
+   The band is asked the moment the garment is chosen (garmentBlobCached, from prewarmOrientationAssets), and the reference
+   build waited for it REF_BAND_TIMEOUT_MS from that ask - then built the photo WHOLE and cached that Blob for the session.
+   /api/garment-box answers in 1.9-5.2s when its memo is cold (a new instance, every deploy - measured 2026-11-01), so on a
+   product's first visit the rear photo went unmasked though the shopper spent 10-15s on the size screen and the camera
+   guide before go-live (TEST records 2026-11-01: ctx.ref "whole: no-answer" in four of six sessions). Now the request may
+   take REF_BAND_FETCH_MS and the reference build waits for it UNTIL GO-LIVE; from go-live (hurryReferenceBands) a band still
+   on its way gets the old bound - REF_BAND_TIMEOUT_MS from its ask, so in practice it is let go at once - and the photo goes
+   whole exactly as before. Go-live never waits longer than it did. Back in preview (relaxReferenceBands) a newly chosen
+   garment may wait again. A TEST record's ctx.ref says "late" for a band let go at go-live, "no-answer" for a failed ask. */
+const REF_BAND_FETCH_MS = 12000;   // the ask itself (the server gives the model 15s)
+let _refBandHurry = false;         // true from go-live (or a photo fit) until the shopper is back in the preview
+const _refBandWaiters = new Set();
+
+/** The band job as the reference build waits for it - see THE BAND IS WAITED FOR UNTIL GO-LIVE. Never rejects. */
+function refBandWait(job, hint, capMs = REF_BAND_TIMEOUT_MS) {
+  if (!job) return job;
+  const startedAt = typeof job.startedAt === "number" ? job.startedAt : Date.now();
+  return new Promise((resolve) => {
+    let done = false, timer = null;
+    const finish = (v, late) => {
+      if (done) return;
+      done = true;
+      _refBandWaiters.delete(w);
+      if (timer) clearTimeout(timer);
+      if (late) refMaskNote({ did: "whole", why: "late", ...(hint && hint.side ? { side: hint.side } : {}) });
+      resolve(v);
+    };
+    const w = { release() { if (!done && !timer) timer = setTimeout(() => finish(null, true), Math.max(0, capMs - (Date.now() - startedAt))); } };
+    Promise.resolve(job).then((v) => finish(v, false), () => finish(null, false));
+    if (_refBandHurry) w.release(); else _refBandWaiters.add(w);
+  });
+}
+/** Go-live (or a photo fit): every reference still waiting on its band gets the old bound from here on. */
+function hurryReferenceBands() {
+  _refBandHurry = true;
+  for (const w of [..._refBandWaiters]) w.release();
+}
+/** Back in the preview: a reference built from now on may wait for its band again. */
+function relaxReferenceBands() { _refBandHurry = false; }
 const _refBandJobs = new Map();   // `${canonical url}|${region}` -> Promise<{y0,y1}|null>
 const _refMaskLog = [];           // what the mask did, numbers only - read into a TEST record's ctx
 
@@ -8402,12 +8445,12 @@ function referenceBackBand(url) {
   const hint = referenceBackHint(url) || (typeof referenceFrontHint === "function" ? referenceFrontHint(url) : null);
   if (!hint || typeof fetch !== "function" || typeof location === "undefined") return null;
   const key = `${(typeof canonicalImageUrl === "function" && canonicalImageUrl(url)) || url}|${hint.region}${hint.side === "front" ? "|front" : ""}`;
-  if (_refBandJobs.has(key)) return _refBandJobs.get(key);
+  if (_refBandJobs.has(key)) return refBandWait(_refBandJobs.get(key), hint);
   const job = (async () => {
     try {
       const q = `image_url=${encodeURIComponent(url)}&region=${hint.region}&v=4`;
       const r = await fetch(`${location.origin}/api/garment-box?${q}`,
-        typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(REF_BAND_TIMEOUT_MS) } : {});
+        typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(REF_BAND_FETCH_MS) } : {});
       if (!r.ok) { _refBandJobs.delete(key); refMaskNote({ did: "whole", why: "http-" + r.status, ...(hint.side ? { side: hint.side } : {}) }); return null; }
       const j = await r.json();
       const b = j && j.band;
@@ -8430,8 +8473,9 @@ function referenceBackBand(url) {
       return null;
     }
   })();
+  job.startedAt = Date.now();
   _refBandJobs.set(key, job);
-  return job;
+  return refBandWait(job, hint);
 }
 
 /** The rows to paint on an image `h` tall - [0, top) and [bottom, h) - or null when there is
@@ -18106,6 +18150,8 @@ async function goLive() {
        cache hit) and is the missing wait when it did not. */
     const wantedAutoView = currentAngle === AUTO_ANGLE;
     $("scanOverlay").hidden = false;
+    /* THE BAND IS WAITED FOR UNTIL GO-LIVE: a band still on its way is let go now - the preload never waits for it. */
+    if (typeof hurryReferenceBands === "function") hurryReferenceBands();
     const preloadAt = Date.now();
     const preload = await preloadGarmentAssets();
     if (typeof traceOrient === "function") traceOrient("preload", { ok: !!preload.ok, back: !!preload.hasBack, ms: Date.now() - preloadAt });
@@ -18294,6 +18340,7 @@ async function goLive() {
          garment that would not load, a failed connect) stops with it. */
       if (typeof cancelGoCountdown === "function") cancelGoCountdown();
       _liveTimerPlan = null;
+      if (typeof relaxReferenceBands === "function") relaxReferenceBands();   // back in the preview
     }
     busy = false;
     if (!isLive()) $("captureBtn").disabled = !localStream;
@@ -18321,6 +18368,7 @@ function stopLive() {
   } catch (_) {}
 
   teardown();                          // rtClient.disconnect() → billing stops now (also hides #aiVideo)
+  if (typeof relaxReferenceBands === "function") relaxReferenceBands();   // back in the preview (THE BAND IS WAITED FOR UNTIL GO-LIVE)
   card().classList.remove("show-live");
   stopLowerBodyGuard();
   stopPresenceWatcher();

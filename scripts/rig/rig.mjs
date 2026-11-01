@@ -82,6 +82,12 @@ await context.addInitScript(() => {
 const page = await context.newPage();
 page.on("pageerror", (e) => log("pageerror", e.message.slice(0, 160)));
 const prompts = [];
+/* The rear/front mask's band requests (/api/garment-box): when each was asked and answered (epoch ms), so a run shows
+   whether the mask was ready before go-live (THE BAND IS WAITED FOR UNTIL GO-LIVE, CLAUDE.md §7.16). */
+const boxes = new Map();
+page.on("request", (q) => { if (/\/api\/garment-box\?/.test(q.url())) boxes.set(q, { asked: Date.now(), url: q.url().replace(/^.*image_url=([^&]+).*region=(\w+).*$/, (m, u, g) => decodeURIComponent(u).split("/").pop() + "|" + g) }); });
+page.on("requestfinished", (q) => { const b = boxes.get(q); if (b) b.answered = Date.now(); });
+page.on("requestfailed", (q) => { const b = boxes.get(q); if (b) { b.failed = Date.now(); b.error = (q.failure() || {}).errorText; } });
 page.on("response", async (r) => {
   const u = r.url();
   if (/\/(api\/)?prompt$/.test(new URL(u).pathname) && r.request().method() === "POST") {
@@ -129,7 +135,7 @@ const pre = await room.evaluate(() => {
     capture: !document.getElementById("captureBtn").disabled };
 });
 log("preview", JSON.stringify(pre));
-writeFileSync(`${out}/preview.json`, JSON.stringify({ pre, prompts }, null, 1));
+writeFileSync(`${out}/preview.json`, JSON.stringify({ pre, prompts, boxes: [...boxes.values()] }, null, 1));
 await page.screenshot({ path: `${out}/preview.png` });
 if (DRY) {
   const pace = await room.evaluate(async () => {
@@ -145,6 +151,7 @@ if (DRY) {
 await room.waitForFunction(() => !document.getElementById("captureBtn").disabled, null, { timeout: 60000 });
 const t0 = Date.now();
 await click("#captureBtn");
+const goLiveAt = Date.now();
 log("GO LIVE pressed");
 /* The turn plays from the reveal, and every 100ms the output and the input are grabbed (both at 320 wide) for 7s. */
 await room.waitForFunction(() => document.querySelector(".camera-card.show-live"), null, { timeout: 60000 });
@@ -172,6 +179,9 @@ for (const f of frames) {
 }
 writeFileSync(`${out}/frames.json`, JSON.stringify(frames.map((f) => ({ t: f.t, clipT: f.clipT }))));
 await room.waitForTimeout(8000);   // the session ends and posts its TEST record
-writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, noFabric: NO_FABRIC, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
+const boxTimes = [...boxes.values()].map((b) => ({ photo: b.url, askedBeforeGoLiveMs: goLiveAt - b.asked,
+  answeredBeforeGoLiveMs: b.answered ? goLiveAt - b.answered : null, tookMs: b.answered ? b.answered - b.asked : null, error: b.error || null }));
+log("boxes", JSON.stringify(boxTimes));
+writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, noFabric: NO_FABRIC, boxTimes, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
 log("frames", frames.length, "prompts seen", prompts.length);
 await browser.close();

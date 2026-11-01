@@ -300,5 +300,66 @@ console.log("\n── §8 both garments asked, the region by POSITION (v3) ─�
   check("§8.5 the prompt asks for both boxes and names the product's region", /upper_box_2d/.test(p) && /lower_box_2d/.test(p) && /LOWER body/.test(p));
 }
 
+console.log("\n── §9 THE BAND IS WAITED FOR UNTIL GO-LIVE (2026-11-01) ──");
+{
+  /* The band span, run standalone (as §6 does), with a small cap so real timers stay quick. */
+  const span = APP.slice(APP.indexOf("const REF_BAND_TIMEOUT_MS"), APP.indexOf("/** The rows to paint on an image"));
+  const W = new Function(span + "\nreturn { refBandWait, hurryReferenceBands, relaxReferenceBands, _refMaskLog, REF_BAND_TIMEOUT_MS, REF_BAND_FETCH_MS };")();
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const BAND = { y0: 0.34, y1: 0.9 };
+  const slowJob = (ms) => { const j = new Promise((r) => setTimeout(() => r(BAND), ms)); j.startedAt = Date.now(); return j; };
+  const CAP = 60;
+
+  W.relaxReferenceBands();
+  const t0 = Date.now();
+  const a = await W.refBandWait(slowJob(150), { region: "top" }, CAP);
+  check("§9.1 in the preview a band slower than the bound is WAITED FOR - the photo gets its mask (was: sent whole)",
+    a === BAND && Date.now() - t0 >= 140, JSON.stringify({ a, ms: Date.now() - t0 }));
+
+  W.hurryReferenceBands();
+  const t1 = Date.now();
+  const b = await W.refBandWait(slowJob(150), { region: "top", side: "front" }, CAP);
+  const tb = Date.now() - t1;
+  check("§9.2 from go-live a band still on its way gets the OLD bound from its ask - then null, the photo whole",
+    b === null && tb >= CAP - 5 && tb < 140, JSON.stringify({ b, ms: tb }));
+  const note = W._refMaskLog[W._refMaskLog.length - 1];
+  check("§9.3 ...and the record says 'late' (with its side), not 'no-answer'", note && note.why === "late" && note.side === "front", JSON.stringify(note));
+  const fast = await W.refBandWait(slowJob(10), { region: "top" }, CAP);
+  check("§9.4 ...a band that comes within the bound still masks", fast === BAND);
+
+  W.relaxReferenceBands();
+  const old = slowJob(400);
+  await sleep(120);                                   // the ask started long before go-live
+  const pending = W.refBandWait(old, { region: "top" }, CAP);
+  const t2 = Date.now();
+  W.hurryReferenceBands();                            // go-live: the waiter is released at once (its bound is long gone)
+  const c = await pending;
+  check("§9.5 a band asked long before go-live and still out is let go AT ONCE when go-live begins - go-live never waits longer",
+    c === null && Date.now() - t2 < 40, JSON.stringify({ c, ms: Date.now() - t2 }));
+
+  W.relaxReferenceBands();
+  const d = await W.refBandWait(slowJob(120), { region: "top" }, CAP);
+  check("§9.6 back in the preview, a newly chosen garment waits for its band again", d === BAND);
+  check("§9.7 a failed ask resolves null, never rejects",
+    (await W.refBandWait(Object.assign(Promise.reject(new Error("x")), { startedAt: Date.now() }), { region: "top" }, CAP)) === null);
+  check("§9.8 the go-live bound is still 3.5s; the ask itself may take 12s",
+    W.REF_BAND_TIMEOUT_MS === 3500 && W.REF_BAND_FETCH_MS === 12000 &&
+    /AbortSignal\.timeout\(REF_BAND_FETCH_MS\)/.test(span) && /return refBandWait\(job, hint\);/.test(span) &&
+    /if \(_refBandJobs\.has\(key\)\) return refBandWait\(_refBandJobs\.get\(key\), hint\);/.test(span));
+
+  const goLiveSrc = APP.slice(APP.indexOf("async function goLive() {"), APP.indexOf("\nfunction stopLive() {"));
+  const iHurry = goLiveSrc.indexOf("hurryReferenceBands();"), iPreload = goLiveSrc.indexOf("await preloadGarmentAssets()");
+  check("§9.9 go-live lets the bands go BEFORE the preload awaits the references", iHurry !== -1 && iHurry < iPreload);
+  check("§9.10 a go-live that opened no session is back in the preview",
+    /if \(!isLive\(\)\) \{[\s\S]{0,600}relaxReferenceBands\(\);[\s\S]{0,80}\}\s*\n\s*busy = false;/.test(goLiveSrc));
+  const stopSrc = APP.slice(APP.indexOf("\nfunction stopLive() {"), APP.indexOf("\n}\n", APP.indexOf("\nfunction stopLive() {")));
+  check("§9.11 the session's end is back in the preview", stopSrc.indexOf("relaxReferenceBands()") > stopSrc.indexOf("teardown();"));
+  const photoSrc = APP.slice(APP.indexOf("async function runPhotoFit(source) {"), APP.indexOf("\n}\n", APP.indexOf("async function runPhotoFit(source) {")));
+  check("§9.12 a photo fit lets the bands go too, and is back in the preview after it",
+    photoSrc.indexOf("hurryReferenceBands()") !== -1 && photoSrc.indexOf("hurryReferenceBands()") < photoSrc.indexOf("garmentBlobCached(") &&
+    /relaxReferenceBands\(\);/.test(photoSrc));
+  W.relaxReferenceBands();
+}
+
 console.log(fails === 0 ? "\ngarment-box: OK" : `\ngarment-box: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

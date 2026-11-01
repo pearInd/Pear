@@ -2026,6 +2026,22 @@ colour beside the product photo), `peek.mjs` (what a clip WEARS, before spending
   comes from the origin: same code, same text, prefetched before go-live. A dry run proves the rewrite (prompts with the colour
   in the request and no `Fabric:` in the answer) before the credit is spent.
 
+### 7.16 The mask's band is waited for until go-live (2026-11-01, Layer B)
+Four of the day's six rig sessions sent the rear (and the top's front) photo WHOLE (`ctx.ref` "whole: no-answer"): the room
+asks `/api/garment-box` the moment the garment is chosen, but the reference build gave the answer REF_BAND_TIMEOUT_MS (3.5s)
+from the ask and then cached the whole photo for the session - and a cold answer takes 1.9-5.2s (a new instance, every
+deploy: the memo and the CDN cache start empty). The shopper spends 10-15s on the size screen and the camera guide first.
+- **THE BAND IS WAITED FOR UNTIL GO-LIVE (`app.js`, in the band span):** the ask may take `REF_BAND_FETCH_MS` (12s) and
+  `refBandWait()` waits for it while the shopper is in the preview; `hurryReferenceBands()` at go-live (before the preload
+  awaits the references) and at a photo fit gives any band still out the OLD bound - 3.5s from its ask, so in practice it is
+  let go at once - and the photo goes whole as before: **go-live never waits longer than it did**. `relaxReferenceBands()`
+  when the session ends, when a go-live opened no session, and after a photo fit. A session that ends another way keeps the
+  old bound (today's behaviour). A TEST record's `ctx.ref` says `late` for a band let go at go-live.
+- **Pinned:** `garment-box` §9 on real timers (waited for in the preview; the old bound from go-live; let go at once when the
+  ask is old; waiting again after the session; a failed ask is null) and where the calls sit; starting in the hurried state
+  (the old behaviour) fails §9.1. `trace:prompt` unchanged (no prompt file touched); unit, build, `qa:visual` 40/40.
+- **The rig records it:** `scripts/rig/rig.mjs` logs every `/api/garment-box` ask and answer against the go-live press.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:
