@@ -1427,7 +1427,7 @@ or patterned garment give the colour covering the most area. If the garment is n
 legible enough to sample, answer "".
 
 Respond ONLY with JSON matching this schema:
-{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0,"text_ocr":"<garment lettering, verbatim, or empty>","is_true_back_view":true|false,"has_graphic":true|false,"primary_color_hex":"#rrggbb"}`;
+{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0,"primary_color_hex":"#rrggbb","has_graphic":true|false,"is_true_back_view":true|false,"text_ocr":"<garment lettering, verbatim, or empty>","cue":"<the single cue that decided it, max 12 words>"}`;
 
 /* ── THE WHOLE REPLY (2026-10-31) ─────────────────────────────────────────────────────────
    The model can split one JSON answer over several `parts` (and a thinking model adds parts
@@ -1436,7 +1436,7 @@ Respond ONLY with JSON matching this schema:
    FRONT with no colour, no lettering, at the current prompt version, so it was never asked
    again and the room's colour lock abstained on that product for good. Joins every non-thought
    text part; a body that still does not parse is cut to its outermost {...} before giving up.
-   Pure: classify-reply.test.mjs slices it from this banner to `async function classifyFrontBackDetailed(`. */
+   Pure: classify-reply.test.mjs slices it from this banner to the `Classify one image` comment. */
 function geminiReplyText(data) {
   const parts = data?.candidates?.[0]?.content?.parts;
   const text = Array.isArray(parts)
@@ -1448,7 +1448,20 @@ function parseGeminiJson(text) {
   try { return JSON.parse(text); } catch (_) { /* fall through */ }
   const a = text.indexOf("{"), b = text.lastIndexOf("}");
   if (a !== -1 && b > a) { try { return JSON.parse(text.slice(a, b + 1)); } catch (_) { /* fall through */ } }
-  return null;
+  return salvageGeminiFields(text);
+}
+/* A reply cut by the token cap (A BOUNDED ANSWER) is a valid JSON PREFIX: every field before the cut is complete. Keep those
+   - a string only when its closing quote arrived - and nothing else; no `view`, no answer. `cue` is last, so a loop there
+   costs the cue alone. */
+function salvageGeminiFields(text) {
+  if (typeof text !== "string" || text.indexOf("{") === -1) return null;
+  const out = {};
+  const re = /"([a-z_]+)"\s*:\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|true|false|null)\s*(?=[,}])/g;
+  let m;
+  while ((m = re.exec(text))) {
+    try { out[m[1]] = JSON.parse(m[2]); } catch (_) { /* a field that does not decode is not kept */ }
+  }
+  return typeof out.view === "string" ? out : null;
 }
 
 /* Classify one image. Returns the full record - the caller decides what an
@@ -1474,20 +1487,28 @@ async function classifyFrontBackDetailed(imageUrl) {
         // the scanner's crawl and the widget's live call, or the cache and the live
         // session disagree about which image is the back.
         temperature: 0,
+        /* A BOUNDED ANSWER (2026-10-31): a whole verdict is ~120 tokens (4096 leaves room for a thinking model's own). CHICAGO 3108650200's front sent the model into a
+           loop inside `cue` ("...front-fa" then "23 23 23 ..." for 65,656 chars, ~2 minutes, finish MAX_TOKENS) - every
+           visit to that product waited on it. The cap ends a loop in seconds; the order below (and the prompt's template)
+           puts `cue` LAST, so the verdict, the colour and the lettering are out before any loop, and
+           salvageGeminiFields() keeps every field that completed. */
+        maxOutputTokens: 4096,
         responseMimeType: "application/json",
         responseSchema: {
           type: "OBJECT",
           properties: {
             view:                 { type: "STRING", enum: ["front", "back", "uncertain"] },
             confidence:           { type: "NUMBER" },
-            cue:                  { type: "STRING" },
             age_group:            { type: "STRING", enum: ["kids", "adult", "uncertain"] },
             age_group_confidence: { type: "NUMBER" },
-            text_ocr:             { type: "STRING" },
-            is_true_back_view:    { type: "BOOLEAN" },
-            has_graphic:          { type: "BOOLEAN" },
             primary_color_hex:    { type: "STRING" },
+            has_graphic:          { type: "BOOLEAN" },
+            is_true_back_view:    { type: "BOOLEAN" },
+            text_ocr:             { type: "STRING" },
+            cue:                  { type: "STRING" },
           },
+          propertyOrdering: ["view", "confidence", "age_group", "age_group_confidence", "primary_color_hex",
+            "has_graphic", "is_true_back_view", "text_ocr", "cue"],
           /* The three new fields are NOT `required`. A model that omits one must still
              produce a usable front/back verdict: every consumer below treats a missing
              value as "no evidence" and falls through to the behaviour that shipped

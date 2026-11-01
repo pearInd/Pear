@@ -1957,7 +1957,11 @@ d6cd8c3 (§2.47, with the whole camera and an add-nothing clause) and went out w
   was saved as an uncertain FRONT, no colour, no lettering, AT v3: never asked again. Now `geminiReplyText()` joins every
   non-thought part, `parseGeminiJson()` cuts to the outermost object, a non-answer is saved un-versioned (asked again on the
   next visit) and logs its finishReason/part count, and `CLASSIFIER_PROMPT_VERSION` is 4 so the rows cut since the migration
-  are re-asked once. `classify-reply`. Still reading `parts[0]` alone, same risk, not changed here: `lib/garment-box.js`,
+  are re-asked once. **The logs then showed the real shape (finish=MAX_TOKENS, 1 part, 65,656 chars):** the model LOOPS inside
+  `cue` ("...front-fa" then "23 23 23 ..." for ~2 minutes), and re-asking it made every visit to that product wait on the loop.
+  A BOUNDED ANSWER: `maxOutputTokens` 4096, `cue` last (`propertyOrdering` + the prompt's template), and
+  `salvageGeminiFields()` keeps every field completed before a cut - the verdict, colour and lettering come out before the
+  loop. `classify-reply` §1b. Still reading `parts[0]` alone, same risk, not changed here: `lib/garment-box.js`,
   `lib/garment-category.js`, `lib/body-estimate.js`, server.js's size-run call, the scanner.
 - **The check:** a TEST session on PEAK and on the CHICAGO shorts, frame by frame (§7.1) - the colour as the photo, the print
   unchanged, the plain back still plain; `ctx.facts` non-null. Worse on any frame: revert first.
