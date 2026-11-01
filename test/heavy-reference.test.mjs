@@ -1,9 +1,10 @@
-/* THE HEAVY REFERENCE (2026-11-01, TEST sessions only until measured - fitting-room/app.js lightenHeavyReference, CLAUDE.md §7.20).
+/* THE HEAVY REFERENCE (2026-11-01, every session since its measurement - fitting-room/app.js lightenHeavyReference, CLAUDE.md §7.20).
    The matrix's zip jacket has no rear photo; the generated one is a 1,594 KB PNG, and sent as it was the prime held the uplink
    4s and the render froze for the whole window. An opaque PNG over REF_HEAVY_BYTES goes as a JPEG of the same pixels.
    §1 the decision, run on the room's own block with a stub canvas; §2 where it sits in garmentBlobCached().
    Measured on the real image in Chromium (the block sliced the same way): 1,594 KB -> 116 KB, 832x1248 kept, mean pixel
-   difference 1/255, 22 ms. */
+   difference 1/255, 22 ms; on the real engine (y2): 92 KB on the wire, no stall, the jacket on the front. It shipped TEST-only
+   and went to every session after y2 (the owner's call). */
 import { readFileSync } from "node:fs";
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 let fails = 0;
@@ -60,7 +61,9 @@ console.log("\n── §1 the decision ──");
 {
   const r = load({ test: false });
   const big = png(1594);
-  check("§1.7 a shopper's session sends the PNG as before (measure first - CLAUDE.md §7.1)", (await r.lightenHeavyReference(big)) === big && r.events.length === 0);
+  const out = await r.lightenHeavyReference(big);
+  check("§1.7 a shopper's session lightens it too - measured in y2, then every session (the owner's call)",
+    out !== big && out.type === "image/jpeg" && out.size === 120 * 1024, `${out.type} ${out.size}`);
 }
 {
   const r = load({ alpha: 0 });
@@ -88,7 +91,7 @@ console.log("\n── §2 where it sits ──");
     mask !== -1 && light > mask, `${mask} ${light}`);
   check("§2.2 ...typeof-guarded (suites run garmentBlobCached standalone, CLAUDE.md §2.7)",
     /if \(normalized && typeof lightenHeavyReference === "function"\) normalized = await lightenHeavyReference\(normalized\);/.test(cached));
-  check("§2.3 the gate is a TEST session (traceEnabled), read inside the function", /if \(!\(typeof traceEnabled === "function" && traceEnabled\(\)\)\) return blob;/.test(BLOCK));
+  check("§2.3 no session gate: the decision reads the bytes alone (traceEnabled is not in the block)", !/traceEnabled/.test(BLOCK));
 }
 
 console.log(fails === 0 ? "\nheavy-reference: OK" : `\nheavy-reference: ${fails} FAILED`);

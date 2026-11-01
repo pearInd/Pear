@@ -7804,18 +7804,19 @@ async function normalizeToSupportedImage(blob) {
   return blob;   // better to send the original than nothing
 }
 
-/* ── THE HEAVY REFERENCE (2026-11-01, the matrix's zip jacket - TEST sessions only until measured) ──────────────────────
+/* ── THE HEAVY REFERENCE (2026-11-01, the matrix's zip jacket - every session since its measurement) ────────────────────
    A garment with no rear photo gets one generated (synthesizeBackView, server.js), and it comes back a PNG: 1,594 KB for
    FOX 4327481085, where a store photo is 50-110 KB. It went to the engine as it was - the prime held the uplink for 4s and
    failed (prime-fail 4012ms), and the render froze on one frame for the whole window (out-stats: 2 fps, a 3.1s stall), the
    shopper turning under a still picture. An OPAQUE PNG over REF_HEAVY_BYTES goes as a JPEG of the same pixels instead:
    same size, same picture, a fraction of the bytes. A PNG with a transparent pixel is a cut-out and keeps its PNG
    (normalizeToSupportedImage's rule: a JPEG paints its background black); a JPEG that saves under a fifth is not worth it.
-   Never fails - the original on any error. A TEST record logs `ref-light`. */
+   Never fails - the original on any error. A TEST record logs `ref-light` when the photo is fetched inside its session.
+   MEASURED (y2, record mvy9jthb): 1,368 -> 92 KB, the prime acknowledged in 1,046ms, 9 fps with no stall, the zip jacket on
+   the front. It shipped TEST-only and went to every session on the owner's word after that measurement (CLAUDE.md §7.20). */
 const REF_HEAVY_BYTES = 400 * 1024;
 async function lightenHeavyReference(blob) {
   if (!blob || !(blob.size > REF_HEAVY_BYTES) || !/^image\/png$/i.test(blob.type || "")) return blob;
-  if (!(typeof traceEnabled === "function" && traceEnabled())) return blob;
   const note = (o) => { if (typeof traceOrient === "function") traceOrient("ref-light", { from: Math.round(blob.size / 1024), ...o }); };
   try {
     const bmp = await createImageBitmap(blob);
@@ -8271,8 +8272,8 @@ function garmentBlobCached(url) {
       if (normalized && bandJob && typeof maskReferenceBand === "function") {
         normalized = await maskReferenceBand(normalized, url, await bandJob);
       }
-      /* THE HEAVY REFERENCE (TEST sessions only): an opaque PNG over REF_HEAVY_BYTES - a generated rear - goes as a JPEG
-         of the same pixels. typeof-guarded: suites run this standalone. */
+      /* THE HEAVY REFERENCE: an opaque PNG over REF_HEAVY_BYTES - a generated rear - goes as a JPEG of the same pixels.
+         typeof-guarded: suites run this standalone. */
       if (normalized && typeof lightenHeavyReference === "function") normalized = await lightenHeavyReference(normalized);
       /* THE ENGINE-SPEED EXPERIMENT's "small" mode (TEST sessions only). typeof-guarded: suites run this standalone. */
       const blob = typeof EXP_SMALL !== "undefined" && EXP_SMALL && typeof expDownscale === "function" ? await expDownscale(normalized) : normalized;

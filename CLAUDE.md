@@ -2131,7 +2131,7 @@ two fixes were measured once each (y1, y2 - 5 credits in all).
   generated rear shows the whole model (head, arms, black trousers), it went unmasked - the box answered 0.7s AFTER the go-live
   (7.7s, cold after the deploy; §7.16's bound let it go at the press) - and the engine drew him into the scene, a giant navy back
   filling the left third of the frame (3.5-4.7s), the shopper's jacket red and black beside it. The rear-photo-in-the-scene
-  failure (§2.38, §7.10) - not the lightening. Kept TEST-only; promoting it to shoppers is the owner's call.
+  failure (§2.38, §7.10) - not the lightening. **Every session since (the owner, after y2):** the TEST gate is gone; the room's fingerprint and the edge are unchanged (app.js only - no Worker deploy).
 - **x2, the button-down (2352920100):** no reveal - the engine closed the signalling socket (1011) at 18.8s, after the prime was
   acknowledged. The engine's failure (`engine-failure-modes`), not the garment.
 - **First visits are slow:** x1 revealed 78s after the page opened (the room's preload 35.8s), x3 94s (preload 47.8s: the
