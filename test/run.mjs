@@ -556,7 +556,6 @@ const SUITES = [
   ["garment-facts", "garment-facts.test.mjs"],
   ["classify-reply", "classify-reply.test.mjs"],
   ["fit-ladder", "fit-ladder.test.mjs"],
-  ["skirt-anchor", "skirt-anchor.test.mjs"],
   ["heavy-reference", "heavy-reference.test.mjs"],
 ];
 
