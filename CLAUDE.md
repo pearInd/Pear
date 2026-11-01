@@ -1963,6 +1963,11 @@ d6cd8c3 (§2.47, with the whole camera and an add-nothing clause) and went out w
   `salvageGeminiFields()` keeps every field completed before a cut - the verdict, colour and lettering come out before the
   loop. `classify-reply` §1b. Still reading `parts[0]` alone, same risk, not changed here: `lib/garment-box.js`,
   `lib/garment-category.js`, `lib/body-estimate.js`, server.js's size-run call, the scanner.
+- **Verified on production 2026-11-01 (023aab6):** CHICAGO 3108650200 -> `#000000`, "CHICAGO", plain back (5s); PEAK 1824346900
+  -> `#4b3a36` (TEST names it "dark brown", the shopper's namer "charcoal"), its long print (too long for `Print:`, so not sent),
+  printed back. No Gemini error in the logs. **With facts on the wire the size sentence sheds at +-2 sizes** (front, both
+  paths - the engine's existing budget order); a TEST back at -2 sheds it too, where the shopper's (charcoal, 2 chars shorter)
+  keeps it. So measure at the RECOMMENDED size; the size steps are a separate question before this goes to shoppers.
 - **The check:** a TEST session on PEAK and on the CHICAGO shorts, frame by frame (§7.1) - the colour as the photo, the print
   unchanged, the plain back still plain; `ctx.facts` non-null. Worse on any frame: revert first.
 
