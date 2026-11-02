@@ -2127,11 +2127,15 @@ two fixes were measured once each (y1, y2 - 5 credits in all).
   **y2, measured (record mvy9jthb):** `ref-light` 1,368 -> 92 KB; both references uploaded (92/83 KB); the prime acknowledged in
   1,046ms (x3: failed at 4s); the turn's BACK acked 234ms, the FRONT 250ms; 9 fps out, no stall. **The jacket renders from the
   front** - a zip jacket with long sleeves and a collar (x3: a frozen short-sleeve shirt) - its navy nearly black in the dim
-  scene (#100901 against the photo's #272935; no `Fabric:` - #2b3a55 has no name). **The back view failed another way:** the
-  generated rear shows the whole model (head, arms, black trousers), it went unmasked - the box answered 0.7s AFTER the go-live
-  (7.7s, cold after the deploy; §7.16's bound let it go at the press) - and the engine drew him into the scene, a giant navy back
-  filling the left third of the frame (3.5-4.7s), the shopper's jacket red and black beside it. The rear-photo-in-the-scene
-  failure (§2.38, §7.10) - not the lightening. **Every session since (the owner, after y2):** the TEST gate is gone; the room's fingerprint and the edge are unchanged (app.js only - no Worker deploy).
+  scene (#100901 against the photo's #272935; no `Fabric:` - #2b3a55 has no name). **The back view failed another way, WITH the mask on:** the
+  engine pasted the back of the jacket from the reference into the scene as a giant panel filling the left third of the frame
+  (3.5-4.7s) - no head, no legs: the masked photo, enlarged - and left the shopper beside it in a black hood over a red body (the
+  shorts' colour). The failure f4 showed on PEAK's real rear photo (§7.17), t5/L2 on the rig (§7.10). **First reported here as
+  "the photo went unmasked" - WRONG:** y2's `ctx.ref` is empty only because ctx is read at the go-live press and the band landed
+  0.9s after it; the deadline (`hurryReferenceBands()`) starts after the presence gate, 9.9s in that session, so the mask applied.
+  Proven without the engine: the room's own mask and lightener on the real PNG with the deployed box answer give 1,594 -> 1,368 ->
+  92 KB, `ref-light`'s numbers exactly. Read `ref-light.from` or a note after t0, never a missing `ctx.ref`. One session cannot say
+  whether a generated rear makes the panel likelier; a normal store JPEG gets it too, so as far as shown it is not the lightening. **Every session since (the owner, after y2):** the TEST gate is gone; the room's fingerprint and the edge are unchanged (app.js only - no Worker deploy).
 - **x2, the button-down (2352920100):** no reveal - the engine closed the signalling socket (1011) at 18.8s, after the prime was
   acknowledged. The engine's failure (`engine-failure-modes`), not the garment.
 - **First visits are slow:** x1 revealed 78s after the page opened (the room's preload 35.8s), x3 94s (preload 47.8s: the
@@ -2141,9 +2145,11 @@ two fixes were measured once each (y1, y2 - 5 credits in all).
 - **Also seen:** the zip jacket's title ("ג'קט רוכסן") does not match `STRUCTURED_TOP_TOKENS` (it knows ז'קט, not ג'קט, and no
   "רוכסן"), so its front ships without FRONT_CLOSURE_LOCK - not changed (y2's front rendered closed without it). The sizes the
   room offered (3XL-4XL, 4XL-5XL) are those products' own - FOX's big-sizes line - not a fit bug.
-- **Open, for a generated rear:** a generated photo should carry no person - either the generation asks for the garment alone,
-  or the band is waited for when the rear is generated (it always contains the store's model). Not done: decide with a
-  measurement.
+- **Open, the giant panel:** no lever known. A generated rear without a person would not obviously help - what got pasted is the
+  garment, not the model. How often it happens on this photo against others is the next thing to measure; a possible signal, not
+  tested: y2's `lag-sum` matched 1 of 46 output frames to the camera, the owner's clean session 12 of 48.
+- **The owner's own session (record mvyb0x4k, 2026-11-01 22:50 Israel, PEAK, a real camera):** "works well". The record: masks on,
+  the back acked 228ms, the front 232ms, 10 fps, no stall. Its frames were not seen (no clip).
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
