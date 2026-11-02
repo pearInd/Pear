@@ -42,7 +42,8 @@ import { makeStoreSizeChartHandler } from "./lib/store-size-charts.js";
 /* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
 import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
 /* The prompt engine - moved out of the browser 2026-09-26 (see lib/prompts.js). */
-import { promptForRequest, sanitizePromptRequest } from "./lib/prompts.js";
+import { sanitizePromptRequest } from "./lib/prompts.js";
+import { promptTokenForRequest } from "./lib/prompt-token.js";
 /* The render engine behind our edge (2026-10-03): the token route answers with a SEALED ticket the edge
    opens (lib/rt-proxy.js) - the engine's key, its format and the model id never reach the page. */
 import { sealTicket } from "./lib/rt-proxy.js";
@@ -898,7 +899,7 @@ app.post("/api/size", sizeLimiter, (req, res) => {
 app.post("/api/prompt", promptLimiter, (req, res) => {
   res.set("Cache-Control", "no-store");
   try {
-    res.json({ prompt: promptForRequest(sanitizePromptRequest(req.body)) });
+    res.json({ prompt: promptTokenForRequest(sanitizePromptRequest(req.body)) });   // a token: the page never holds the words (lib/prompt-token.js)
   } catch (err) {
     console.error("[prompt] build failed:", err?.message || err);
     res.status(500).json({ error: "prompt_failed" });

@@ -132,8 +132,9 @@ export function startStaticServer(port = 0) {
       req.on("data", (c) => { raw += c; if (raw.length > 64 * 1024) req.destroy(); });
       req.on("end", async () => {
         try {
-          const { promptForRequest, sanitizePromptRequest } = await import("../../lib/prompts.js");
-          const prompt = promptForRequest(sanitizePromptRequest(JSON.parse(raw || "{}")));
+          const { sanitizePromptRequest } = await import("../../lib/prompts.js");
+          const { promptTokenForRequest } = await import("../../lib/prompt-token.js");
+          const prompt = promptTokenForRequest(sanitizePromptRequest(JSON.parse(raw || "{}")));
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ prompt }));
         } catch (e) {

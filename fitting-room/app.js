@@ -13675,13 +13675,24 @@ function wirePromptSettled(item, angle, opts = {}) {
   return best;
 }
 
+/* THE PAGE NEVER HOLDS THE WORDS (2026-11-02, lib/prompt-token.js): what /prompt answers is an opaque token the edge turns into
+   the prompt on its way to the engine. Different requests can mean the same words, and every "prompt unchanged" check in this
+   file compares with ===, so the first token per words-hash stands for all of them: those checks answer as they did on the text. */
+const _promptTokenByHash = new Map();
+function samePromptToken(answer) {
+  const m = /^pt1\.([0-9a-f]+)\./.exec(answer);
+  if (!m) return answer;
+  if (!_promptTokenByHash.has(m[1])) _promptTokenByHash.set(m[1], answer);
+  return _promptTokenByHash.get(m[1]);
+}
+
 function requestWirePrompt(req, where) {
   const key = JSON.stringify(req);
   const known = _wirePrompts.get(key);
   if (typeof known === "string") return Promise.resolve(known);
   if (known) return known;
   const pending = fetchWirePrompt({ ...req, where: where || "prompt" }).then(
-    (text) => { _wirePrompts.set(key, text); return text; },
+    (answer) => { const text = samePromptToken(answer); _wirePrompts.set(key, text); return text; },
     (err) => { _wirePrompts.delete(key); throw err; });
   _wirePrompts.set(key, pending);
   return pending;

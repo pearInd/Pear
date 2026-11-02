@@ -10,8 +10,8 @@
      · engine words: a vendor, model or library name (CLAUDE.md §2.24 - the build refuses them);
      · prompt wording: phrases of lib/prompts.js's anchors (§2.13 - the browser carries none).
    usage: node scripts/audit-shipped.mjs [origin=https://app.pear-ai.io]
-   Exit 1 on any secret, served map or engine word; prompt wording is reported, not fatal, because
-   the assembled prompt is MEANT to reach the page at run time (it is what the page hands the engine).
+   Exit 1 on any secret, served map, engine word or prompt wording - in a file, or in the /prompt answer of the
+   origin or the edge (2026-11-02: the page holds a token, never the words - lib/prompt-token.js).
    ============================================================================= */
 const ORIGIN = (process.argv[2] || "https://app.pear-ai.io").replace(/\/$/, "");
 const ROOTS = [`${ORIGIN}/widget/pear-widget.js`, `${ORIGIN}/fitting-room/`];
@@ -80,10 +80,22 @@ for (const m of new Set([...appText.matchAll(/rt\.pear-ai\.io\/a\/[0-9a-f]{12,}/
   for (const [name, re] of SECRETS) if (re.test(buf.toString("latin1"))) findings.secret.push(`${name} in ${url}`);
 }
 
+/* The answers themselves: what a page really receives from /prompt, at the origin and at the edge. */
+const PROBE = JSON.stringify({ kind: "single", item: { title: "basic cotton t-shirt", __bottoms: false }, angle: "back", inProfile: false, delta: 0 });
+for (const url of [`${ORIGIN}/api/prompt`, process.env.PEAR_EDGE_PROMPT_URL || "https://rt.pear-ai.io/prompt"]) {
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Origin: ORIGIN }, body: PROBE });
+    const text = await r.text();
+    for (const ph of PROMPT_PHRASES) if (text.includes(ph)) findings.prompt.push(`"${ph}" in the answer of ${url}`);
+    console.log(`/prompt ${r.status} ${url}: ${/"prompt":"pt1\./.test(text) ? "a token" : "NOT a token"}`);
+    if (!/"prompt":"pt1\./.test(text)) findings.prompt.push(`${url} did not answer a token`);
+  } catch (e) { console.log(`/prompt unreachable ${url}: ${e?.message || e}`); }
+}
+
 console.log(`audited ${seen.size} files from ${ORIGIN}:`);
 for (const [u, s] of seen) console.log(`  ${s}  ${u.replace(ORIGIN, "")}`);
-for (const [k, label] of [["secret", "SECRETS"], ["map", "SOURCE MAPS"], ["engine", "ENGINE WORDS"], ["prompt", "PROMPT WORDING (in code)"]]) {
+for (const [k, label] of [["secret", "SECRETS"], ["map", "SOURCE MAPS"], ["engine", "ENGINE WORDS"], ["prompt", "PROMPT WORDING"]]) {
   console.log(`\n${label}: ${findings[k].length ? "" : "none"}`);
   for (const f of findings[k]) console.log("  " + f);
 }
-process.exit(findings.secret.length || findings.map.length || findings.engine.length ? 1 : 0);
+process.exit(findings.secret.length || findings.map.length || findings.engine.length || findings.prompt.length ? 1 : 0);

@@ -233,8 +233,12 @@ console.log("\n── §6 the edge answers /size and /prompt with the SAME modul
   check("...with CORS for that origin only, never *", r1.headers.get("Access-Control-Allow-Origin") === "https://app.pear-ai.io" &&
     r1.headers.get("Cache-Control") === "no-store");
   const r2 = await call("/prompt", { body: pr });
-  check("POST /prompt answers exactly what the server's promptForRequest answers",
-    r2.status === 200 && (await r2.text()) === JSON.stringify({ prompt: PR.promptForRequest(PR.sanitizePromptRequest(JSON.parse(JSON.stringify(pr)))) }));
+  /* A token since 2026-11-02 (lib/prompt-token.js): what it expands to is what promptForRequest answers; the words stay off the page. */
+  const r2Text = await r2.text();
+  const TOK = await import("../lib/prompt-token.js");
+  const wantWords = PR.promptForRequest(PR.sanitizePromptRequest(JSON.parse(JSON.stringify(pr))));
+  check("POST /prompt answers a token that expands to exactly what the server's promptForRequest answers, with none of the words in the answer",
+    r2.status === 200 && TOK.expandPromptToken(JSON.parse(r2Text).prompt).prompt === wantWords && !r2Text.includes("Drape") && !r2Text.includes(wantWords.slice(0, 40)));
   check("a preview origin is allowed; a foreign one, a look-alike and a missing Origin are refused",
     (await call("/size", { origin: "https://pear-git-x-pear2.vercel.app", body: ev })).status === 200 &&
     (await call("/size", { origin: "https://evil.example", body: ev })).status === 403 &&

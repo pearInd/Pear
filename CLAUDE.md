@@ -494,6 +494,7 @@ in `lib/prompts.js`, moved verbatim, behind `POST /api/prompt`. RULE 0 applies t
   `angleAtStart`/`profileAtStart` and before the first await (§2.8), in parallel with the
   reference resolve; the session start prefetches the other angle/pose variants so a turn never
   waits on the network. Prompts are memoised per request for the session.
+- **Since 2026-11-02 it does not even receive it:** `/prompt` answers a token the edge expands (§7.21).
 - **The browser carries no wording:** `scripts/build.mjs` fails on engine phrases in the room
   bundle; `prompt-engine` §5 asserts the absence over `app.js`. The pre-commit hook traces
   `lib/prompts.js` (falling back to HEAD's `app.js` only for the commit that moved it).
@@ -2086,7 +2087,7 @@ Asked: "nothing in DevTools may show the engine's key or any other key; no sourc
   public). Fixed the same day: a failed scoped create fell back to `tokens.create()` with NO argument (the engine's default
   lifetime, every model) - now it keeps the lifetime and the model (`token-origin`); and the lifetime is capped at 300s (was
   600 by default, up to 3600 from the environment) - a session lasts at most 90s and the room re-mints 30s before expiry.
-- **Prompts:** no wording in any shipped file (§2.13). The ASSEMBLED prompt still reaches the page at run time - the `/prompt`
+- **Prompts (closed by §7.21 once deployed):** no wording in any shipped file (§2.13). The ASSEMBLED prompt still reaches the page at run time - the `/prompt`
   answer and the frames to the edge - because the page hands it to the engine. Hiding that would need the edge to inject it on
   the signalling relay (§2.24); not done.
 - **The rig audits the Network tab:** every response body and WebSocket frame of a session, scanned the same way
@@ -2151,6 +2152,35 @@ two fixes were measured once each (y1, y2 - 5 credits in all).
   tested: y2's `lag-sum` matched 1 of 46 output frames to the camera, the owner's clean session 12 of 48.
 - **The owner's own session (record mvyb0x4k, 2026-11-01 22:50 Israel, PEAK, a real camera):** "works well". The record: masks on,
   the back acked 228ms, the front 232ms, 10 fps, no stall. Its frames were not seen (no clip).
+
+### 7.21 The page never holds the assembled prompt (2026-11-02, Layer A plumbing; the words unchanged) - NOT YET MEASURED ON THE ENGINE
+Asked: "the page never holds the prompt text". The wording was already server-side (§2.13), but the assembled text came back in the
+`/prompt` answer, crossed the signalling socket and returned in the engine's `prompt_ack` (§7.18). `pear-widget.js` has no prompt
+code and did not change; `app.js` holds no wording, so there was nothing to delete there - only one function changes.
+- **The token (`lib/prompt-token.js`):** `/prompt` answers `pt1.<hash of the words>.<base64url of the sanitised request>`, facts the
+  page sent itself. `app.js` treats it as the opaque string it passes around; `samePromptToken()` keeps the first token per hash, so
+  every `===` "prompt unchanged" check answers as on the words (two requests can share one wording). Requests, prefetch, memo, and
+  `wirePromptSettled()` are untouched, so what goes out and when is the same.
+- **The relay (`lib/rt-proxy.js` `makePromptRelay`, `cloudflare/orient/src/rt.js`):** one per signalling socket. Out: token -> words, by
+  `lastIndexOf` on the raw text (an image frame is hundreds of KB; the SDK writes `prompt` after the image). In: words -> token,
+  because the SDK resolves a prompt write only on a `prompt_ack` whose `prompt` equals what it sent (a FIFO per wording, two writes
+  in flight); an engine message quoting the words has them scrubbed. A token it cannot read drops the frame. A plain prompt passes.
+- **DEPLOY ORDER IS LOAD-BEARING:** Worker FIRST. A room or origin handing out tokens through an old Worker sends the engine a token as
+  its prompt. The reverse is safe: rooms already open keep sending words through the new Worker (their old fingerprint sends them to
+  the origin, slower, until main follows), and a cached room with a token works, since it is opaque to it. Previews share the
+  production Worker, so a branch preview needs this deploy too.
+- **The owner's decision on a shed clause (decision B): allowed, with a record.** `fitPrompt()` names what it sheds
+  (`promptWithShedForRequest`, the wire unchanged); at the relay, the moment it really goes out, `shedRecorder()` writes
+  `shed:<iso>:<id>` to KV `TRACES` for 7 days - parts, delta, angle, kind, test; no words, no garment; at most 4 per socket. Read with
+  `npx wrangler kv key list --binding TRACES --remote --prefix shed:`. `clampPromptForWire()` no longer logs a prefix of the prompt.
+- **Proven:** `prompt-token` (33 checks): 2,801 requests x 3 frame shapes reach the engine equal to `promptForRequest()`; no wording in
+  a token or its decoded body, an ack, or an error; ack order; forged tokens; the metric. `trace:prompt --json` unchanged, `prompt-engine`
+  on its pin. Built files: 0 of 6 key phrases. `audit-shipped` now fails on wording, and checks the live `/prompt` answers;
+  `visual-agent` asserts no wording in `/api/` traffic and a `pt1.` token on the mock wire. `rig.mjs --no-fabric` refuses to run: there are
+  no words to rewrite.
+- **Not proven:** the real SDK against the real engine through the relay - the check is one rig session after a Worker deploy
+  (`network audit`'s `promptIn` must be empty). Residual, stated: the token shows the page's own facts; anyone may still send a
+  plain prompt through the relay with a valid ticket, as before (§2.24). Hiding the words is not access control.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 

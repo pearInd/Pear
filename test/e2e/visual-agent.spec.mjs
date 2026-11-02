@@ -245,6 +245,20 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
      which is worse than no gate at all. A predicate that matches only off-origin URLs
      leaves same-origin traffic entirely alone: Playwright never intercepts what the
      matcher does not select. */
+  /* THE PAGE NEVER HOLDS THE WORDS (lib/prompt-token.js): every same-origin request and response of the run is scanned for
+     prompt wording. The harness answers /api/prompt with the real lib/prompt-token.js, so a route that regressed to the words fails here. */
+  const PROMPT_WORDS = /Drape and fit|Strictly preserve|REAR\/BACK|smooth unbroken|Fit and replace BOTH/;
+  const promptWordsSeen = [];
+  let promptAnswers = 0;
+  /* /api/ only: reading every body of the room's own files through the protocol slowed this run from ~20s to minutes. The built
+     files are grepped by scripts/build.mjs, and they are not what a run can change. */
+  const isApi = (u) => new URL(u).pathname.startsWith("/api/");
+  page.on("request", (req) => { if (isApi(req.url()) && PROMPT_WORDS.test(req.postData() || "")) promptWordsSeen.push("request " + req.url()); });
+  page.on("response", (resp) => {
+    if (!isApi(resp.url()) || !/json/.test(resp.headers()["content-type"] || "")) return;
+    if (new URL(resp.url()).pathname === "/api/prompt") promptAnswers++;
+    resp.text().then((body) => { if (PROMPT_WORDS.test(body)) promptWordsSeen.push("response " + resp.url()); }, () => {});
+  });
   const blockedHosts = new Set();
   await page.route(
     (url) => url.origin !== server.url && url.protocol !== "data:" && url.protocol !== "blob:",
@@ -413,6 +427,12 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
   expect(backKey, "the back dispatch carried the same asset as the front - " +
     "either the swap never happened or distinctBackOf() rejected the back photo")
     .not.toBe(frontKey);
+
+  // 1b. The page never held the words: not in the traffic, not on the (mock) wire.
+  expect(promptAnswers, "no /api/prompt answer was seen - this check proved nothing").toBeGreaterThan(0);
+  expect(promptWordsSeen, "prompt wording crossed the page's network").toEqual([]);
+  const wirePrompt = await page.evaluate(() => window.__pearMockDecart?.wire?.prompt || "");
+  expect(wirePrompt, "the page handed the engine something other than a token").toMatch(/^pt1\./);
 
   // 2. Nothing was billed. ?mock_decart=1 is supposed to short-circuit above the mint.
   expect(server.tokenMintAttempts(),

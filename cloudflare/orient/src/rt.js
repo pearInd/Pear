@@ -18,7 +18,26 @@
    upgrade (1006, no reason) would make it retry five times with back-off before giving up.
    ============================================================================= */
 import { engineSignalUrl, frameToEngine, frameToRoom, engineMediaUrl, openBearer, telemetryToEngine, roomErrorText, NO_CREDITS,
-  openTicket, RT_UA } from "../../../lib/rt-proxy.js";
+  openTicket, RT_UA, makePromptRelay } from "../../../lib/rt-proxy.js";
+import { expandPromptToken } from "../../../lib/prompt-token.js";
+
+/* THE OWNER'S DECISION ON A SHED CLAUSE (2026-11-02): allowed, with a record. The moment a prompt reaches the engine is where
+   it is known what really went out, for a shopper as for a TEST session. Names and numbers only - never the words, no garment,
+   nobody. At most SHED_RECORDS_PER_SESSION writes per socket, read back with `wrangler kv key list --prefix shed:`. */
+const SHED_RECORDS_PER_SESSION = 4;
+const SHED_TTL_S = 7 * 24 * 3600;
+export function shedRecorder(env) {
+  const seen = new Set();
+  return (r) => {
+    if (!r.shed || !r.shed.length || !env.TRACES) return;
+    const line = { parts: r.shed, delta: r.delta, angle: r.angle, kind: r.kind, test: r.test === true };
+    const key = JSON.stringify(line);
+    if (seen.has(key) || seen.size >= SHED_RECORDS_PER_SESSION) return;
+    seen.add(key);
+    const id = `shed:${new Date().toISOString()}:${Math.random().toString(36).slice(2, 8)}`;
+    try { Promise.resolve(env.TRACES.put(id, key, { expirationTtl: SHED_TTL_S })).catch(() => {}); } catch { /* a metric never costs a session */ }
+  };
+}
 
 /* A close reason as the room reads it - scrubbed, and a credit refusal made final (rt-proxy roomErrorText). */
 const scrubReason = (s) => String(roomErrorText(String(s || ""))).slice(0, 120);
@@ -61,7 +80,12 @@ async function relay(upstreamUrl, headers, { toUp = (d) => d, toDown = (d) => d,
   ws.accept();
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();
-  server.addEventListener("message", (e) => { try { ws.send(typeof e.data === "string" ? toUp(e.data) : e.data); } catch { /* closing */ } });
+  server.addEventListener("message", (e) => {
+    try {
+      const frame = typeof e.data === "string" ? toUp(e.data) : e.data;
+      if (frame !== null) ws.send(frame);   // null: a prompt token we did not issue (frameToEngine)
+    } catch { /* closing */ }
+  });
   ws.addEventListener("message", (e) => { try { server.send(typeof e.data === "string" ? toDown(e.data) : e.data); } catch { /* closing */ } });
   server.addEventListener("close", (e) => { try { ws.close(closeCode(e.code), scrubReason(e.reason)); } catch { /* closed */ } });
   ws.addEventListener("close", (e) => { try { server.close(closeCode(e.code), scrubReason(e.reason)); } catch { /* closed */ } });
@@ -103,7 +127,8 @@ export function handleRt(request, env, url, originOk) {
     /* The edge as the room reached it - RT_EDGE_WS overrides it for a local `wrangler dev` (which reports the
        production host in request.url). */
     const edgeWs = env.RT_EDGE_WS || `wss://${url.host}`;
-    return relay(target, { Origin: origin }, { toUp: frameToEngine, toDown: (t) => frameToRoom(t, { edgeWs }),
+    const prompts = makePromptRelay(expandPromptToken, shedRecorder(env));
+    return relay(target, { Origin: origin }, { toUp: (t) => frameToEngine(t, prompts), toDown: (t) => frameToRoom(t, { edgeWs, prompts }),
       maxMs: rtMaxSessionMs(env) });
   }
 

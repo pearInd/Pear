@@ -557,6 +557,7 @@ const SUITES = [
   ["classify-reply", "classify-reply.test.mjs"],
   ["fit-ladder", "fit-ladder.test.mjs"],
   ["heavy-reference", "heavy-reference.test.mjs"],
+  ["prompt-token", "prompt-token.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

@@ -47,6 +47,13 @@ const browser = await chromium.launch({
 });
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ["camera"] });
 const clipBytes = readFileSync(clip);
+/* --no-fabric rewrote the words in the /prompt answer; since 2026-11-02 the page holds a token (lib/prompt-token.js) and there are
+   none to rewrite. It stops here, before anything is billed. An A/B of a sentence now needs a TEST-only switch in lib/prompts.js. */
+if (NO_FABRIC) {
+  console.error("--no-fabric no longer works: the page holds a token, not the words. Nothing was run.");
+  await browser.close();
+  process.exit(2);
+}
 if (NO_FABRIC) {
   /* The edge's (or the origin's) real answer, its colour sentence removed; every header kept but the length and encoding (the room checks
      X-Pear-Api, the browser the CORS headers). */
