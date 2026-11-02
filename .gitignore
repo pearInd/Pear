@@ -33,3 +33,6 @@ dist-e2e/
 
 # scripts/mutation-check-capture.mjs scratch copy
 .mutation-tmp/
+
+# scanner/pregen-backs.js: what each store has had generated
+scanner/.pregen/

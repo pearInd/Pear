@@ -2182,6 +2182,25 @@ code and did not change; `app.js` holds no wording, so there was nothing to dele
   (`network audit`'s `promptIn` must be empty). Residual, stated: the token shows the page's own facts; anyone may still send a
   plain prompt through the relay with a valid ticket, as before (§2.24). Hiding the words is not access control.
 
+### 7.22 Back photos prepared before the first visitor (2026-11-02, scanner only) - NOT YET RUN ON A STORE
+A product with no rear photo waits on its first visit for a generation (~27s of x3's 94s, §7.20). `node scan-store.js --pregen-backs
+<store>` plans, after the scan, which products would get one; with `--pregen-run` it asks the server, through the widget's own route
+(`POST /api/classify-images` + `synthesize_back`), so the rear lands in the same durable store and a first visitor reads it like a
+second one. `scanner/pregen-backs.js`; no bundle changed.
+- **The cost is the image model's, not the render engine's:** one `GEMINI_IMAGE_MODEL` call per generation, at that model's price (not
+  measured here, so no figure is stated). Bounds: a plan unless `--pregen-run`; `--pregen-cap` (default 25 products per run per store,
+  concurrency 2 - both proposals for the owner); best sellers first (`/collections/all/products.json?sort_by=best-selling`, catalog
+  order when a store has no such list); a state file per store (`scanner/.pregen/`, gitignored), and `synthesizeBackView()` reads the
+  durable store before it generates, so a lost state file costs requests, not generations.
+- **Who is asked:** every photo classified and none a back. Shopify catalogs only (the HTML path has no product grouping); a product
+  with a skipped photo waits for a clean scan.
+- **A failure costs only the head start:** logged, not remembered, asked again next run; the visitor keeps the on-demand path, which
+  is unchanged. The stage runs after the scan's summary, in its own try/catch.
+- **Measured:** `pregen-backs` (mutations: skipped counted as front, done ignored, "none" remembered, no priority - each caught). A
+  prepared rear (the jacket's, already stored) through production: 0.73s warm, 8.1s on the first call after idle (no generation in
+  either). **Not done:** a paid run on a store; and the garment band (`/api/garment-box`) is still memory + CDN only, so it is cold after
+  a deploy (y2: 7.7s) - not part of this stage.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:

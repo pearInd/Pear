@@ -558,6 +558,7 @@ const SUITES = [
   ["fit-ladder", "fit-ladder.test.mjs"],
   ["heavy-reference", "heavy-reference.test.mjs"],
   ["prompt-token", "prompt-token.test.mjs"],
+  ["pregen-backs", "pregen-backs.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────
