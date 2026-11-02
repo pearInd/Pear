@@ -54,7 +54,8 @@ call, both branches, all angles. `getFitModifier()`'s wording already
 attributes tightness to the garment/fabric, never the body outline (§2.4),
 so this restore does not reopen that bug. Do not re-run the restore
 procedure for this clause — it is already wired. See imageOnlyPrompt()'s
-`SIZE-OVERRIDE RESTORE` comment in app.js for the full rationale.
+`SIZE-OVERRIDE RESTORE` comment in `lib/prompts.js` for the full rationale. `npm run trace:prompt`'s
+reachability audit lists both as live (checked 2026-11-02).
 
 **SUPERSEDED IN PART (2026-11-01, §7.17):** the shedding below is no longer limited to closure
 tops - since the front anchors grew, sizing DOWN on ANY top's front sheds the fit sentence on
@@ -65,9 +66,10 @@ WIRE, `lib/prompts.js`); a shopper's request still sheds until that is measured.
 `FRONT_CLOSURE_LOCK` (P.HIGH), the fit sentence (P.MED) is the first thing
 `fitPrompt()` sheds under budget pressure — by design, since a shirt
 rendered hanging open is a worse failure than a wrong tension. In practice
-this means sizing down 1-2 steps on a button-front top can silently drop
-the fit-modifier text (163 free chars on that branch vs. up to ~213 chars
-for the largest size-down phrasing); true-to-size and sizing up always fit.
+the fit-modifier text can drop silently. The old figures here (163 free chars,
+true-to-size and sizing up always fit) are stale. Measured 2026-11-02 on a shopper's
+front request: a closure top loses it at -2, -1 and +2 without colour/print facts and on
+every rung with them; a plain tee at -2 and -1 (and +2 with facts); backs and bottoms never.
 This is not a bug — see the comment above the `[P.MED, fitSentence(...)]`
 line in `imageOnlyPrompt()` before "fixing" it by raising its priority,
 which would risk the closure lock shedding instead and reopening the
@@ -141,8 +143,7 @@ after any Layer-B or Layer-C edit — §7.
 `fitSentence()`/`getFitModifier()` at `P.MED` (§0) — sizing up or down changes
 the drape tension in the render. The one exception: on a top that also carries
 `FRONT_CLOSURE_LOCK`, sizing down 1-2 steps can get shed under budget pressure
-(163 free chars there vs. up to ~213 needed) — true-to-size and sizing up
-always land. Don't assume this is still dead; check `trace:prompt`'s
+(see §0's measured list; a closure top with colour facts loses every rung). Don't assume this is still dead; check `trace:prompt`'s
 reachability audit if in doubt.
 
 ---
