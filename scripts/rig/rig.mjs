@@ -7,13 +7,17 @@
                   TEST record included, without the colour sentence (2026-11-01, the PEAK A/B).
      --dry  stops before go-live: proves the camera, the widget's facts and the room, bills nothing. */
 import { chromium } from "/Users/yairgertner/pear interface/node_modules/playwright/index.mjs";
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 
 const [product, clip, out, ...flags] = process.argv.slice(2);
 const DRY = flags.includes("--dry");
 const NO_FABRIC = flags.includes("--no-fabric");
 /* --size=<label>: the size button the rig clicks in the room before go-live (the shopper's own size choice - getSizeDelta). */
 const SIZE = (flags.find((f) => f.startsWith("--size=")) || "").slice(7) || null;
+/* --room-dir=<dist>: the room's files served from a local build, everything else real (the widget, the origin's APIs, the edge, the
+   engine) - a branch measured without pushing it (2026-11-02). Build it from a clean checkout with PEAR_ORIENT_URL set, and mind
+   that the build's fingerprint must match the deployed Worker, or the room takes /prompt from the production origin. */
+const ROOM_DIR = (flags.find((f) => f.startsWith("--room-dir=")) || "").slice(11) || null;
 /* THE STORE PAGE, CACHED (2026-11-01): FOX answers 429 after a few loads of its product pages, and a rig run that cannot load
    the page measures nothing. The product page's HTML is fetched once and kept in RIG_PAGE_CACHE; every later run is served
    from the file (the page's own assets and photos still load as usual). */
@@ -47,6 +51,15 @@ const browser = await chromium.launch({
 });
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ["camera"] });
 const clipBytes = readFileSync(clip);
+if (ROOM_DIR) {
+  const TYPES = { html: "text/html; charset=utf-8", js: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8", png: "image/png", svg: "image/svg+xml", json: "application/json" };
+  await context.route((u) => u.host === "app.pear-ai.io" && u.pathname.startsWith("/fitting-room/"), async (route) => {
+    const rel = new URL(route.request().url()).pathname.replace(/^\/fitting-room\//, "") || "index.html";
+    const file = `${ROOM_DIR}/fitting-room/${rel.replace(/\.\.+/g, "")}`;
+    if (!existsSync(file)) return route.continue();
+    await route.fulfill({ status: 200, contentType: TYPES[rel.split(".").pop()] || "application/octet-stream", body: readFileSync(file) });
+  });
+}
 /* --no-fabric rewrote the words in the /prompt answer; since 2026-11-02 the page holds a token (lib/prompt-token.js) and there are
    none to rewrite. It stops here, before anything is billed. An A/B of a sentence now needs a TEST-only switch in lib/prompts.js. */
 if (NO_FABRIC) {
@@ -130,6 +143,12 @@ await context.addInitScript(() => {
 });
 
 const page = await context.newPage();
+/* A run that dies before go-live says what it was looking at, and nothing was billed. */
+process.on("uncaughtException", async (e) => {
+  console.error(String(e?.stack || e).slice(0, 1200));
+  try { mkdirSync(out, { recursive: true }); await page.screenshot({ path: `${out}/died.png`, timeout: 5000 }); } catch (_) {}
+  process.exit(1);
+});
 page.on("pageerror", (e) => log("pageerror", e.message.slice(0, 160)));
 const prompts = [];
 /* THE NETWORK TAB, AUDITED (2026-11-01): every response body and WebSocket frame the page sees, scanned for anything
