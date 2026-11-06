@@ -163,6 +163,8 @@ const MUTATIONS = [
     " final ${out.length} chars", " final ${max} chars", "fit-shed"],
   ["fit clause: the closure lock ranked below it (the closure path's order inverted)", "lib/prompts.js",
     "...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),", "...(closure ? [[P.TRIM, FRONT_CLOSURE_LOCK]] : []),", "fit-shed"],
+  ["fit clause: raised to the closure lock's tier (P.HIGH - a tie the closure lock loses by position)", "lib/prompts.js",
+    "    [P.MED, fitSentence(bottoms ? \"lower_body\" : \"upper_body\"),", "    [P.HIGH, fitSentence(bottoms ? \"lower_body\" : \"upper_body\"),", "fit-shed"],
 ];
 
 /* ── command line ─────────────────────────────────────────────────────────────── */

@@ -94,5 +94,31 @@ console.log("\n── §4 nothing else moves ──");
   check("§4.3 the relay's record is unchanged: names only", t && t.shed.join() === "fit" && !("shedLog" in t));
 }
 
+console.log("\n── §5 the closure lock outranks the fit clause (Yair's decision, 2026-11-07) - the real engine at a squeezed budget ──");
+{
+  /* The real lib/prompts.js, its budget swapped: CONFIG is frozen and read once at load, so the engine is loaded again
+     from its own source with only the config import replaced. Everything else - imageOnlyPrompt()'s parts and their
+     priorities, fitPrompt() - is the shipped text. A shirt rendered hanging open is worse than an imprecise fit. */
+  const { readFileSync } = await import("node:fs");
+  const SRC = readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8");
+  const IMPORT = 'import { CONFIG } from "../fitting-room/config.js";';
+  check("§5.0 the engine's config import is where the harness expects it", SRC.split(IMPORT).length === 2);
+  const engineAt = (budget) => import("data:text/javascript," + encodeURIComponent(
+    SRC.replace(IMPORT, `const CONFIG = { PROMPT_MAX_CHARS: ${budget} };`) + `\n// budget ${budget}`));
+  const r = { kind: "single", item: CLOSURE_TOP, angle: "front", delta: 0 };
+  const E = await engineAt(300);
+  const { value, warns } = warnsOf(() => E.promptWithShedForRequest(E.sanitizePromptRequest(r)));
+  check("§5.1 at an extreme budget both go - the fit clause FIRST, then the closure lock", value.shed.join() === "fit,closure", value.shed.join());
+  check("§5.2 the fit line names that order, the budget and what shipped",
+    fitWarns(warns).length === 1 && /shed in order: fit, closure\)/.test(fitWarns(warns)[0]) && fitWarns(warns)[0].includes("budget 300"), warns.join(" | "));
+  /* a budget the closure lock fits in but the fit sentence does not: only the fit clause goes */
+  const noFacts = { ...CLOSURE_TOP, colorHex: undefined, textOcr: undefined };
+  const kept = P.promptWithShedForRequest(P.sanitizePromptRequest({ ...r, item: noFacts }));
+  check("§5.3 (a closure top without facts fits whole at the real budget)", kept.shed.length === 0 && /front closure exactly/.test(kept.prompt), kept.shed.join());
+  const E2 = await engineAt(kept.prompt.length - 1);
+  const mid = warnsOf(() => E2.promptWithShedForRequest(E2.sanitizePromptRequest({ ...r, item: noFacts }))).value;
+  check("§5.4 one char short: the fit clause goes, the closure lock stays", mid.shed.join() === "fit" && /front closure exactly/.test(mid.prompt), mid.shed.join());
+}
+
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");
 process.exit(fails ? 1 : 0);

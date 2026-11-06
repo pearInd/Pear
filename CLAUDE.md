@@ -82,7 +82,12 @@ closure lock (P.HIGH) still outranks it. When it goes, `fitPrompt()` prints one
 `[PEAR] fitPrompt() - the fit clause was shed: budget <N>, final <M> chars (shed in order: …)` line
 (numbers only, §7.21) and adds `{clause: "fit", budget, length}` to
 `promptWithShedForRequest().shedLog`; `trace:prompt` marks those rows `[logged: …]`. The wire is
-unchanged. Pinned by `fit-shed` and 6 mutations (`mutation:capture -- --only "fit clause"`).
+unchanged. Pinned by `fit-shed` and 7 mutations (`mutation:capture -- --only "fit clause"`).
+
+**DECIDED, DO NOT REOPEN (Yair, 2026-11-07): `FRONT_CLOSURE_LOCK` outranks the fit clause** - under
+budget pressure the fit sentence is shed first (logged), then the closure lock, because a shirt
+rendered hanging open is worse than an imprecise fit. `fit-shed` §5 drives the real engine at a
+squeezed budget and fails if the order flips.
 
 > **RULE 0 — NEVER edit a dead clause and report the behaviour as changed.**
 > If a request is about how the garment renders (fit, drape, print placement,
