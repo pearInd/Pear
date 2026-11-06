@@ -13,7 +13,9 @@
        no source maps
      · fitting-room/app.js BUNDLED with the modules it imports (config.js, i18n.js),
        so those are not served as separate readable files either
-     · console.log/info/debug/warn/group removed (pure) - console.error is kept, it is
+     · console.log/info/debug/warn/group removed - by scripts/strip-console.mjs BEFORE
+       esbuild (the `pure` list alone left three shapes in, see that file), arguments
+       included; JS_OPTS.pure stays as a second net - console.error is kept, it is
        what a real failure leaves behind; the full narration is still one link away
        for support via ?pear_debug=<token> (server.js serves source there)
      · PEAR_DEBUG_BUILD=false: the mock seams and window.__pearDebug* registrations
@@ -47,6 +49,7 @@ import { createHash } from "node:crypto";
 import { apiFingerprint } from "./sync-api-version.mjs";
 import { API_VERSION } from "../lib/api-version.js";
 import { cloak, vendorHits, VENDOR_WORDS } from "./cloak.mjs";
+import { stripConsole } from "./strip-console.mjs";
 import { RT_WORDS, RT_UA } from "../lib/rt-proxy.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -265,9 +268,33 @@ const JS_OPTS = {
   },
 };
 
+/* ── 1c. narration out, before esbuild sees the code (scripts/strip-console.mjs) ──
+   Every public .js and inline script passes through quiet(): the room bundle via the
+   onLoad plugin below (so config.js and i18n.js are stripped as they are folded in),
+   everything else at its transform() call. A log line whose arguments WRITE something
+   would change behaviour when dropped - that fails the build instead. */
+let consoleRemoved = 0;
+function quiet(code, where, sourceType = "module") {
+  const r = stripConsole(code, { sourceType });
+  if (r.unsafe.length) fail(`${where}: a console call whose arguments write state cannot be stripped - move the write out of the log line: ${r.unsafe[0]}`);
+  consoleRemoved += r.removed;
+  return r.code;
+}
+const PUBLIC_ABS = PUBLIC_DIRS.map((d) => join(ROOT, d) + "/");
+const quietPlugin = {
+  name: "pear-quiet",
+  setup(b) {
+    b.onLoad({ filter: /\.m?js$/ }, (args) => {
+      if (!PUBLIC_ABS.some((d) => args.path.startsWith(d))) return undefined;
+      return { contents: quiet(readFileSync(args.path, "utf8"), rel(args.path)), loader: "js" };
+    });
+  },
+};
+
 /* ── 2. the room: one bundle, its imports folded in ─────────────────────────── */
 const appResult = await build({
   ...JS_OPTS,
+  plugins: [quietPlugin],
   entryPoints: [join(ROOT, APP_ENTRY)],
   bundle: true,
   format: "esm",
@@ -297,7 +324,7 @@ async function minifyInlineScripts(html) {
     const isJs = !/\bsrc\s*=/i.test(attrs) && body.trim() && (!type || /^(module|text\/javascript)$/i.test(type));
     parts.push(html.slice(last, m.index));
     if (isJs) {
-      const { code } = await transform(body, { ...JS_OPTS, loader: "js" });
+      const { code } = await transform(quiet(body, "an inline <script>", /module/i.test(type) ? "module" : "script"), { ...JS_OPTS, loader: "js" });
       parts.push(`<script${attrs}>${code.trim()}</script>`);
     } else {
       parts.push(m[0]);
@@ -318,7 +345,7 @@ for (const dir of PUBLIC_DIRS) {
     if (ext === ".js" || ext === ".mjs") {
       /* Classic scripts here are all IIFE-wrapped (so minify renames only their locals);
          no `format`, so a script stays a script and a module stays a module. */
-      code = (await transform(src, { ...JS_OPTS, loader: "js" })).code;
+      code = (await transform(quiet(src, r), { ...JS_OPTS, loader: "js" })).code;
     } else if (ext === ".css") {
       code = (await transform(src, { minify: true, loader: "css", legalComments: "none", charset: "utf8" })).code;
     } else if (ext === ".html") {
@@ -370,16 +397,23 @@ if (!QA) {
   );
 }
 let violations = 0;
+/* Narration (QA build included - quiet() runs on both): our own files only. The SDK and pose
+   bundles are third-party and silenced at their loggers instead (step 1). */
+const NARRATION = /\bconsole\.(log|info|debug|warn|group|groupCollapsed|groupEnd|table|dir|trace)\b/;
 for (const abs of walk(OUT)) {
   const text = readFileSync(abs, "utf8");
   for (const [what, re] of FORBIDDEN) {
     const m = text.match(re);
     if (m) { violations++; console.error(`✖ ${relative(OUT, abs)} still contains ${what}: "${m[0]}"`); }
   }
+  if (/\.(m?js|html)$/.test(abs) && !SDK_NAME_RE.test(abs.split(/[\\/]/).pop())) {
+    const m = text.match(NARRATION);
+    if (m) { violations++; console.error(`✖ ${relative(OUT, abs)} still narrates to the console: "${m[0]}" - see scripts/strip-console.mjs`); }
+  }
 }
 
 const kb = (n) => (n / 1024).toFixed(1).padStart(8) + " KB";
-console.log(`\n🍐 PEAR build → ${rel(OUT)}${QA ? "   (QA: debug + mock kept)" : ""}`);
+console.log(`\n🍐 PEAR build → ${rel(OUT)}${QA ? "   (QA: debug + mock kept)" : ""}   · ${consoleRemoved} console lines stripped`);
 for (const [name, before, after] of report) {
   console.log(`   ${name.padEnd(44)} ${before ? kb(before) + " →" : "".padStart(13)} ${kb(after)}`);
 }

@@ -10700,7 +10700,7 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
   const intoTurn = _orientTurnSince ? `${t0 - _orientTurnSince}ms into the turn` : "no turn flagged";
   const tag = `${next.toUpperCase()}${predictive ? " (predictive)" : ""}${held ? " [input held]" : ""}`;
   const marks = [`build v=${PEAR_BUILD}`, `dispatched t=0, ${intoTurn} (local |yaw| ${yaw()}, reference ${refSize})`];
-  const print = (tail) => console.log(`[PEAR][ORIENT] swap timeline → ${tag}: ${marks.join(" · ")}` + (tail ? ` · ${tail}` : ""));
+  const print = (tail) => { console.log(`[PEAR][ORIENT] swap timeline → ${tag}: ${marks.join(" · ")}` + (tail ? ` · ${tail}` : "")); };
   let sentAt = null, ackAt = null, finished = false;
 
   const mark = (label) => {
@@ -14962,7 +14962,7 @@ function logTryOnAnalytics(item, size) {
   })
     .then(r => {
       console.log("[analytics] /api/track-tryon response:", r.status, r.ok ? "ok" : "ERROR");
-      return r.json().then(body => console.log("[analytics] response body:", JSON.stringify(body)));
+      return r.json().then(body => { console.log("[analytics] response body:", JSON.stringify(body)); });
     })
     .catch(err => console.error("[analytics] /api/track-tryon fetch failed:", err));
 }
@@ -17268,11 +17268,19 @@ function armFirstFrameBilling(video, gen) {
       const want = selectedGarmentId();
       const have = wireGarmentId;
       const s = referenceRenderSettle();
-      (have === want ? console.log : console.warn)(
-        `[VTO Pipeline] first frame revealed +${Date.now() - armedAt}ms | selected Garment ID: ${want}`,
-        `| conditioning on the wire: ${have} ${have === want ? "(match)" : "(MISMATCH - revealed at the ceiling)"}`,
-        `| last image acknowledged ${Number.isFinite(s.sinceAckMs) ? Math.round(s.sinceAckMs) + "ms" : "never"} ago`,
-        `(render wait ${REFERENCE_RENDER_SETTLE_MS}ms) | re-sends before reveal: ${redispatches}`);
+      /* Direct calls, not (cond ? console.log : console.warn)(…) - the conditional form shipped
+         this line to production under the `pure` list alone (2026-11-01); scripts/strip-console.mjs
+         now removes either form, this one is simply the plainer to read. */
+      const settled = Number.isFinite(s.sinceAckMs) ? Math.round(s.sinceAckMs) + "ms" : "never";
+      if (have === want) {
+        console.log(`[VTO Pipeline] first frame revealed +${Date.now() - armedAt}ms | selected Garment ID: ${want}`,
+          `| conditioning on the wire: ${have} (match) | last image acknowledged ${settled} ago`,
+          `(render wait ${REFERENCE_RENDER_SETTLE_MS}ms) | re-sends before reveal: ${redispatches}`);
+      } else {
+        console.warn(`[VTO Pipeline] first frame revealed +${Date.now() - armedAt}ms | selected Garment ID: ${want}`,
+          `| conditioning on the wire: ${have} (MISMATCH - revealed at the ceiling) | last image acknowledged ${settled} ago`,
+          `(render wait ${REFERENCE_RENDER_SETTLE_MS}ms) | re-sends before reveal: ${redispatches}`);
+      }
     }
     /* Through the self-timer when one is armed (see "CAMERA GUIDE + SELF-TIMER"): with the timer
        off it calls startBillingWindow(gen) at once, as this line always did. typeof-guarded - the
