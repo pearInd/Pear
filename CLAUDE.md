@@ -65,8 +65,8 @@ WIRE, `lib/prompts.js`); a shopper's request still sheds until that is measured.
 **Known, deliberate limitation:** on a top that also carries
 `FRONT_CLOSURE_LOCK` (P.HIGH), the fit sentence (P.MED) is the first thing
 `fitPrompt()` sheds under budget pressure — by design, since a shirt
-rendered hanging open is a worse failure than a wrong tension. In practice
-the fit-modifier text can drop silently. The old figures here (163 free chars,
+rendered hanging open is a worse failure than a wrong tension. It can still
+drop, but never silently (rule below). The old figures here (163 free chars,
 true-to-size and sizing up always fit) are stale. Measured 2026-11-02 on a shopper's
 front request: a closure top loses it at -2, -1 and +2 without colour/print facts and on
 every rung with them; a plain tee at -2 and -1 (and +2 with facts); backs and bottoms never.
@@ -74,6 +74,15 @@ This is not a bug — see the comment above the `[P.MED, fitSentence(...)]`
 line in `imageOnlyPrompt()` before "fixing" it by raising its priority,
 which would risk the closure lock shedding instead and reopening the
 "rendered wide open" report.
+
+**RULE (Yair's decision, 2026-11-06): the fit clause is never dropped silently in the closure-lock
+path - it is dropped last and logged.** `fitPrompt()` sheds the least critical part first (highest
+P number), so the fit sentence (P.MED) goes only after every P.LOW/P.TRIM part is gone; the
+closure lock (P.HIGH) still outranks it. When it goes, `fitPrompt()` prints one
+`[PEAR] fitPrompt() - the fit clause was shed: budget <N>, final <M> chars (shed in order: …)` line
+(numbers only, §7.21) and adds `{clause: "fit", budget, length}` to
+`promptWithShedForRequest().shedLog`; `trace:prompt` marks those rows `[logged: …]`. The wire is
+unchanged. Pinned by `fit-shed` and 6 mutations (`mutation:capture -- --only "fit clause"`).
 
 > **RULE 0 — NEVER edit a dead clause and report the behaviour as changed.**
 > If a request is about how the garment renders (fit, drape, print placement,

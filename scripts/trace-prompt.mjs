@@ -461,7 +461,11 @@ for (const b of branches) {
     const anyShed = b.rows.some((r) => r.shed.length);
     console.log(`  ── size ladder (fitSentence @ P.MED) ${anyShed ? "──  ⚠ sheds on some rungs" : "──  all rungs fit"}`);
     for (const r of b.rows) {
-      const mark = r.shed.length ? `✖ SHED ${r.shed.join(",")}` : "✓";
+      /* The fit clause is never dropped silently (CLAUDE.md §0, 2026-11-06): the engine logs clause, budget and the final
+         length when it sheds it, and the row says the same here. */
+      const mark = r.shed.length
+        ? `✖ SHED ${r.shed.join(",")}` + (r.shed.includes("fitSentence") ? `  [logged: clause fit, budget ${PROMPT_MAX_CHARS}, final ${r.len}]` : "")
+        : "✓";
       if (r.shed.length) shedding++;
       console.log(`     ${String(r.label).padEnd(13)} ${String(r.len).padStart(3)}/${PROMPT_MAX_CHARS}` +
         `  ${String(PROMPT_MAX_CHARS - r.len).padStart(3)} free  ${mark}`);

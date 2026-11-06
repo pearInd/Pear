@@ -148,6 +148,21 @@ const MUTATIONS = [
     "if (chart.rawSnapshot && guideRoots.some((el) => el.outerHTML.includes(chart.rawSnapshot))) entry.inGuide = true;", "browser-capture"],
   ["a guide link that leaves the page is clicked without the store's pause", "scanner/browser-capture.js",
     "        if (t.away) await sleep(delayMs);\n", "", "browser-capture"],
+
+  /* ── The fit clause is never dropped silently (2026-11-06, CLAUDE.md §0) - lib/prompts.js fitPrompt(). Not a capture
+     rule; it rides this runner because it is the repo's one mutation harness. `--only "fit clause"` runs these alone. */
+  ["fit clause: shed by position, not by priority (before the less critical parts)", "lib/prompts.js",
+    "const at = keep.findIndex(([p]) => p === worst);", "const at = keep.findIndex(([p]) => p !== P.CORE);", "fit-shed"],
+  ["fit clause: ranked below P.TRIM (shed before every less critical part)", "lib/prompts.js",
+    "const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });", "const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 5, LOW: 3, TRIM: 4 });", "fit-shed"],
+  ["fit clause: shed with no [PEAR] line", "lib/prompts.js",
+    "    if (dropped.includes(\"fit\")) {", "    if (false) {", "fit-shed"],
+  ["fit clause: shed with no entry on the request's shed log", "lib/prompts.js",
+    "if (typeof _requestShedLog !== \"undefined\" && _requestShedLog) _requestShedLog.push(...log);", "", "fit-shed"],
+  ["fit clause: the line reports the budget as the final length", "lib/prompts.js",
+    " final ${out.length} chars", " final ${max} chars", "fit-shed"],
+  ["fit clause: the closure lock ranked below it (the closure path's order inverted)", "lib/prompts.js",
+    "...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),", "...(closure ? [[P.TRIM, FRONT_CLOSURE_LOCK]] : []),", "fit-shed"],
 ];
 
 /* ── command line ─────────────────────────────────────────────────────────────── */
