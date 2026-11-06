@@ -508,6 +508,7 @@ const SUITES = [
   ["adult-pants-sizing", "adult-pants-sizing.test.mjs"],
   ["stock-fallback", "stock-fallback.test.mjs"],
   ["stock-dom-scrape", "stock-dom-scrape.test.mjs"],
+  ["terminalx-pdp", "terminalx-pdp.test.mjs"],
   ["numeric-pants-sizing", "numeric-pants-sizing.test.mjs"],
   ["mp4-export", "mp4-export.test.mjs"],
   ["conditioning-trace", "conditioning-trace.test.mjs"],

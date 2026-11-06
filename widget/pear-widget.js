@@ -697,7 +697,10 @@
     // Salesforce Commerce Cloud Dynamic Imaging (.../dw/image/v2/...): box, scale mode,
     // output format, letterbox colour. adidas.co.il serves every gallery photo through
     // it; the thumbnail and the zoom slide of one photo differ ONLY in these.
-    sw: 1, sh: 1, sm: 1, sfrm: 1, bgcolor: 1
+    sw: 1, sh: 1, sm: 1, sfrm: 1, bgcolor: 1,
+    // terminalx.com (Magento): the JSON-LD/og:image copy of a photo carries
+    // ?image_type_mobile=webp_jpeg_like_70 and the gallery copy carries nothing - one photo.
+    image_type_mobile: 1
   };
 
   function upgradeImageUrl(url) {
@@ -966,6 +969,26 @@
     return matches.reduce(function (longest, m) { return m.length > longest.length ? m : longest; });
   }
 
+  /* Every 6+ digit run in the path, for the same-product tests in findGalleryBack() and
+     collectGalleryImages(). THE BUG THIS CLOSES (terminalx.com, Magento): a photo is named
+     <sku>-<n><asset id> - k042580001-11782915605.jpg, k042580001-21782915605.jpg - so the
+     LONGEST run is the per-photo asset id, two photos of one product "disagreed" on it, and
+     every gallery photo but the primary was rejected as another product's: no back photo
+     ever reached the room. Two photos now count as one product when they share ANY run (the
+     SKU here); they are told apart only when both carry runs and share none - equal longest
+     runs still pass, so every photo the longest-run rule accepted is still accepted. A long
+     hex path segment (Magento's /cache/<32 hex>/, the same on every photo of every product)
+     is removed first: its digit runs are not ids. */
+  function productIdRuns(url) {
+    if (!url) return [];
+    var path = url.split("?")[0].replace(/\/dw[0-9a-f]{8}(?=\/)/gi, "").replace(/\/[0-9a-f]{16,}(?=\/)/gi, "/");
+    return path.match(/\d{6,}/g) || [];
+  }
+  function shareProductIdRun(a, b) {
+    for (var i = 0; i < a.length; i++) if (b.indexOf(a[i]) !== -1) return true;
+    return false;
+  }
+
   /* Ground-truth product id straight from the store's own page data, when the
      platform exposes one - far more reliable than guessing a numeric run out of
      a CDN filename (extractProductId above), which can't tell a product id from
@@ -1171,6 +1194,7 @@
   function findGalleryBack(primaryUrl, root) {
     var shopifyId = getShopifyProductId();
     var primaryRegexId = extractProductId(primaryUrl);
+    var primaryIdRuns = productIdRuns(primaryUrl);
     var scope = root || d;
     var sel = scope.querySelectorAll(THUMB_SELECTORS + ", " + PRODUCT_IMG_SELECTORS);
     for (var i = 0; i < sel.length; i++) {
@@ -1188,7 +1212,8 @@
         // Same confirm-don't-veto logic as collectGalleryImages - see its comment.
         if (!(shopifyId && src.indexOf(shopifyId) !== -1)) {
           var candId = extractProductId(src);
-          if (primaryRegexId && candId && candId !== primaryRegexId) continue;   // different product - skip
+          if (primaryRegexId && candId && candId !== primaryRegexId &&
+              !shareProductIdRun(primaryIdRuns, productIdRuns(src))) continue;   // different product - skip
         }
         console.log("[PEAR] back image identified from DOM signals:", src, "| label:", label.trim().slice(0, 80));
         return src;
@@ -1328,6 +1353,7 @@
        already resolved as THIS product's photo by the caller. */
     var shopifyId = getShopifyProductId();
     var primaryRegexId = extractProductId(primaryUrl);
+    var primaryIdRuns = productIdRuns(primaryUrl);
     console.log('[PEAR] primary URL:', primaryUrl);
     console.log('[PEAR] shopifyId:', shopifyId);
     var rejected = [];
@@ -1343,7 +1369,8 @@
         var confirmedByShopifyId = shopifyId && u.indexOf(shopifyId) !== -1;
         if (!confirmedByShopifyId) {
           var candId = extractProductId(u);
-          if (primaryRegexId && candId && candId !== primaryRegexId) {
+          if (primaryRegexId && candId && candId !== primaryRegexId &&
+              !shareProductIdRun(primaryIdRuns, productIdRuns(u))) {
             rejected.push(u);
             return;   // different product - skip
           }
@@ -1542,15 +1569,26 @@
      that walk written for stock would be free to drift and start reading a DIFFERENT
      control than the one the size list came from, which is the one way this could
      report a size as sold out that the shopper is looking at in stock. */
+  /* terminalx.com (React, hashed class names) renders its picker as bare <div>s with
+     data-test-id="qa-size-item" (title "S : מידה") and no size word in any class - none of
+     the selectors above matched, so the room never learned the product's own sizes. Their
+     shared parent is one more candidate control, tried after the named ones, and the item
+     attribute is read like a button; the every-token-or-abstain rule below still applies. */
+  var SIZE_ITEM_SELECTOR = '[data-test-id*="size-item" i]';
   function sizeOptionNodes() {
-    var nodes = d.querySelectorAll(SIZE_CONTROL_SELECTORS);
+    var nodes = [].slice.call(d.querySelectorAll(SIZE_CONTROL_SELECTORS));
+    var items = d.querySelectorAll(SIZE_ITEM_SELECTOR);
+    for (var p = 0; p < items.length; p++) {
+      var par = items[p].parentElement;
+      if (par && nodes.indexOf(par) === -1) nodes.push(par);
+    }
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i], raw = [];
       var opts = el.querySelectorAll ? el.querySelectorAll("option") : [];
       for (var j = 0; j < opts.length; j++) raw.push({ v: opts[j].textContent, node: opts[j] });
       if (!raw.length) {
         var btns = el.querySelectorAll
-          ? el.querySelectorAll("button,label,li,a,[data-value]") : [];
+          ? el.querySelectorAll("button,label,li,a,[data-value]," + SIZE_ITEM_SELECTOR) : [];
         for (var k = 0; k < btns.length; k++) {
           raw.push({ v: readAttr(btns[k], "data-value") || btns[k].textContent, node: btns[k] });
         }
@@ -1559,6 +1597,19 @@
       for (var m = 0; m < raw.length; m++) {
         var v = String(raw[m].v == null ? "" : raw[m].v).trim();
         if (!v) continue;                        // blank rows carry no signal either way
+        /* Waist-by-length jeans ("30W-32L", terminalx.com) read as their waist, the number
+           the room's jeans chart is keyed on; two lengths of one waist are one size, and
+           it is in stock when either length is (the in-stock node replaces a sold-out one). */
+        var wl = /^(\d{2})\s*W\s*[-\/xX ]?\s*\d{2}\s*L$/i.exec(v);
+        if (wl) {
+          v = wl[1];
+          if (seen[v.toLowerCase()]) {
+            for (var q = 0; q < out.length; q++) {
+              if (out[q].value === v && nodeSaysOutOfStock(out[q].node) && !nodeSaysOutOfStock(raw[m].node)) out[q].node = raw[m].node;
+            }
+            continue;
+          }
+        }
         if (!isPlausibleSizeToken(v)) {
           // A leading placeholder ("Choose a size", "בחר מידה") is normal and ignored;
           // a non-size value ANYWHERE else means this control isn't a size picker, so
@@ -3242,7 +3293,11 @@
   ].join(", ");
   var ATC_TEXTS = [
     "add to cart", "add to bag", "add to basket",
-    "הוסף לסל", "הוסף לעגלה", "buy now", "קנה עכשיו"
+    "הוסף לסל", "הוסף לעגלה", "buy now", "קנה עכשיו",
+    /* The noun form. terminalx.com (a React storefront, no cart <form>, hashed class names)
+       labels its only cart button "הוספה לסל", which none of the above matched, so the PEAR
+       button fell back to sitting under the product's <h1> instead of beside the cart. */
+    "הוספה לסל", "הוספה לעגלה"
   ];
 
   function findAllAddToCartButtons() {
