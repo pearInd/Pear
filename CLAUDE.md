@@ -2261,8 +2261,19 @@ What shipped (branch `feat/garment-kinds`):
   jacket through the real room in TEST mode and keeps today's words for a shopper's dress (it fails with the gate removed). 11
   mutants caught in `garment-kind` §5. **Needs a `wrangler deploy`** (`lib/prompts.js` changed; fingerprint 6ea2ab50) before a
   TEST session through the edge reads it.
-- **Not done / open:** the measured check of the shipped build (~3 sessions: a skirt, a dress, and a shirt/pants/full-look
-  regression); then the switch to shoppers. Jumpsuits/rompers/overalls, sets, jackets layered over a top, swimwear/underwear, and
+- **MEASURED on the shipped build 2026-11-07** (3 approved sessions; the branch room built like production and served by the rig's
+  `--room-dir`, the deployed Worker fd7c141f, no rig override - the words came from the edge's token expansion):
+  · skirt (record mw5m6emk, kind "skirt", rear mask as before): a black ankle-length skirt on every frame, the slit at the side and
+    back, length steady; the side mid-stride now reads as a skirt with a slit. Back acked 1.27s, 7 fps, no stall.
+  · dress (mw5m83zi, kind "dress", `ref` whole/whole): a floor-length dress on every frame, front, side and back; no handbag pasted.
+    Defects: straps drawn on the back 3.7-4.3s (the product is strapless; d1 showed them for a moment), the skirt slightly sheer
+    in front, and it hangs straighter than d1's flared one (the generalised "falls" wording). Acks 207/220ms, 10 fps.
+  · PEAK tee regression (mw5mow0f, kind null, the white-tee clip): the PEAK print on the chest from the first frame, brown, steady
+    size. The back view came out plain - the engine acknowledged the primed back in 6.1s and never acknowledged the turn's back
+    in the 2.3s left (`swap-fail` "Control channel closed" at teardown), so the front reference drew the back. Wording and photos
+    on this path are byte-identical to main's: the back view of a no-kind garment is UNVERIFIED on this build, not failed.
+- **Not done / open:** a PEAK (or any printed-back) session on this build that reaches its back; the merge to main (production's
+  room takes /size and /prompt from the origin until then); then the switch to shoppers. Jumpsuits/rompers/overalls, sets, jackets layered over a top, swimwear/underwear, and
   per-type measurement fields are not built (owner's decisions open). A denim dress is still sized on the waist chart
   (`titleNamesPants` misses שמלת) and fitted with the bottoms presence gate - the kind does not move a region. A dress in a full
   look still stitches as a top over a bottom.
