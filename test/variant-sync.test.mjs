@@ -151,14 +151,18 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
      colour, not the size - it fills no hole and SELECTS between two frozen literals.
      Colour, size and variant remain excluded by the second half of this check. */
   check("...and the resolver branches on the garment's fixed identity alone",
-    /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(APP) &&
+    /\[P\.CORE, dress \? \(angle === "back" \? DRESS_ANCHOR\.back : DRESS_ANCHOR\.front\)\s*: skirt \? \(angle === "back" \? \(plainBack \? SKIRT_ANCHOR\.backPlain : SKIRT_ANCHOR\.back\) : SKIRT_ANCHOR\.front\)\s*: plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(APP) &&
     /const anchors = angle === "back"[\s\S]{0,120}?\(plainBack \? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR\)[\s\S]{0,40}?: CATEGORY_ANCHOR;/.test(APP) &&
     /* `_backLooksPrinted` is admissible on the same terms as backIsPlain above: it is a property
        of the PRODUCT's own rear photograph, measured once at pre-load and immutable for the
        session. Not the selected variant, not the colour, not the size - and it fills no hole. */
     /const plainBack = angle === "back" && item && item\.backIsPlain === true && item\._backLooksPrinted !== true;/.test(APP) &&
     /const bottoms = isBottomsGarment\(item\);/.test(APP) &&
-    /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(APP) &&
+    /const plainTee = !dress && !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(APP) &&
+    /* THE KIND (2026-11-07) is admissible on the same terms: garmentKindOf() reads the product's own title and type fields,
+       fixed for the session, and SELECTS SKIRT_ANCHOR / DRESS_ANCHOR - checked below to read no colour, size or variant. */
+    /const kind = typeof _requestTest !== "undefined" && _requestTest === true && typeof garmentKindOf === "function"\s*\? garmentKindOf\(item\) : null;/.test(APP) &&
+    /const dress = kind === "dress";/.test(APP) && /const skirt = kind === "skirt" && bottoms;/.test(APP) &&
     /\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(APP) &&
     /const closure = !bottoms && angle !== "back" && hasFrontClosure\(item\);/.test(APP),
     "category, ANGLE and CONSTRUCTION are the only permitted inputs - each one selects a " +
@@ -172,6 +176,14 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
     !/\bitem\.(color|colour|variant|variantId|size|sku)\b/.test(
       APP.slice(APP.indexOf("function isPlainKnitTop"), APP.indexOf("const CATEGORY_ANCHOR"))),
     "a colour read here would put the base colour back on the wire through a new door");
+  /* The KIND predicate (2026-11-07), held to the same rule: the product's title and its type fields, nothing per-variant. */
+  {
+    const kindFn = APP.slice(APP.indexOf("function garmentKindOf("), APP.indexOf("/* @pear-shared:garment-kind END */"));
+    check("...and the kind predicate reads identity fields, never colour, size or variant",
+      kindFn.length > 200 && /\[item\.name, item\.title\]/.test(kindFn) && /\[item\.type, item\.category, item\.subType\]/.test(kindFn) &&
+      !/\bitem\.(color|colour|colorHex|variant|variantId|size|sku|textOcr|backIsPlain)\b/.test(kindFn),
+      "the kind selects an anchor; a per-variant read would make it a description channel");
+  }
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse
      than no check - it would force whoever reads it to delete the documentation. */

@@ -556,6 +556,7 @@ const SUITES = [
   ["garment-facts", "garment-facts.test.mjs"],
   ["classify-reply", "classify-reply.test.mjs"],
   ["fit-ladder", "fit-ladder.test.mjs"],
+  ["garment-kind", "garment-kind.test.mjs"],
   ["fit-shed", "fit-shed.test.mjs"],
   ["heavy-reference", "heavy-reference.test.mjs"],
   ["prompt-token", "prompt-token.test.mjs"],

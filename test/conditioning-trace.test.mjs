@@ -216,10 +216,10 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
      fails here. The angle-axis flatness itself is asserted separately below and by
      image-first §1's byte-exact anchor pins. */
   check("exactly TWO CORE parts - the frozen anchor, then the per-product identity lock",
-    /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],/.test(resolverCode) &&
+    /\[P\.CORE, dress \? \(angle === "back" \? DRESS_ANCHOR\.back : DRESS_ANCHOR\.front\)\s*: skirt \? \(angle === "back" \? \(plainBack \? SKIRT_ANCHOR\.backPlain : SKIRT_ANCHOR\.back\) : SKIRT_ANCHOR\.front\)\s*: plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],/.test(resolverCode) &&
     /\[P\.CORE, identityLockSentence\(item, angle\)\],/.test(resolverCode) &&
     (resolverCode.match(/P\.CORE/g) || []).length === 2 &&
-    resolverCode.indexOf("P.CORE, plainTee") < resolverCode.indexOf("P.CORE, identityLockSentence"),
+    resolverCode.indexOf("P.CORE, dress") < resolverCode.indexOf("P.CORE, identityLockSentence"),
     resolverCode);
   /* The identity lock must stay ANGLE-AWARE, because that is what keeps the CORE from
      growing on the back branch - and what stops front lettering being asserted over a

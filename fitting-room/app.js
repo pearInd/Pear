@@ -3763,6 +3763,10 @@ async function resolveGarmentCategory(item) {
   } catch (e) {
     console.warn("[PEAR] resolveGarmentCategory() - LLM tier failed, using default:", e?.message || e);
   }
+  /* NEVER SILENTLY (2026-11-07): every tier abstained, so the garment is fitted as a top - the catalog's majority and the
+     old behaviour - and the console says so, with the title it could not read. */
+  console.warn("[PEAR] garment region unknown - every tier abstained; fitted as a top (the default):",
+    String(item.name || item.title || "(no title)").slice(0, 80));
   return "top";
 }
 
@@ -8447,7 +8451,18 @@ function referenceBackHint(url) {
   for (const it of items) {
     if (!it) continue;
     const back = typeof distinctBackOf === "function" ? distinctBackOf(it) : null;
-    if (back && sameImage(back, url)) return { region: isBottomsGarment(it) ? "bottom" : "top" };
+    if (back && sameImage(back, url)) {
+      /* A DRESS GOES WHOLE (2026-11-07, TEST sessions until measured - CLAUDE.md §7.23). Its band is asked for as a top or a
+         bottom, and either one paints half of the dress away: the box for a top is the bodice (the skirt below it painted out),
+         the box for a bottom ("שמלת ג'ינס" reads as one) starts at the waist (the bodice painted out). Run on the real photo
+         through this file's own mask code, a strapless maxi's front came out as a bodice over a smeared block. Sent whole, the
+         dress rendered on every frame (rig d1). The cost, stated: the store's model is in the rear photo again (§2.38). */
+      if (typeof traceEnabled === "function" && traceEnabled() && typeof garmentKindOf === "function" && garmentKindOf(it) === "dress") {
+        refMaskNote({ did: "whole", why: "dress" });
+        return null;
+      }
+      return { region: isBottomsGarment(it) ? "bottom" : "top" };
+    }
   }
   return null;
 }
@@ -8469,6 +8484,11 @@ function referenceFrontHint(url) {
   if ((typeof resolveLook === "function" ? resolveLook() : null)) return null;
   const it = typeof activeItem !== "undefined" ? activeItem : null;
   if (!it || isBottomsGarment(it)) return null;
+  /* A DRESS GOES WHOLE - see referenceBackHint(): below the bodice's "hem" is the rest of the dress. */
+  if (typeof traceEnabled === "function" && traceEnabled() && typeof garmentKindOf === "function" && garmentKindOf(it) === "dress") {
+    refMaskNote({ did: "whole", why: "dress", side: "front" });
+    return null;
+  }
   const back = typeof distinctBackOf === "function" ? distinctBackOf(it) : null;
   if (back && sameImage(back, url)) return null;
   const g = typeof galleryOf === "function" ? galleryOf(it) : null;
@@ -13602,6 +13622,87 @@ function isBottomsGarment(item) {
   return BOTTOMS_TOKENS.test(fields);
 }
 
+/* @pear-shared:garment-kind BEGIN - kept byte for byte in fitting-room/app.js and lib/prompts.js (test/garment-kind.test.mjs §1). */
+/* ── THE GARMENT KIND (2026-11-07) - "the skirt rendered as trousers; a dress cannot render at all" ──────────────────────
+   isBottomsGarment() names every garment a top or a bottom. Two kinds need more than their region:
+     · A SKIRT is a bottom, and the bottoms wording ("pants/shorts", "leg profile", a fit sentence about "a clean break at
+       the ankle") made the engine draw trousers. Measured 2026-11-07 on the real engine: the same skirt photo, the same
+       clip, a byte-identical reference upload - wide black trousers on every frame with the bottoms wording (rig session
+       s3-control), a skirt with its slit with a skirt's wording (s2). The wording, not the engine (CLAUDE.md §7.23).
+     · A DRESS is fitted as a top, whose wording ends "Keep the subject's lower body ... unmodified" - the skirt of the
+       dress is instructed away - and the room's top-front mask paints it out of the reference as well. With the whole
+       photo and a dress's wording it rendered a floor-length dress on every frame (d1).
+   garmentKindOf() reads the product's own TITLE (name/title) and answers "dress", "skirt" or null. null is today's path,
+   by region, and it is the answer whenever the title is not unambiguous: a set ("סט", "חליפה", "set", "co-ord", "suit",
+   "two piece"), a title naming both kinds, or any other garment noun beside the kind ("Top and Skirt", "שמלה עם ז'קט").
+   The grammar that keeps the common compounds right:
+     · English names the head noun LAST: "shirt dress", "t-shirt dress", "jeans skirt" are a dress and a skirt - the
+       garment noun right before the kind modifies it - while "dress shirt", "dress pants", "dress shoes" are not dresses
+       (a garment or shoe noun right after "dress" makes it an adjective).
+     · Hebrew names it FIRST, in construct: "שמלת חולצה", "חצאית מכנס" - a bare garment noun right after שמלת/חצאית
+       modifies it. "חצאית וחולצה" is two garments: the ו (and) is not a modifier.
+     · Hebrew is matched at a word start with the kind's own endings, one prefix letter allowed (ו ה ב ל מ ש כ): חשמל
+       ("electric", as in כחול חשמל) is not a dress, חצאים ("halves") is not a skirt. Fabric words (ג'ינס, denim) are no
+       garment here, so "שמלת ג'ינס" is a dress - which isBottomsGarment() calls a bottom.
+   An explicit type/category/subType of exactly "dress" or "skirt" decides only when the title names no garment at all.
+   NOT the vision verdict: Gemini's garment_category "dress" covers jumpsuits and overalls too, and a jumpsuit given a
+   dress's wording would grow a skirt. Self-contained (CLAUDE.md §2.6) - the suites slice this block and run it alone. */
+const GARMENT_KIND_EN_NOUNS = "t-?shirts?|shirts?|tees?|tops?|blouses?|tanks?|camis?|camisoles?|jackets?|coats?|" +
+  "cardigans?|blazers?|hoodies?|sweaters?|sweatshirts?|pullovers?|vests?|pants|trousers?|jeans|shorts|leggings|" +
+  "joggers?|jumpsuits?|rompers?|overalls|playsuits?|bodysuits?|kimonos?|bras?|bikinis?";
+const GARMENT_KIND_HE_NOUNS = "חולצ|טישרט|טי-שירט|סווטשירט|סוודר|גופי|ז'קט|ג'קט|מעיל|קפוצ|בלייזר|קרדיגן|טופ|מכנס|" +
+  "שורט|ברמודה|טייץ|טייצ|לגינ|אוברול|סרבל|חזיי|ביקיני";
+const GARMENT_KIND_RE = Object.freeze({
+  enDress: /^(?:[a-z]+-)*(?:sun|mini|midi|maxi|shirt|slip|sweater|shift|smock|tee|night)?dress(?:es)?$/,
+  enSkirt: /^(?:[a-z]+-)*(?:mini|midi|maxi)?skirts?$/,
+  heDress: /^[והבלמשכ]?שמל(?:ה|ת|ות|ונ)/,
+  heSkirt: /^[והבלמשכ]?חצאי(?:ת|ות)/,
+  enNoun: new RegExp("^(?:" + GARMENT_KIND_EN_NOUNS + ")$"),
+  enAfterDress: new RegExp("^(?:" + GARMENT_KIND_EN_NOUNS + "|shoes?|socks?|boots?|slacks|suits?)$"),
+  heNoun: new RegExp("^[והבלמשכ]?(?:" + GARMENT_KIND_HE_NOUNS + ")"),
+  heNounBare: new RegExp("^(?:" + GARMENT_KIND_HE_NOUNS + ")"),
+  enSet: /^(?:sets?|co-?ords?|suits?|(?:two|2|three|3)-pieces?)$/,
+  heSet: /^[והבלמשכ]?(?:סט(?:ים)?$|חליפ)/,
+  setPhrase: /\b(?:two|2|three|3)\s+pieces?\b/,
+});
+
+/**
+ * The garment's KIND, where its region alone renders it wrong - see the block comment above.
+ * @param {{name?:string, title?:string, type?:string, category?:string, subType?:string}|null|undefined} item
+ * @returns {"dress"|"skirt"|null} null = no kind of its own: the region decides, exactly as before.
+ */
+function garmentKindOf(item) {
+  if (!item) return null;
+  const R = GARMENT_KIND_RE;
+  /* Apostrophes, gereshes and smart quotes folded onto one spelling, lower-cased - the same fold as _normApos()
+     (CLAUDE.md §3), kept here so the block runs alone. */
+  const fold = (s) => String(s == null ? "" : s)
+    .replace(/[ʼ׳‘’′]/g, "'").replace(/[״“”″]/g, '"').toLowerCase();
+  const text = fold([item.name, item.title].filter((s) => typeof s === "string" && s.trim()).join(" "));
+  const words = text.split(/[\s,.;:!?/\\|()[\]{}+&*_"]+/).filter((w) => /[a-z0-9א-ת]/.test(w));
+  if (R.setPhrase.test(text) || words.some((w) => R.enSet.test(w) || R.heSet.test(w))) return null;
+  const tag = words.map((w) => (R.enDress.test(w) || R.heDress.test(w) ? "dress"
+    : R.enSkirt.test(w) || R.heSkirt.test(w) ? "skirt"
+    : R.enNoun.test(w) || R.heNoun.test(w) ? "noun" : ""));
+  const en = (w) => /^[a-z0-9]/.test(w);
+  for (let i = 0; i < words.length; i++) {
+    if (tag[i] === "dress" && en(words[i]) && i + 1 < words.length && R.enAfterDress.test(words[i + 1])) tag[i] = "";
+  }
+  for (let i = 0; i < words.length; i++) {
+    if (tag[i] !== "dress" && tag[i] !== "skirt") continue;
+    if (en(words[i]) && i > 0 && tag[i - 1] === "noun" && en(words[i - 1])) tag[i - 1] = "";
+    if (!en(words[i]) && /ת$/.test(words[i]) && i + 1 < words.length && tag[i + 1] === "noun" && R.heNounBare.test(words[i + 1])) tag[i + 1] = "";
+  }
+  if (tag.includes("noun")) return null;
+  const kinds = new Set(tag.filter(Boolean));
+  if (kinds.size === 1) return kinds.has("dress") ? "dress" : "skirt";
+  if (kinds.size > 1) return null;
+  const marks = [item.type, item.category, item.subType].map((s) => fold(s).trim()).filter(Boolean);
+  const dress = marks.some((m) => /^dress(?:es)?$/.test(m)), skirt = marks.some((m) => /^skirts?$/.test(m));
+  return dress === skirt ? null : dress ? "dress" : "skirt";
+}
+/* @pear-shared:garment-kind END */
+
 /* The garment facts the prompt engine reads - plain fields only. Checked against the
    engine itself: the moved builders read exactly these off an item, and nothing else
    (a corpus of 351,779 prompts matched the in-browser engine byte for byte with only
@@ -18072,6 +18173,8 @@ async function goLive() {
          the classifier's verdict never brought them. */
       facts: activeItem ? { color: activeItem.colorHex || null, ocr: typeof activeItem.textOcr === "string" ? activeItem.textOcr.length : null,
         plainBack: typeof activeItem.backIsPlain === "boolean" ? activeItem.backIsPlain : null } : undefined,
+      /* THE GARMENT KIND the TEST prompt and reference were chosen by ("dress", "skirt", or null for the region's path - §7.23). */
+      kind: activeItem && typeof garmentKindOf === "function" ? garmentKindOf(activeItem) : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the

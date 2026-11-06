@@ -125,6 +125,8 @@ const NEEDED = [
   "STRICT_REFERENCE_LOCK", "PLAIN_TEE_ANCHOR", "FRONT_CLOSURE_LOCK",
   "CATEGORY_ANCHOR", "BACK_CATEGORY_ANCHOR", "PLAIN_BACK_ANCHOR", "LOOK_ANCHOR",
   "VOLUME_PERSISTENCE", "CLOSED_BACK_HEM",
+  /* The garment kinds (2026-11-07, CLAUDE.md §7.23) - TEST requests only, traced in their own section below. */
+  "SKIRT_ANCHOR", "DRESS_ANCHOR",
 ];
 
 const scope = {};
@@ -334,7 +336,21 @@ const branches = [
    hard-sliced from the END. The BACK branches get the back variant, which withholds the
    print half (front lettering asserted over a back reference is the double-print bug).
    The full-look path does not route through imageOnlyPrompt() and gets none. */
-for (const b of branches) {
+/* THE GARMENT KINDS (2026-11-07, CLAUDE.md §7.23) - selected by garmentKindOf() on a TEST request only, so they are their
+   own table: `branches` (and --json's `branches`) stays the shopper's wire, comparable byte for byte with HEAD. */
+const SK = scope.SKIRT_ANCHOR ?? {};
+const DR = scope.DRESS_ANCHOR ?? {};
+const testBranches = [
+  { id: "skirt / front (TEST)",                 fit: "skirt",      parts: [[P.CORE, SK.front, "SKIRT_ANCHOR.front"]] },
+  { id: "skirt / back (rear print) (TEST)",     fit: "skirt",      parts: [[P.CORE, SK.back, "SKIRT_ANCHOR.back"]] },
+  { id: "skirt / back (PLAIN rear) (TEST)",     fit: "skirt",      parts: [[P.CORE, SK.backPlain, "SKIRT_ANCHOR.backPlain"]] },
+  { id: "dress / front (TEST)",                 fit: "upper_body", parts: [[P.CORE, DR.front, "DRESS_ANCHOR.front"]] },
+  { id: "dress / front + closure (TEST)",       fit: "upper_body", parts: [[P.CORE, DR.front, "DRESS_ANCHOR.front"],
+                                                                           [P.HIGH, closure, "FRONT_CLOSURE_LOCK"]] },
+  { id: "dress / back (TEST)",                  fit: "upper_body", parts: [[P.CORE, DR.back, "DRESS_ANCHOR.back"]] },
+];
+
+for (const b of [...branches, ...testBranches]) {
   if (b.fit) {
     const lock = /\bback\b/.test(b.id) ? identityLockBack : identityLockFront;
     if (lock) b.parts = [b.parts[0], [P.CORE, lock, "identityLock"], ...b.parts.slice(1)];
@@ -388,6 +404,8 @@ const AUDIT = [
      never was - the kind of false belief this audit exists to make unmaintainable. */
   "identityLockSentence", "garmentPrintText", "colorNameFromHex", "KEEP_OPPOSITE_LAYER",
 ];
+/* The kind's selector and anchors, audited apart so the shopper's audit stays comparable with HEAD (CLAUDE.md §7.23). */
+const TEST_AUDIT = ["garmentKindOf", "SKIRT_ANCHOR", "DRESS_ANCHOR"];
 
 const code = src
   .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -411,7 +429,7 @@ function functionBody(name) {
 /* BFS the call graph from the live builders. */
 const reachable = new Set();
 const queue = [...LIVE_ROOTS];
-const CANDIDATES = [...new Set([...AUDIT, ...LIVE_ROOTS, "fitPrompt"])];
+const CANDIDATES = [...new Set([...AUDIT, ...TEST_AUDIT, ...LIVE_ROOTS, "fitPrompt"])];
 while (queue.length) {
   const fn = queue.shift();
   if (reachable.has(fn)) continue;
@@ -423,17 +441,19 @@ while (queue.length) {
   }
 }
 
-const audit = AUDIT.map((name) => {
+const auditOf = (name) => {
   const refs = (code.match(new RegExp(`\\b${name}\\b`, "g")) ?? []).length;
   const live = reachable.has(name);
   // Referenced somewhere, but not from a live builder → the transitive trap.
   const orphaned = !live && refs > 1;
   return { name, refs, dead: !live, orphaned };
-});
+};
+const audit = AUDIT.map(auditOf);
+const testAudit = TEST_AUDIT.map(auditOf);
 
 /* ── output ───────────────────────────────────────────────────────────────── */
 if (asJson) {
-  console.log(JSON.stringify({ promptMaxChars: PROMPT_MAX_CHARS, promptMaxCharsKind: PROMPT_MAX_CHARS_KIND, branches, audit, unresolved }, null, 2));
+  console.log(JSON.stringify({ promptMaxChars: PROMPT_MAX_CHARS, promptMaxCharsKind: PROMPT_MAX_CHARS_KIND, branches, audit, unresolved, testBranches, testAudit }, null, 2));
   process.exit(0);
 }
 
@@ -444,7 +464,8 @@ console.log(`   budget: ${PROMPT_MAX_CHARS} chars (${PROMPT_MAX_CHARS_SOURCE})\n
 
 let over = 0;
 let shedding = 0;
-for (const b of branches) {
+for (const b of [...branches, { section: true }, ...testBranches]) {
+  if (b.section) { console.log(`\n${bar}\n🧪 TEST REQUESTS ONLY - the garment kinds (garmentKindOf, CLAUDE.md §7.23); a shopper's wire is the table above`); continue; }
   if (!b.base) { console.log(`\n▸ ${b.id}\n  ⚠ could not resolve — check the constant names in NEEDED`); continue; }
   const n = b.wire.length;
   const flag = n > PROMPT_MAX_CHARS ? "  ✖ OVER BUDGET" : "";
@@ -474,7 +495,7 @@ for (const b of branches) {
 }
 
 console.log(`\n${bar}\n⚰️  REACHABILITY AUDIT — from ${LIVE_ROOTS.join(" / ")}\n`);
-for (const a of audit) {
+for (const a of [...audit, ...testAudit]) {
   const mark = a.dead ? "✖ DEAD" : "✓ live";
   const note = a.orphaned
     ? `${a.refs} refs, but no caller reaches the wire`

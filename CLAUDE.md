@@ -337,6 +337,9 @@ to the `Camera + engine bootstrap` banner, from `const LOOK_BAND_TIMEOUT_MS = 35
 `/* Per-product view lookup` and `scanner/scan-store.js` from
 `async function saveClassification(` to `/* ── Gemini classification` — keep the
 garment_cache read/write helpers inside those spans.
+`garment-kind` compares the block between `/* @pear-shared:garment-kind BEGIN` and `/* @pear-shared:garment-kind END */` in
+`lib/prompts.js` and `fitting-room/app.js` byte for byte and runs it alone (§7.23) - keep it self-contained; it also slices
+`app.js` from `function referenceBackHint(url) {` to `/** The server's band for this rear photo` (the dress's whole photos).
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
@@ -1598,6 +1601,7 @@ same commit. Whichever is wrong is the one that wins.
 | Centimetre/inch unit regexes (`SIZE_CHART_CM_RE`, `SIZE_CHART_IN_RE`, `SIZE_CHART_DECLARED_IN_RE`) | `pear-widget.js` (caption tier + the inches/cm twin) ↔ `scanner/size-chart-reader.src.js` ↔ `lib/sizing.js` (cell/header tier) - `size-chart-shared-fixes` §0 |
 | The page's grid finder (`sizeChartGrid` incl. ARIA div-grids, `sizeChartTables` twin collapse, `sizeChartIsGridEl`) | `pear-widget.js` (the live collector) ↔ `scanner/size-chart-reader.src.js` (the scanner) - `size-chart-shared-fixes` §0 asserts the same text |
 | Garment region classifier (`isBottomsGarment`, `BOTTOMS_TOKENS`, `TOPS_TOKENS`) | `app.js` ↔ `lib/prompts.js` (server copy honours the browser's verdict; asserted identical by `prompt-engine` §2) |
+| Garment KIND (`garmentKindOf`, `GARMENT_KIND_*`, the `@pear-shared:garment-kind` block) | `app.js` ↔ `lib/prompts.js` - byte-identical, `garment-kind` §1 (§7.23). Its apostrophe fold copies `_normApos` |
 | Orientation knobs the browser forwards vs the knobs the engine reads | `app.js: ORIENT_KNOB_KEYS` ↔ `lib/orient-engine.js: ORIENT_KNOB_KEYS` (`orient-engine` §2) |
 | Orientation values both halves need | `ORIENT_YAW_FRESH_MS`, `PRESENCE_PROMPT_YAW_SUPPRESS_DEG`, `ORIENT_EARLY_TURN_DEFAULT_SPEED` and the `?early_turn_speed` parse (`ORIENT_EARLY_TURN_MIN_SPEED`) in `app.js` (the pose loop, the presence prompt) ↔ `lib/orient-engine.js` (`orient-engine` §2) |
 | Prompt facts the browser sends vs the fields the engine accepts | `app.js: PROMPT_FACT_STRINGS / PROMPT_FACT_BOOLS` ↔ `lib/prompts.js: PROMPT_ITEM_STRINGS / PROMPT_ITEM_BOOLS` (`prompt-engine` §3) |
@@ -1657,6 +1661,7 @@ npm run scan             # scanner/scan-store.js over a storefront
 
 npm run qa:visual        # the visual gate: drive a 360 + swap, then score the frames
 npm run test:visual      #   …just the agent  (npx playwright test test/e2e/visual-agent.spec.mjs)
+npm run test:kinds       # the garment kinds through the real room, mocked engine, nothing billed (§7.23)
 npm run inspect:visuals  #   …just the scoring (node scripts/inspect-visuals.mjs)
 npm run fixtures         # regenerate test/fixtures/ (generated, gitignored, --force to rebuild)
 
@@ -2133,6 +2138,9 @@ two fixes were measured once each (y1, y2 - 5 credits in all).
   fingerprint (9d1a4aa564eaae66) are 0999e6f's again, `skirt-anchor` removed. **Not tried, the next suspects:** the lower-body
   size sentence ("clean break at the ankle" - every rung of that ladder is trouser-shaped), and the engine itself - its
   lower-body path may only draw legged garments (the reference was a clear skirt in both photos). Measure one at a time.
+  **ANSWERED 2026-11-07 (§7.23): the wording, not the engine.** With no trouser word anywhere (a skirt anchor AND a skirt fit
+  sentence) the same skirt rendered as a skirt; with today's bottoms wording, on the same clip and byte-identical reference
+  upload, as wide trousers again. y1 had renamed the noun but kept the trouser fit sentence.
 - **x3, the zip jacket (4327481085):** three front photos, no back, so the server generated one (`synthesizeBackView`) - a
   **1,594 KB PNG** (store photos are 50-110 KB). The prime held the uplink 4s and failed; the render froze on ONE frame for the
   whole window (2 fps out, a 3.1s stall) - the jacket itself was never seen. **Fixed for TEST sessions (743242d):**
@@ -2214,6 +2222,50 @@ second one. `scanner/pregen-backs.js`; no bundle changed.
   prepared rear (the jacket's, already stored) through production: 0.73s warm, 8.1s on the first call after idle (no generation in
   either). **Not done:** a paid run on a store; and the garment band (`/api/garment-box`) is still memory + CDN only, so it is cold after
   a deploy (y2: 7.7s) - not part of this stage.
+
+### 7.23 The garment KIND - a skirt and a dress (2026-11-07, TEST requests/sessions until the shipped build is measured)
+Asked: "make the try-on work for every garment type Gemini can identify". Discovery first: Gemini's photo classifier answers a
+closed list (`pants | top | dress | unknown`, the same four in the DB CHECK, `archive/supabase_setup_v13.sql`), the title classifier
+`top | bottom | unknown`; the room collapses everything to two regions with "top" as the silent default. Two kinds rendered wrong:
+- **The skirt rendered as trousers - the WORDING.** Four approved rig sessions (clip shirt1915, 178/74, production 150dc57), the
+  wording swapped in the test browser only: today's bottoms wording = wide black trousers on every frame (s3-control); the same
+  photo with a skirt anchor and a skirt fit sentence, no trouser word = a skirt with its slit, front and back (s2; s1 with the front
+  photo cleaned above the waistband, the same). The reference upload was byte-identical between s2 and s3 (42,813 B). Weak spot in
+  both: the side view mid-stride reads leg-shaped.
+- **A dress cannot render today - the WORDING and the REFERENCE.** It is fitted as a top: the anchor ends "Keep the subject's lower
+  body ... unmodified", and the garment box for a top boxes the BODICE, so the room's top-front mask (`refMaskHemRow` abstains -
+  the colour never stops) paints the whole skirt of the dress out of the reference (proven free: the room's own mask code run on the
+  real photo left a bodice over a smeared block). With the whole photo and a dress's wording the engine rendered a floor-length dress
+  on every frame (d1, Princess Polly's strapless A-line maxi - FOX sells no dress); straps were drawn on its back for a moment.
+What shipped (branch `feat/garment-kinds`):
+- **`garmentKindOf()`** - the `@pear-shared:garment-kind` block, byte-identical in `lib/prompts.js` and `app.js`: the TITLE alone
+  answers "dress", "skirt" or null (= today's path by region). English head noun last ("shirt dress" is a dress, "dress shirt" is a
+  shirt), Hebrew first ("שמלת חולצה", "חצאית מכנס"), Hebrew matched at a word start with the kind's own endings (חשמל, חצאים are not
+  garments), sets and second garment nouns abstain ("Top and Skirt", "חצאית וחולצה", "סט", "suit", "two piece"). An explicit type of
+  exactly dress/skirt decides only when the title names no garment. NOT the vision verdict - Gemini's "dress" covers jumpsuits.
+- **The engine, TEST requests only** (`_requestTest`): `SKIRT_ANCHOR` (front, printed back, plain back) + a skirt rung in
+  `getFitModifier`/`getCompactFitModifier` (no trouser word); `DRESS_ANCHOR` (front, back) + the upper-body fit sentence. The skirt's
+  front and plain back reproduce byte for byte the 12 prompts s2 sent (`garment-kind` §3.1); the dress's are d1's generalised from
+  "flares from the waist past the knees" to "falls from the waist to the reference's hem" - **not measured in that form**. A skirt
+  must also be a bottom by region; a dress is a dress whatever the region says ("שמלת ג'ינס" reads as a bottom). The hem's length
+  is the reference's - no mini/midi/maxi words (strict image-only: the photo carries the length, as it did in s2 and d1).
+- **The room, TEST sessions only** (`traceEnabled()`): a dress's front and rear photos go WHOLE (`referenceFrontHint`/
+  `referenceBackHint` return null, `ctx.ref` says `why: "dress"`); the TEST record carries `ctx.kind`. The cost, stated: the store's
+  model is in the rear photo again (§2.38's failure mode). And `resolveGarmentCategory()` now logs its "top" default instead of
+  staying silent.
+- **Budget (trace:prompt's TEST section):** the dress anchor is ~90 chars longer than the top's. With a long print the dress front
+  sheds the fit sentence at -2/-1/+2, and a button-front dress loses the closure lock on every rung (the fit clause still goes
+  first, both logged - §0's rule holds; `garment-kind` §3.11 pins it). Not reworded unmeasured.
+- **Proven:** a shopper's wire is unchanged - trace:prompt's shopper rows and audit identical to main's, `prompt-engine` §1 on its
+  pin, `garment-kind` §3.8; unit suite, build, `qa:visual` 40/40; `test:kinds` routes a dress, a skirt, jeans, a tank top and a zip
+  jacket through the real room in TEST mode and keeps today's words for a shopper's dress (it fails with the gate removed). 11
+  mutants caught in `garment-kind` §5. **Needs a `wrangler deploy`** (`lib/prompts.js` changed; fingerprint 6ea2ab50) before a
+  TEST session through the edge reads it.
+- **Not done / open:** the measured check of the shipped build (~3 sessions: a skirt, a dress, and a shirt/pants/full-look
+  regression); then the switch to shoppers. Jumpsuits/rompers/overalls, sets, jackets layered over a top, swimwear/underwear, and
+  per-type measurement fields are not built (owner's decisions open). A denim dress is still sized on the waist chart
+  (`titleNamesPants` misses שמלת) and fitted with the bottoms presence gate - the kind does not move a region. A dress in a full
+  look still stitches as a top over a bottom.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 

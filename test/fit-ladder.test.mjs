@@ -22,6 +22,8 @@ const ITEMS = {
   "dress": { name: "Midi dress", title: "summer midi dress", category: "dress", garmentType: "upper_body", __bottoms: false },
   "pants": { name: "Chino pants", title: "chino pants", category: "bottom", garmentType: "lower_body", __bottoms: true },
   "shorts": { name: "CHICAGO shorts", title: "basketball shorts", category: "bottom", garmentType: "lower_body", __bottoms: true },
+  /* 2026-11-07: a skirt has a kind of its own (garmentKindOf - CLAUDE.md §7.23), so its TEST rungs are the skirt's. */
+  "skirt": { name: "Maxi skirt", title: "black knit maxi skirt", category: "bottom", garmentType: "lower_body", __bottoms: true },
 };
 const FACTS = { colorHex: "#111111", textOcr: "BE YOUR OWN Healer WORLDWIDE" };
 const ask = (item, angle, delta, test) => P.promptForRequest(P.sanitizePromptRequest({ kind: "single", item, angle, delta, ...(test ? { test: true } : {}) }));
@@ -37,7 +39,7 @@ console.log("\n── §1 every rung carries its size on a TEST request ──")
     if (!/ Fit: [^.]+\.$/.test(ask(item, angle, d, true))) missing.push(`${label}${facts ? "+facts" : ""} ${angle} ${d}`);
     if (!/Fit: /.test(ask(item, angle, d, false))) shopperShed++;
   }
-  check(`§1.1 all ${rungs} rungs (8 garments x facts x front/back x 5 sizes) end with a size sentence`, missing.length === 0, missing.join(", "));
+  check(`§1.1 all ${rungs} rungs (${Object.keys(ITEMS).length} garments x facts x front/back x 5 sizes) end with a size sentence`, missing.length === 0, missing.join(", "));
   check(`§1.2 ...where a shopper's request still sheds it on ${shopperShed} of them (the gap this closes, unchanged until measured)`, shopperShed > 0);
   const p = ask(ITEMS["printed tee"], "front", -1, true);
   check("§1.3 the reported case: a printed tee one size down, front - the size is there, compact", /Fit: snug garment, fabric slightly taut\.$/.test(p), p);
@@ -49,7 +51,11 @@ console.log("\n── §2 the compact form only fills the gap ──");
 {
   let same = 0, filled = 0;
   const other = [];
+  /* A garment with a KIND of its own (a dress, a skirt - garmentKindOf) gets its own anchor on a TEST request; §2.3 checks that
+     instead. Everything else is held to the old claim. */
+  const kinded = Object.entries(ITEMS).filter(([, item]) => P.garmentKindOf(item));
   for (const [label, item] of Object.entries(ITEMS)) for (const angle of ["front", "back"]) for (const d of DELTAS) {
+    if (P.garmentKindOf(item)) continue;
     const shopper = ask(item, angle, d, false), test = ask(item, angle, d, true);   // no colour: the dark-brown naming cannot differ
     if (test === shopper) { same++; continue; }
     if (/Fit: /.test(shopper) === false && test.startsWith(shopper + " Fit: ") && test.length - shopper.length < 50) { filled++; continue; }
@@ -58,15 +64,19 @@ console.log("\n── §2 the compact form only fills the gap ──");
   check(`§2.1 without colour facts a TEST prompt is the shopper's (${same}) or the shopper's plus the compact size alone (${filled}) - nothing else moves`,
     other.length === 0 && filled > 0, other.join(", "));
   check("§2.2 a rung whose full sentence fits keeps it, word for word", ask(ITEMS["printed tee"], "front", 0, true) === ask(ITEMS["printed tee"], "front", 0, false));
+  check(`§2.3 exactly the dress and the skirt have a kind (${kinded.map(([l]) => l).join(", ")}), and on a TEST request each opens with its own anchor`,
+    kinded.map(([l]) => l).join(",") === "dress,skirt" &&
+    kinded.every(([l, item]) => DELTAS.every((d) => ["front", "back"].every((a) =>
+      ask(item, a, d, true).startsWith(`Drape and fit the EXACT static ${l}${a === "back" ? "'s REAR/BACK" : " from"}`)))));
 }
 
 console.log("\n── §3 the compact wording keeps tightness on the garment (§2.4) ──");
 {
   const block = SRC.slice(SRC.indexOf("function getCompactFitModifier("), SRC.indexOf("function compactFitSentence("));
   const phrases = [...block.matchAll(/return "([^"]+)"/g)].map((m) => m[1]);
-  check("§3.1 ten phrasings, five per garment type", phrases.length === 10, phrases.join(" | "));
-  check("§3.2 each names the garment (or trousers), never the body's outline",
-    phrases.every((t) => /garment|trousers/.test(t) && !/silhouette|slim|thin|outline|figure|waistline|body/i.test(t)), phrases.join(" | "));
+  check("§3.1 fifteen phrasings, five per fit type (top, trousers, skirt - 2026-11-07)", phrases.length === 15, phrases.join(" | "));
+  check("§3.2 each names the garment (or trousers, or skirt), never the body's outline",
+    phrases.every((t) => /garment|trousers|skirt/.test(t) && !/silhouette|slim|thin|outline|figure|waistline|body/i.test(t)), phrases.join(" | "));
   check("§3.3 each is short enough to fit where the full sentence did not (<= 41 chars with its 'Fit: ...' frame - a long print on a closure top leaves 43)",
     phrases.every((t) => `Fit: ${t}.`.length <= 41), phrases.map((t) => `Fit: ${t}.`.length).join(","));
 }
