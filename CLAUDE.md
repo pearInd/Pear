@@ -2341,8 +2341,9 @@ the chest at 41-65 degrees in every clip read (11-07 x3, 10-18 c06-c08; c07 drew
   `head-frame` §4.1 (a headless 360) is what added the |yaw|-confirmed release.
 - **Production with main's room:** the rule reads only that a pace is sent, so main's rooms get it as soon as the Worker is
   deployed. **A Worker deploy** (the engine); the room's only change is the knob key.
-- **NOT YET SEEN ON THE REAL ENGINE.** The Worker was not deployed from this session (its permission check refused `wrangler
-  deploy`); two rig sessions ran the engine from a local `wrangler dev`, the page's /orient socket proxied to it by the rig
+- **DEPLOYED 2026-11-08 (Worker e5b3083b, from main b8fbc11; rollback fd7c141f).** Checked through the deployed Worker's own
+  protocol: the four §3h records decide exactly as the local engine - BACK 231 / 482 / 244 / 255ms later, `out_land=0` each
+  record's own send. **Not yet seen in a live session.** Before the deploy, two rig sessions ran the engine from a local `wrangler dev`, the page's /orient socket proxied to it by the rig
   (`--orient-local`, scratch): n4 (mw6y86ck) ran the first, pace-led cut - its outbound was the old one (the cold-start pace,
   fixed above), PEAK held to ~70 degrees at a low lag (0.91s); n5 (mw6yo1ab) was degraded (camera 9 fps, readings 450ms apart
   jumping from 49 degrees to the side, the engine's control channel closed before the FRONT) and its BACK went out on the side
