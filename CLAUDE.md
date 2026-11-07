@@ -2320,21 +2320,33 @@ degrees), and a pre-uploaded reference reaches camera frames 0.13-0.42s BEFORE i
 model: mw5o1vyb -0.13, mw5nc1gp -0.32, n3 -0.42 (the render's lag 1.04 / 0.89 / 1.2s; roughly the lag minus ~0.9s). So PEAK left
 the chest at 41-65 degrees in every clip read (11-07 x3, 10-18 c06-c08; c07 drew an open shirt on the chest after it); the old
 200ms room delay (`?ref_back_delay=200`) moved one session to ~70-85 and not the other (10-18 c03 / c05).
-- **THE OUTBOUND LANDING (`makeEarlyTurnTrigger`, OUT_TARGET 105, OUT_PAST -0.3, OUT_STALE_MS 600):** mirrored from THE LANDING,
-  PROJECTED - on the FRONT leg, when the room sends the order and its pace, the early BACK goes out once the order's own angle +
-  the turn's speed x (the reading's age + lat - LAND_BASE_MS) reaches 105, scheduled between readings (LEAD_SCHEDULE_MS), and is
-  HELD until then; held, it goes out at once past -0.3 (~107 degrees) or when the order is 600ms stale, and the pass-based
-  PREDICTIVE BACK (after the side) is untouched. A re-arm square to the lens drops a hold. No order, no pace or `?out_land=0`:
-  the |yaw| fire exactly as before. Knob `out_land` in both ORIENT_KNOB_KEYS lists.
-- **Replayed** on every usable KV record with the offsets read off the clips (the owner's camera, -0.32/-0.25/-0.13s): landing
-  median 49 -> 82 degrees, before 75 64/69 -> 23/69, past 130 0 -> 1/69 (110 gains 4 degrees and lands past 130 in 4/69 - a back
-  that late puts the FRONT's print on a back facing the lens, the worse failure). `return-side` §3h: the three records of the
-  report, each against its own clip's offset, 60 / 46 / 50 -> 91 / 83 / 82 degrees; `?out_land=0` is each record; a room that
-  sends no pace keeps today's outbound; the rule off fails 3. §3e.4/§4b (the RETURN's projection and pace leave the outbound
-  alone) now run with `out_land=0` on both sides, which is what they always measured.
-- **Production with main's 900 floor** (before main follows): lat 900 projects the landing 370ms on, so the hold almost never
-  engages - today's outbound. **A Worker deploy** (the engine), before the room.
-MEASURED_OUT_PLACEHOLDER
+- **THE OUTBOUND LANDING (`makeEarlyTurnTrigger`, OUT_TARGET 105, OUT_LEAD_MS -100, OUT_PAST 0, OUT_STALE_MS 600):** mirrored
+  from THE LANDING, PROJECTED - on the FRONT leg, when the room sends the order and a pace, the early BACK goes out once the
+  order's own angle + the turn's speed x (the reading's age - 100ms) reaches 105, scheduled between readings (LEAD_SCHEDULE_MS),
+  and is HELD until then; held, it goes out at once on the first reading at or past the side (order <= 0; head out of frame, a
+  side view the world |yaw| confirms, OUT_SIDE_YAW 85 - a headless order keeps its counted sign) or when the order is 600ms stale,
+  and the pass-based PREDICTIVE BACK (after the side) is untouched. A re-arm square to the lens drops a hold. No order, no pace or
+  `?out_land=0`: the |yaw| fire exactly as before. Knob `out_land` in both ORIENT_KNOB_KEYS lists.
+- **A fixed lead, not the pace (rig n4, mw6y86ck):** the first cut led by (lat - LAND_BASE_MS) as the return does, and on a live
+  session it never engaged - the outbound BACK is the session's FIRST swap, and the pace the room sends then is its cold start's
+  (899ms; 430-475 after the first acks), so it read a slow engine and fired at once. A pre-uploaded reference's landing does not
+  follow its ack; -100ms is the return floor's lead (430 - 530). Replays with the pace as each room really sent it.
+- **Replayed** on every usable KV record with the offsets read off the clips (the owner's camera, -0.32/-0.25/-0.20/-0.13s):
+  landing median 50 -> 82 degrees, before 75 90/96 -> 20/96, past 130 0 -> 1/96. Released only past -0.15/-0.3: ~7 degrees more and
+  n4's back left to ~130-160 (a back that late puts the FRONT's print on a back facing the lens, the worse failure); released at
+  +0.1 or on any |yaw|-confirmed side view: 4-5 degrees earlier. `return-side` §3h: the four records of the report, each at its
+  own clip's offset, 60 / 46 / 50 / 48 -> 91 / 83 / 66 / 81 degrees (n3, the highest lag, gains least); `?out_land=0` is each
+  record; a room that sends no pace keeps today's outbound; the rule off fails 3. §3c/§3e.4/§4b and `pose-follow` §3 (the
+  return's rules and the pose wait leave the outbound alone) run with `out_land=0`, which is what they always measured;
+  `head-frame` §4.1 (a headless 360) is what added the |yaw|-confirmed release.
+- **Production with main's room:** the rule reads only that a pace is sent, so main's rooms get it as soon as the Worker is
+  deployed. **A Worker deploy** (the engine); the room's only change is the knob key.
+- **NOT YET SEEN ON THE REAL ENGINE.** The Worker was not deployed from this session (its permission check refused `wrangler
+  deploy`); two rig sessions ran the engine from a local `wrangler dev`, the page's /orient socket proxied to it by the rig
+  (`--orient-local`, scratch): n4 (mw6y86ck) ran the first, pace-led cut - its outbound was the old one (the cold-start pace,
+  fixed above), PEAK held to ~70 degrees at a low lag (0.91s); n5 (mw6yo1ab) was degraded (camera 9 fps, readings 450ms apart
+  jumping from 49 degrees to the side, the engine's control channel closed before the FRONT) and its BACK went out on the side
+  reading, where the old rule fires too. A clean PEAK session after the Worker deploy is the check.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 

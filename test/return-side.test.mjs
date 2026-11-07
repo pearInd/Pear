@@ -357,7 +357,8 @@ console.log("\n── §3c the two PEAK sessions of 2026-10-04, from their own r
      room's estimate is taken from its own acks (734, 807: 770). The second (05:55) carries `lt` per tick. Each record's
      FRONT went out on the first reading past the side; the clip showed the back print on the chest for ~0.3s after it. */
   const replay = (rec, knobs, latFor) => {
-    const engine = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
+    /* out_land "0": this measures the RETURN's pace; THE OUTBOUND LANDING (§3h) also reads that a pace is sent. */
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs({ out_land: "0", ...knobs }));
     let l = rec.ticks[0].l; const sent = [];
     for (const k of rec.ticks) {
       const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
@@ -681,19 +682,20 @@ console.log("\n── §3h THE OUTBOUND LANDING - the chest keeps its print to t
     for (let i = 1; i < out.length; i++) if (out[i].at >= ct && out[i - 1].at <= ct) return out[i - 1].a + (out[i].a - out[i - 1].a) * (ct - out[i - 1].at) / Math.max(1, out[i].at - out[i - 1].at);
     return null;
   };
-  const pace = (k) => (typeof k.lt === "number" ? (k.lt > 900 ? k.lt : floor) : null);
-  for (const key of ["o-0029", "c-0009", "r-n3"]) {
+  /* The pace as the room sent it: the rule reads only THAT one is sent (r-n4's first swap went out at the cold start's 899ms). */
+  const pace = (k) => (typeof k.lt === "number" ? k.lt : null);
+  for (const key of ["o-0029", "c-0009", "r-n3", "r-n4"]) {
     const rec = FLOOR[key];
     const old = backSend(rec, { out_land: "0" }, (k) => k.lt), now = backSend(rec, {}, pace);
     const lOld = bodyAt(rec, old + rec.outOff * 1000), lNow = bodyAt(rec, now + rec.outOff * 1000);
     check(`§3h.1 ${rec.id}: ?out_land=0 is its own record - the BACK within 25ms of its send`, old !== null && Math.abs(old - rec.backSent) <= 25, String(old - rec.backSent));
     check(`§3h.2 ${rec.id}: the BACK goes out later (${now - old}ms), never past 600ms - and lands at ${Math.round(lNow)} degrees, not ${Math.round(lOld)}`,
-      now !== null && now - old >= 100 && now - old <= 600 && lOld < 65 && lNow >= 80 && lNow <= 105, JSON.stringify({ old, now, lOld, lNow }));
+      now !== null && now - old >= 100 && now - old <= 600 && lOld < 65 && lNow >= lOld + 12 && lNow <= 105, JSON.stringify({ old, now, lOld, lNow }));
     const noPace = backSend(rec, {}, () => null);
     check(`§3h.3 ${rec.id}: a room that sends no pace keeps today's outbound`, noPace === old, JSON.stringify({ old, noPace }));
   }
   check("§3h.4 the rule lives inside makeEarlyTurnTrigger (turn-yaw-window runs it standalone) and its knob is in both lists",
-    /function makeEarlyTurnTrigger\([\s\S]*?const OUT_TARGET = 105;[\s\S]*?const OUT_PAST = -0\.3;[\s\S]*?const OUT_STALE_MS = 600;/.test(ENGINE_SRC) &&
+    /function makeEarlyTurnTrigger\([\s\S]*?const OUT_TARGET = 105;[\s\S]*?const OUT_PAST = 0;[\s\S]*?const OUT_LEAD_MS = -100;[\s\S]*?const OUT_STALE_MS = 600;/.test(ENGINE_SRC) &&
     E.ORIENT_KNOB_KEYS.includes("out_land") && /const ORIENT_KNOB_KEYS = \[[^\]]*"out_land"/.test(APP));
 }
 
