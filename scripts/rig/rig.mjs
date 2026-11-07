@@ -25,6 +25,10 @@ const PAGE_CACHE = process.env.RIG_PAGE_CACHE || "/private/tmp/pear-rig-pages";
 /* --hw=<cm>,<kg>: the height and weight typed on the size screen (default 178,74) - the recommended size the --size= delta is
    measured from (getSizeDelta). */
 const HW = ((flags.find((f) => f.startsWith("--hw=")) || "").slice(5) || "178,74").split(",").map((x) => x.trim());
+/* --clip-from=<s> / --rate=<x> (2026-11-07): the turn starts that far into the clip at the reveal, played at that rate - a clip whose
+   turn begins late still lands inside the 5s window, and a normal turn becomes a fast one (1.4-1.6x) without re-encoding it. */
+const CLIP_FROM = Number((flags.find((f) => f.startsWith("--clip-from=")) || "").slice(12)) || 0;
+const CLIP_RATE = Number((flags.find((f) => f.startsWith("--rate=")) || "").slice(7)) || 1;
 /* --synthetic=<spec.json>: {title, images[], sizes[]} - when the store blocks its product pages (FOX answered 429 on every
    /products/* path for hours on 2026-11-01), the rig serves a minimal product page at the product's own address: the real
    photos from the store's CDN as JSON-LD Product.image (a DECLARED source for the widget), a size picker and a Shopify
@@ -103,8 +107,9 @@ await context.addInitScript(() => {
   if (!/fox\.co\.il$/.test(location.host)) return;
   setInterval(() => document.querySelectorAll("popup-message, flashy-popup, .ai-popup-overlay").forEach((e) => e.remove()), 300);
 });
-await context.addInitScript(() => {
+await context.addInitScript(([from, rate]) => {
   if (location.host !== "app.pear-ai.io") return;
+  window.__rigFrom = from; window.__rigRate = rate;
   window.__rig = { facts: [], frames: [], playing: false, camFrames: 0 };
   window.addEventListener("message", (e) => {
     const d = e.data;
@@ -115,14 +120,17 @@ await context.addInitScript(() => {
   navigator.mediaDevices.getUserMedia = async (c) => {
     if (!c || !c.video) return orig(c);
     const v = document.createElement("video");
-    v.src = "/__rig/clip.mp4"; v.muted = true; v.playsInline = true; v.crossOrigin = "anonymous";
+    /* As a Blob: the routed response carries no byte ranges, so the clip could only be sought back to 0 - --clip-from was
+       silently ignored (n1, 2026-11-07, the turn started 1.4s late and its return fell after the 5s window). */
+    const clipBlob = await (await fetch("/__rig/clip.mp4")).blob();
+    v.src = URL.createObjectURL(clipBlob); v.muted = true; v.playsInline = true;
     await new Promise((ok, no) => { v.onloadeddata = ok; v.onerror = () => no(new Error("clip")); v.load(); });
     /* Before the reveal the camera is the clip's first 0.8s IN A LOOP - a person standing, with a real camera's small motion -
        not one frozen frame: ~15s of pixel-identical input is nothing a real camera sends, and the sessions that drew a giant
        shirt (m2, f1, 2026-11-01) both started from it. At the reveal the clip restarts and plays the turn. */
     v.currentTime = 0; v.play();
     setInterval(() => { if (!window.__rig.playing && v.currentTime > 0.8) v.currentTime = 0; }, 50);
-    window.__rigPlay = () => { if (!window.__rig.playing) { window.__rig.playing = true; window.__rig.playAt = performance.now(); v.currentTime = 0; v.play(); } };
+    window.__rigPlay = () => { if (!window.__rig.playing) { window.__rig.playing = true; window.__rig.playAt = performance.now(); v.currentTime = window.__rigFrom || 0; v.playbackRate = window.__rigRate || 1; v.play(); } };
     const gen = new MediaStreamTrackGenerator({ kind: "video" });
     const w = gen.writable.getWriter();
     let ts = 0, busy = false;
@@ -140,7 +148,7 @@ await context.addInitScript(() => {
     window.__rigClip = v;
     return new MediaStream([gen]);
   };
-});
+}, [CLIP_FROM, CLIP_RATE]);
 
 const page = await context.newPage();
 /* A run that dies before go-live says what it was looking at, and nothing was billed. */
@@ -244,9 +252,9 @@ const sizesOffered = await room.evaluate(() => [...document.querySelectorAll(".p
 log("sizes offered (* = active)", JSON.stringify(sizesOffered), "for", HW.join("cm/") + "kg");
 if (DRY) {
   const pace = await room.evaluate(async () => {
-    window.__rigPlay(); const f0 = window.__rig.camFrames, l0 = window.__rig.lag.length; await new Promise((r) => setTimeout(r, 8000));
+    window.__rigPlay(); const f0 = window.__rig.camFrames, l0 = window.__rig.lag.length; await new Promise((r) => setTimeout(r, 300)); const startAt = Math.round(window.__rigClip.currentTime * 1000); await new Promise((r) => setTimeout(r, 7700));
     const lag = window.__rig.lag.slice(l0).sort((a, b) => a - b);
-    return { camFps: (window.__rig.camFrames - f0) / 8, lagP50: Math.round(lag[lag.length >> 1]), lagMax: Math.round(lag[lag.length - 1]),
+    return { startAt, camFps: (window.__rig.camFrames - f0) / 8, lagP50: Math.round(lag[lag.length >> 1]), lagMax: Math.round(lag[lag.length - 1]),
       clipAt: Math.round(window.__rigClip.currentTime * 1000), over100: lag.filter((x) => x > 100).length, top: lag.slice(-4).map(Math.round), firstBig: window.__rig.lag.slice(l0).findIndex((x) => x > 300) * 50 };
   });
   log("dry pace", JSON.stringify(pace)); writeFileSync(`${out}/pace.json`, JSON.stringify(pace));
@@ -316,6 +324,6 @@ const boxTimes = [...boxes.values()].map((b) => ({ photo: b.url, askedBeforeGoLi
 log("boxes", JSON.stringify(boxTimes));
 writeFileSync(`${out}/network-audit.json`, JSON.stringify(net, null, 1));
 log("network audit", JSON.stringify({ responses: net.responses, frames: net.frames, secrets: net.secrets, words: net.words, promptIn: net.promptIn, token: net.token }));
-writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, synthetic: !!SYNTH, hw: HW, noFabric: NO_FABRIC, size: SIZE, sizeInfo, boxTimes, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
+writeFileSync(`${out}/session.json`, JSON.stringify({ product, clip, clipFrom: CLIP_FROM, rate: CLIP_RATE, synthetic: !!SYNTH, hw: HW, noFabric: NO_FABRIC, size: SIZE, sizeInfo, boxTimes, revealMs, facts, prompts, ended: new Date().toISOString() }, null, 1));
 log("frames", frames.length, "prompts seen", prompts.length);
 await browser.close();

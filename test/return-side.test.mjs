@@ -614,6 +614,40 @@ console.log("\n── §3d THE BACK WAITS FOR AN ENGINE THAT CAN KEEP UP - the t
   check("§3d.3 a room that measures no engine is the rule exactly (the back as before)", JSON.stringify(blind) === JSON.stringify(run3(rec, { back_gate: "0" }, () => null, null)));
 }
 
+console.log("\n── §3g THE FLOOR - the owner's two PEAK sessions of 2026-11-07 (the back gone at ~200 degrees), from their own records ──");
+{
+  /* REF_LAT_FLOOR_MS 900 -> 430 (app.js, THE ENGINE'S PACE). A pre-uploaded reference reaches the body ~0.2s BEFORE its send on the
+     owner's camera (mw5o1vyb -0.25s, mw5nc1gp -0.20s, read off the clips with the room's pose model), where 900 planned it 370ms
+     AFTER: the FRONT went out on the first reading out of the deep back (~220 degrees) and the back print left at ~200-205, the
+     back still to the lens. 430 is the lead the 10-08 sessions ran with (bytes acks ~430ms against LAND_BASE_MS 530). Each record
+     replayed through the real engine with the room's knob defaults and the pace the room now sends. */
+  const FLOOR = JSON.parse(readFileSync(new URL("./return-side-floor.json", import.meta.url), "utf8"));
+  const floor = Number((APP.match(/^const REF_LAT_FLOOR_MS = (\d+);/m) || [])[1]);
+  const front = (rec, lat) => {
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs({ back_gate: "0", early_turn: "50", early_turn_slow: "50" }));
+    let l = rec.ticks[0].l, back = false;
+    for (const k of rec.ticks) {
+      const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
+        yawAbs: k.y, yawAt: k.y === null ? 0 : k.t - k.ya, lostAt: k.la === null ? 0 : k.t - k.la,
+        ord: k.o, ordAt: k.o === null ? 0 : k.t - (k.oa ?? 0), lat, latHi: k.lh, lock: l, profile: !!k.p, dualView: !!k.d }));
+      for (const a of acts) if (a.do === "swap" && a.next !== l) {
+        if (a.next === "back") back = true; else if (back) return { o: k.o, send: k.t + (a.delay || 0) };
+        l = a.next;
+      }
+    }
+    return null;
+  };
+  check("§3g.1 the room's floor is 430 - the 10-08 sessions' lead (bytes acks ~430ms against LAND_BASE_MS 530)", floor === 430, String(floor));
+  for (const [key, rec] of Object.entries(FLOOR)) {
+    if (key === "about") continue;
+    const old = front(rec, 900), now = front(rec, floor);
+    check(`§3g.2 ${rec.id} at 900 is its own record: FRONT on the first reading out of the deep back (o <= -0.75), within 25ms of its send`,
+      !!old && old.o <= -0.75 && Math.abs(old.send - rec.sent) <= 25, JSON.stringify(old));
+    check(`§3g.3 ${rec.id} at the room's floor: FRONT on a later reading (o >= -0.4), 150ms+ after the record's send`,
+      !!now && now.o >= -0.4 && now.send - rec.sent >= 150, JSON.stringify(now));
+  }
+}
+
 console.log("\n── §4 thirteen real 360s, at four tick phases ──");
 {
   const clips = { ...POSES.clips, "s3.mp4 (reported)": S3.rows };

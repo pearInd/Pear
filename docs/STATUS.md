@@ -468,6 +468,12 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
   after connect (s8: 7.0s), the turn's back acknowledged in 458ms (s8: never), the front back in 483ms, no stall. On screen:
   shirt and shorts together at the front, the shirt's back print on the back view, the front print back at the front.
   9 real sessions in all (2 of them, s6/s7, lost to the rig). Not yet measured on a live person or with other products.
+- **2026-11-07 "the back disappears too early" (CLAUDE.md §7.24, branch `feat/garment-kinds`):** your clip read frame by frame -
+  the back print gone at ~200 degrees (back still to the lens) and the front's lettering on the back; the cause is the return's
+  floor 900 (cc37cb9, 10-18). Lowered to 430 - the lead the 10-08 "perfect" sessions ran with. Measured on the real engine (3 rig sessions;
+  the clean one, mw6x1bsi): the back print from ~110 degrees to the side, sliding off the edge; the side plain; PEAK back on the chest
+  from the three-quarter front; no front lettering on the back. Room only - no Worker deploy; the preview updates with the push.
+  **Your check:** a PEAK session on your own camera, a normal turn and a fast one.
 - **Stage:** done (core).
 - **Done:** language toggle + English strings `a7de91c`, `310b174`; geo-IP language
   lock fix + `fitting-room/i18n.js` module `4ecda99`; cart popover i18n `82de850`.

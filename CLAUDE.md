@@ -1815,6 +1815,7 @@ off (the side reading itself) - return-side's clip landings put two fast turns l
 window - one session later (r2). **Measured live, and raised to 700 the same day:** at 530, u2's FRONT went out on the side
 reading and landed ~0.1s after its send - a white panel on a chest already turning to the lens (4.30-4.44s); 700 sends it from
 the reading before. u3 (normal turn) and u4 (fast turn) at 700: the front clean on every frame.
+**Raised to 900 on 2026-10-18 (cc37cb9, the owner: "stronger angles, at once") and lowered to 430 on 2026-11-07 - §7.24.**
 
 ### 7.6 The back waits for the body it lands on (2026-10-17, u4)
 u4 (a 1.6x-speed turn, the output 1.18s behind the camera): BACK went out on the side reading (order -0.01),
@@ -2281,6 +2282,36 @@ What shipped (branch `feat/garment-kinds`):
   per-type measurement fields are not built (owner's decisions open). A denim dress is still sized on the waist chart
   (`titleNamesPants` misses שמלת) and fitted with the bottoms presence gate - the kind does not move a region. A dress in a full
   look still stitches as a top over a bottom.
+
+### 7.24 The back holds to the side - the return's floor 900 -> 430 (2026-11-07, Layer C)
+"The back disappears too early." The owner's clip (record mw5o1vyb, PEAK, the feat/garment-kinds preview) read with the room's own
+lite pose model over every frame, lined up with the record's order readings: the back print from ~115 degrees (3.13s), gone at
+**~200** (4.03s) with the back still square to the lens, the FRONT's "PEAK" lettering drawn on the back to ~232, the side plain,
+PEAK on the chest from ~288. The FRONT went out on the first reading out of the deep back (o -0.80, ~220) at +50ms and reached
+camera frames from ~250ms BEFORE its send; mw5nc1gp the same (~205, -200ms).
+- **Cause: `REF_LAT_FLOOR_MS` 900** (app.js, cc37cb9). The projection plans the landing (lat - LAND_BASE_MS) after the send:
+  +370ms at 900, where a pre-uploaded reference lands ~0.2s before it on the owner's camera - ~0.6s of turn early.
+- **Which version held the back - the owner's clips, the same method:** 10-08 11:41 ("front and back work perfectly"; bytes per
+  swap, acks ~430 -> a lead of -100ms): ~235, the print sliding off the edge, plain side, PEAK ~303. 10-18 at 700: ~250 / ~218.
+  10-18 at 900: ~262 / ~213 / ~205. 11-07 at 900: ~205 / ~200. The front print appears at ~290-315 in every version - 900 gained
+  ~15-25 degrees of it and cost ~50-60 of back plus the front lettering on the back.
+- **430 = the 10-08 sessions' lead.** Replayed through lib/orient-engine.js (reproduces every recorded send within a few degrees)
+  on the 16 usable KV records of 11-01..11-07, landing = the body angle at send + each measured landing offset: the owner's camera
+  (-0.27..-0.10s) median 216 -> 264 degrees, before 230 49/64 -> 0/64, past 300 0 -> 1/64; every measured offset (incl. the rig's
+  0..+0.1) median 237 -> 273, before 230 41/112 -> 0/108, past 300 0 -> 19/108 - a late engine can land the front on a chest
+  coming round. `return-side` §3g replays the two 11-07 records (`test/return-side-floor.json`): at 900 each is its own record, at
+  the room's floor the FRONT goes out on a later reading (o >= -0.4); 900 fails it. Room only - no Worker deploy.
+- **The rig** (`scripts/rig/rig.mjs`): `--clip-from=<s>` and `--rate=<x>`; the clip is a Blob now - the routed response carried no
+  byte ranges, so a seek past 0 was silently ignored (n1's turn started late and its return fell after the 5s window).
+- **MEASURED on the real engine (3 rig sessions, PEAK, the white V-neck clip as the camera, the room built from this branch with
+  430 served by `--room-dir`):** n3 (record mw6x1bsi, a clean engine: 9 fps out, no stall, lag 1.2s) - FRONT on the projection at
+  o -0.36 (~249 degrees) +211ms; frame by frame: the back print from ~110 (2.50s) through the back view, sliding off the edge at the
+  return's side (3.30s), the side plain (3.40-3.50), PEAK back on the chest from the three-quarter front (3.80 on); no front lettering
+  on the back, no back print on the chest. n2 (mw5pgzqq, a degraded engine: 6 fps, lag 0.9 -> 2.0s, an 800ms tick gap, so FRONT went
+  out on the side reading): the same picture (the print off the edge at 3.71-3.81, PEAK from 4.10). n1 (mw5p6a5x): FRONT on o -0.34
+  (~250) +190ms, the back print on to at least ~245; its landing fell after the window (the rig's seek bug above). Seen, not
+  changed: the outbound early BACK (50 degrees, §7.4) leaves the chest plain from ~50 degrees to the side. Not yet measured: a fast
+  turn, and the owner's own camera.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 

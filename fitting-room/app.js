@@ -8181,7 +8181,19 @@ let _refUploadedGen = -1;
    side round to three-quarters (4.30-4.79s). 900 sends it on that same reading at the engine's minimum (+50ms) - ~150ms sooner,
    giving the engine that much more time to draw the print before the chest comes round. Replayed through the deployed engine:
    both sessions' FRONT on the same reading, +201 -> +50ms; the outbound BACK unchanged. */
-const REF_LAT_FLOOR_MS = 900;
+/* 430, not 900 (2026-11-07, the owner's mw5o1vyb: "the back disappears too early"). Read frame by frame with the room's own pose
+   model over the clip, lined up with its record: the FRONT went out on the first reading out of the deep back (o -0.80, ~220
+   degrees) at +50ms and reached camera frames from ~250ms BEFORE its send - the back print gone at ~200 degrees with the back
+   still square to the lens, the front's lettering drawn on the back to ~232 (4.03-4.27s); mw5nc1gp the same (~205, -200ms).
+   900 plans the landing 370ms AFTER the send (lat - LAND_BASE_MS); a pre-uploaded reference lands ~0.2s before it on the
+   owner's camera. The owner's clips by the same method: 900 lost the back at ~200-213 degrees in 4 of 5 sessions (10-18 c07/c08,
+   11-07 x2; one 262), 700 at ~218/~250, and the 10-08 sessions called "front and back work perfectly" (bytes per swap, acks ~430ms
+   -> a lead of -100ms) kept it to ~235-265 with the print sliding off the edge. 430 is that lead. The front print itself shows at
+   ~290-315 degrees in every version (900 gained ~15-25 degrees of it and lost ~50-60 of back). Replayed through the engine on the
+   16 usable KV records (11-01..11-07) at the measured landing offsets (-0.27..-0.10s, the owner's camera): median 216 -> 264,
+   landings before 230 degrees 49/64 -> 0/64, past 300 0 -> 1/64; at every measured offset (incl. the rig's 0..+0.1): median 237
+   -> 273, before 230 41/112 -> 0/108, past 300 0 -> 19/108 (a late engine can land the front on a chest coming round). */
+const REF_LAT_FLOOR_MS = 430;
 /* THE BACK WAITS FOR THE BODY IT LANDS ON (2026-10-17, u4). The engine paints a new reference onto frames it already holds,
    and an id is acknowledged in ~0.28s where the image bytes every outbound rule was placed for took ~0.43s - so a pre-upload
    session's BACK reaches a body older than the one it was decided on, by as much as the session's render lags. Read frame by
