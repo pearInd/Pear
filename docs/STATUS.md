@@ -478,8 +478,9 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 - **2026-11-07, then "fix this part" (the outbound, CLAUDE.md §7.25):** PEAK left the chest at a three-quarter front (41-65
   degrees in every clip read) - the early BACK lands ~0.1-0.4s before its send. The engine now holds the early BACK until its
   projected landing reaches 105 degrees (replayed with each pace as sent: median 50 -> 82 degrees on your camera's offsets, before 75 90/96 -> 20/96). On main `b8fbc11`; **the Worker
-  is deployed (e5b3083b, 2026-11-08; rollback fd7c141f)** and decides the recorded turns exactly as the code. **Not yet seen
-  in a live session** (rig n4 found the cold-start pace - fixed; n5 was degraded). **Your check:** one PEAK turn on your camera.
+  is deployed (e5b3083b, 2026-11-08; rollback fd7c141f)** and decides the recorded turns exactly as the code. **Seen live - "works
+  perfectly"** (your session mw6zejh5, 2026-11-08 00:35): PEAK on the chest to ~70 degrees, the side plain, the back print from
+  ~98 to ~270, PEAK back from ~283 - nothing wrong on either side. **Done.**
 - **Stage:** done (core).
 - **Done:** language toggle + English strings `a7de91c`, `310b174`; geo-IP language
   lock fix + `fitting-room/i18n.js` module `4ecda99`; cart popover i18n `82de850`.
