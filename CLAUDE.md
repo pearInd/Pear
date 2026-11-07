@@ -2313,6 +2313,29 @@ camera frames from ~250ms BEFORE its send; mw5nc1gp the same (~205, -200ms).
   changed: the outbound early BACK (50 degrees, §7.4) leaves the chest plain from ~50 degrees to the side. Not yet measured: a fast
   turn, and the owner's own camera.
 
+### 7.25 The chest keeps its print to the side - the outbound landing (2026-11-07, Layer C, lib/orient-engine.js)
+"Fix this part" - the owner, on rig n3's frames 1.80-2.20 (§7.24's verifying session): PEAK gone from a three-quarter chest,
+plain to the side. The same mechanism as the return: the early BACK fires on the first |yaw| reading past 50 (a body at 70-85
+degrees), and a pre-uploaded reference reaches camera frames 0.13-0.42s BEFORE its send - read off each clip with the pose
+model: mw5o1vyb -0.13, mw5nc1gp -0.32, n3 -0.42 (the render's lag 1.04 / 0.89 / 1.2s; roughly the lag minus ~0.9s). So PEAK left
+the chest at 41-65 degrees in every clip read (11-07 x3, 10-18 c06-c08; c07 drew an open shirt on the chest after it); the old
+200ms room delay (`?ref_back_delay=200`) moved one session to ~70-85 and not the other (10-18 c03 / c05).
+- **THE OUTBOUND LANDING (`makeEarlyTurnTrigger`, OUT_TARGET 105, OUT_PAST -0.3, OUT_STALE_MS 600):** mirrored from THE LANDING,
+  PROJECTED - on the FRONT leg, when the room sends the order and its pace, the early BACK goes out once the order's own angle +
+  the turn's speed x (the reading's age + lat - LAND_BASE_MS) reaches 105, scheduled between readings (LEAD_SCHEDULE_MS), and is
+  HELD until then; held, it goes out at once past -0.3 (~107 degrees) or when the order is 600ms stale, and the pass-based
+  PREDICTIVE BACK (after the side) is untouched. A re-arm square to the lens drops a hold. No order, no pace or `?out_land=0`:
+  the |yaw| fire exactly as before. Knob `out_land` in both ORIENT_KNOB_KEYS lists.
+- **Replayed** on every usable KV record with the offsets read off the clips (the owner's camera, -0.32/-0.25/-0.13s): landing
+  median 49 -> 82 degrees, before 75 64/69 -> 23/69, past 130 0 -> 1/69 (110 gains 4 degrees and lands past 130 in 4/69 - a back
+  that late puts the FRONT's print on a back facing the lens, the worse failure). `return-side` §3h: the three records of the
+  report, each against its own clip's offset, 60 / 46 / 50 -> 91 / 83 / 82 degrees; `?out_land=0` is each record; a room that
+  sends no pace keeps today's outbound; the rule off fails 3. §3e.4/§4b (the RETURN's projection and pace leave the outbound
+  alone) now run with `out_land=0` on both sides, which is what they always measured.
+- **Production with main's 900 floor** (before main follows): lat 900 projects the landing 370ms on, so the hold almost never
+  engages - today's outbound. **A Worker deploy** (the engine), before the room.
+MEASURED_OUT_PLACEHOLDER
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:
