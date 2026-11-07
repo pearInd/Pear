@@ -13046,6 +13046,9 @@ const PRESENTATION_PARAMS = new Set([
   // output format, letterbox colour - adidas.co.il's thumbnail and zoom slide of ONE
   // photo differ only in these. Lockstep with pear-widget.js PRESENTATION_PARAMS.
   "sw", "sh", "sm", "sfrm", "bgcolor",
+  // terminalx.com (Magento): the JSON-LD/og:image copy of a photo carries
+  // ?image_type_mobile=webp_jpeg_like_70 and the gallery copy carries nothing - one photo.
+  "image_type_mobile",
 ]);
 
 /* Image-resizer endpoints (Next.js /_next/image, Cloudflare /cdn-cgi/image, imgproxy)
