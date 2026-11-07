@@ -33,7 +33,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Landing / brand video | done | main `e8d2c7f` |
 | Black-screen on reopen | done | main `3a533d6`, `af5f4d4` |
 | Visual QA gate | done, known flaky (§8.5) | main |
-| The widget on terminalx.com (button beside "הוספה לסל", every product photo incl. the back, the product's own sizes incl. jeans `30W-32L`) | done on the branch 2026-11-06 - checked on the live store with the widget injected (no billed session yet); **merge waiting on you**, then a real measurement on your body | `claude/project-thread-nbxc2c` |
+| The widget on terminalx.com (button beside "הוספה לסל", every product photo incl. the back, the product's own sizes incl. jeans `30W-32L`) | **done, live** - merged 2026-11-07 (PR #8, `93d8f9f`), production widget checked to carry the fixes. Rig sessions on the owner's PC (2026-11-07): garment from the first frame, no size jumps; front/back NOT measured - the rig fed the room's camera ~5s late, so the room never saw the turn. Remaining: one TEST session by the owner with a real camera, read frame by frame | `main` |
 | Liquid Glass UI + consent gate | done | main `0827e51`, `89a5848` |
 
 ## Waiting on you (manual steps)
