@@ -2272,8 +2272,11 @@ What shipped (branch `feat/garment-kinds`):
     size. The back view came out plain - the engine acknowledged the primed back in 6.1s and never acknowledged the turn's back
     in the 2.3s left (`swap-fail` "Control channel closed" at teardown), so the front reference drew the back. Wording and photos
     on this path are byte-identical to main's: the back view of a no-kind garment is UNVERIFIED on this build, not failed.
-- **Not done / open:** a PEAK (or any printed-back) session on this build that reaches its back; the merge to main (production's
-  room takes /size and /prompt from the origin until then); then the switch to shoppers. Jumpsuits/rompers/overalls, sets, jackets layered over a top, swimwear/underwear, and
+  · PEAK again, one more approved session (mw5mzaje): every swap acked (primed back 310ms, the turn's back 209ms, the front
+    216ms), 9 fps, no stall - the front print from the first frame, plain sides, the printed back on the back (4.3-4.6s), the
+    front on its way back at the end. The no-kind path is clean on this build.
+- **Not done / open:** the merge to main (production's room takes /size and /prompt from the origin until then); then the switch
+  to shoppers. Jumpsuits/rompers/overalls, sets, jackets layered over a top, swimwear/underwear, and
   per-type measurement fields are not built (owner's decisions open). A denim dress is still sized on the waist chart
   (`titleNamesPants` misses שמלת) and fitted with the bottoms presence gate - the kind does not move a region. A dress in a full
   look still stitches as a top over a bottom.
