@@ -1662,6 +1662,7 @@ npm run scan             # scanner/scan-store.js over a storefront
 npm run qa:visual        # the visual gate: drive a 360 + swap, then score the frames
 npm run test:visual      #   …just the agent  (npx playwright test test/e2e/visual-agent.spec.mjs)
 npm run test:kinds       # the garment kinds through the real room, mocked engine, nothing billed (§7.23)
+node scripts/try-on.mjs  # links to try the kinds on yourself, TEST mode, on the branch preview (--bookmarklet, --demo, custom product)
 npm run inspect:visuals  #   …just the scoring (node scripts/inspect-visuals.mjs)
 npm run fixtures         # regenerate test/fixtures/ (generated, gitignored, --force to rebuild)
 
