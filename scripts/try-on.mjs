@@ -18,12 +18,12 @@ const DEMO = !!flag("demo");
 const rest = args.filter((a) => !a.startsWith("--"));
 
 const PRESETS = [
-  { label: "Skirt - FOX black knit maxi skirt", title: "חצאית מקסי סריג",
+  { label: "Skirt - FOX black knit maxi skirt", title: "חצאית מקסי סריג", page: "https://fox.co.il/products/2501940200",
     front: "https://fox.co.il/cdn/shop/files/2501940200-1.jpg?v=1&width=1000", back: "https://fox.co.il/cdn/shop/files/2501940200-4.jpg?v=1&width=1000" },
-  { label: "Dress - baby-blue strapless A-line maxi", title: "So Far So Good Maxi Dress Baby Blue",
+  { label: "Dress - baby-blue strapless A-line maxi", title: "So Far So Good Maxi Dress Baby Blue", page: "https://us.princesspolly.com/products/so-far-so-good-maxi-dress-baby-blue",
     front: "https://cdn.shopify.com/s/files/1/0061/8627/0804/files/1-modelinfo-selina-us2_84402d8a-6172-4491-b09f-d724dc0e600e.jpg?width=1000",
     back: "https://cdn.shopify.com/s/files/1/0061/8627/0804/files/4-modelinfo-selina-us2_0cc6a8f1-c9ab-4cc9-85dd-2a3a0ac5c2eb.jpg?width=1000" },
-  { label: "Compare - the PEAK tee (no kind: today's wording)", title: "חולצת טי PEAK אוברסייז",
+  { label: "Compare - the PEAK tee (no kind: today's wording)", title: "חולצת טי PEAK אוברסייז", page: "https://fox.co.il/products/1824346900",
     front: "https://fox.co.il/cdn/shop/files/1824346900-1.jpg?v=1&width=1000", back: "https://fox.co.il/cdn/shop/files/1824346900-3.jpg?v=1&width=1000" },
 ];
 
@@ -45,5 +45,9 @@ if (rest.length) {
   console.log(roomLink({ front: rest[0], back: rest[1], title: rest.slice(2).join(" ") }));
   process.exit(0);
 }
-console.log(`Fitting room: ${BASE} (TEST mode${DEMO ? ", demo - one measurement per browser" : ""})\n`);
-for (const p of PRESETS) console.log(`${p.label}\n${roomLink(p)}\n`);
+/* THE STORE PAGE IS THE REAL PATH (2026-11-07): a direct room link skips the widget, so the classifier's facts (colour, print
+   text, plain back) never reach the room and a TEST prompt goes without "Fabric: ...". On the store page, the bookmarklet loads
+   this deployment's widget, which classifies the photos and sends those facts - the flow a shopper gets. */
+console.log(`Fitting room: ${BASE} (TEST mode${DEMO ? ", demo - one measurement per browser" : ""})`);
+console.log(`Best: open the store page, click the bookmarklet (node scripts/try-on.mjs --bookmarklet), then the try-on button.\n`);
+for (const p of PRESETS) console.log(`${p.label}\n  store page:  ${p.page}\n  direct link (no colour/print facts): ${roomLink(p)}\n`);
