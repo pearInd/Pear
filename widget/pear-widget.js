@@ -144,7 +144,7 @@
      placeholder, or any other value must all evaluate to false - only the
      literal "true" turns this on. */
   var DEMO_GATE = !!script && script.getAttribute("data-pear-demo-gate") === "true";
-  var DEMO_GATE_KEY = "pear_demo_gated_measured";
+  var DEMO_GATE_KEY = "pear_demo_gated_measured_r2";
 
   /* This is the PARENT PAGE's own localStorage - a different origin from the
      fitting-room iframe (PEAR_BASE) in the general case, so it can only reflect
@@ -177,7 +177,7 @@
      The fitting room sets its own copy the instant a first look is saved and
      posts a message here so every trigger button on THIS page locks too,
      with no reload - see the "message" listener near the bottom of this file. */
-  var PEAR_DEMO_LOCK_KEY = "pear_demo_measured";
+  var PEAR_DEMO_LOCK_KEY = "pear_demo_measured_r2";
   var injectedButtons = [];
 
   function isDemoLocked() {

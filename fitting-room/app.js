@@ -99,7 +99,7 @@ const DEMO_FLAG = new URLSearchParams(location.search).get("demo") === "1";
    attribute) every branch below is skipped entirely and existing behavior is
    unchanged. */
 const DEMO_GATE = new URLSearchParams(location.search).get("demo_gate") === "1";
-const DEMO_GATE_KEY = "pear_demo_gated_measured";
+const DEMO_GATE_KEY = "pear_demo_gated_measured_r2";
 
 /* ── Language (i18n.js) ───────────────────────────────────────────────────
    Geo-IP detection, applyLanguage()/setLanguage(), the I18N dictionary, and
@@ -14212,7 +14212,7 @@ const DEMO_MODE = new URLSearchParams(location.search).get("pear_demo") === "1";
    the parent the instant the lock is set so the outer button locks too,
    without the host page needing a reload.
    ============================================================================= */
-const PEAR_DEMO_LOCK_KEY = "pear_demo_measured";
+const PEAR_DEMO_LOCK_KEY = "pear_demo_measured_r2";
 let demoLocked = false;
 
 function isDemoLocked() {
