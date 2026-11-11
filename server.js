@@ -36,6 +36,8 @@ import { geminiReplyText, geminiReplyShape, parseGeminiJson, MODEL_REPLY_MAX_TOK
 /* Where the garment is in a store photo, so the room can paint the store's model out of the rear
    reference before it is sent (2026-10-08 - see lib/garment-box.js and GET /api/garment-box). */
 import { detectGarmentBand, GARMENT_BOX_VERSION } from "./lib/garment-box.js";
+/* How the garment sits on the store's model - the fit sentence read from the photo (2026-11-11, lib/garment-fit.js). */
+import { detectGarmentFit, GARMENT_FIT_VERSION } from "./lib/garment-fit.js";
 import { estimateBodyFromPhoto, sanitizeBodyEstimateRequest } from "./lib/body-estimate.js";
 import { photoTryOn, sanitizePhotoTryOnRequest } from "./lib/photo-tryon.js";
 import { makeStoreSizeChartHandler } from "./lib/store-size-charts.js";
@@ -3097,6 +3099,52 @@ app.get("/api/garment-box", classifyLimiter, async (req, res) => {
   }
   console.log(`[garment-box] ${region} ${out.band ? "band " + JSON.stringify(out.band) : "whole (" + out.reason + ")"}` +
     ` raw ${JSON.stringify(out.raw || null)} [${out.source}] ${imageUrl.slice(0, 120)}`);
+  return res.json(body);
+});
+
+/* GET /api/garment-fit?image_url=…&v=N
+     -> { fit: { cut, hem } | null, reason, view, source, v }
+
+   THE FIT READ FROM THE PHOTO (2026-11-11, CLAUDE.md §7.25). How a top sits on the store's own model - its cut and where
+   its hem ends - for the prompt's fit sentence (lib/prompts.js). The room asks for the product's gallery photos in a TEST
+   session; `fit: null` means "this photo says nothing" (a packshot, a close-up, an unsure answer) and the prompt keeps the
+   table's sentence. Cached like /api/garment-box: a verdict in this instance's memory and at the CDN, never an error. */
+const _garmentFitMemo = new Map();   // `${version}|${canonical}` -> { at, body }
+
+app.get("/api/garment-fit", classifyLimiter, async (req, res) => {
+  const imageUrl = typeof req.query?.image_url === "string" ? req.query.image_url.trim() : "";
+  if (!imageUrl || imageUrl.length > 2048 || !/^https?:\/\//i.test(imageUrl)) {
+    return res.status(400).json({ error: "missing_image_url", message: "image_url: an http(s) URL is required." });
+  }
+  /* A photo on a public CDN, never this server's own network: the fetch below runs server-side. */
+  let parsed = null;
+  try { parsed = new URL(imageUrl); } catch (_) { /* rejected below */ }
+  if (!parsed || !isProxyHostAllowed(parsed.hostname, parsed.protocol)) {
+    return res.status(400).json({ error: "bad_image_url", message: "image_url must be a public image." });
+  }
+  const key = `${GARMENT_FIT_VERSION}|${canonicalImageUrl(imageUrl) || imageUrl}`;
+  const hit = _garmentFitMemo.get(key);
+  if (hit && Date.now() - hit.at < GARMENT_BOX_MEMO_MS) {
+    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");
+    return res.json({ ...hit.body, cached: true });
+  }
+  let out;
+  try {
+    out = await detectGarmentFit(imageUrl, GEMINI_API_KEY);
+  } catch (e) {
+    /* Only a 429 reaches here. Not cached anywhere - the next visit asks again. */
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({ fit: null, reason: "rate-limited", view: null, source: "rate_limited", v: GARMENT_FIT_VERSION });
+  }
+  const body = { fit: out.fit, reason: out.reason, view: out.view, source: out.source, v: GARMENT_FIT_VERSION };
+  if (out.source === "ai") {
+    _garmentFitMemo.set(key, { at: Date.now(), body });
+    if (_garmentFitMemo.size > GARMENT_BOX_MEMO_MAX) _garmentFitMemo.delete(_garmentFitMemo.keys().next().value);
+    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");
+  } else {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  console.log(`[garment-fit] ${out.fit ? JSON.stringify(out.fit) : "none (" + out.reason + ")"} view ${out.view} [${out.source}] ${imageUrl.slice(0, 120)}`);
   return res.json(body);
 });
 

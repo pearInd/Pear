@@ -1,6 +1,6 @@
 /* A SEPARATE Worker for testing the orientation engine from a Vercel PREVIEW (2026-11-11, CLAUDE.md §7.23).
    The production Worker (wrangler.jsonc, "pear-orient" on rt.pear-ai.io) is never touched by this file: it has its
-   own name, its own custom domain and no TRACES binding. Only a Vercel preview build whose PEAR_ORIENT_URL points
+   own name and its own custom domain; it writes TEST flight records to the same KV store (TRACES), so a preview session is read back the same way. Only a Vercel preview build whose PEAR_ORIENT_URL points
    here (Preview-scoped, this branch only) reaches it.
 
      cd cloudflare/orient
@@ -24,5 +24,7 @@
     "RT_TELEMETRY_URL": "https://platform.decart.ai/api/v1/telemetry",
     "RT_FILES_URL": "https://api.decart.ai/v1/files"
   },
+  /* The same store as production's: a TEST record is a TEST record (CLAUDE.md §2.16) - `node .traces/pull.mjs` reads both. */
+  "kv_namespaces": [{ "binding": "TRACES", "id": "16e6ef62ed4641acbb1cf21d801c91dd" }],
   "assets": { "directory": "./assets", "binding": "ASSETS", "run_worker_first": true }
 }

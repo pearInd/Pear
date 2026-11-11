@@ -8758,6 +8758,72 @@ async function scaleRearToFront(blob, url) {
 /* Warm the cache with the front AND back assets of the active subject (both halves of a
    full look) - fire-and-forget from setAngle/goLive so the fetches overlap the user's
    next action (or the WebRTC handshake) instead of serialising into the first swap. */
+/* ── THE FIT READ FROM THE PHOTO (2026-11-11, TEST sessions only until measured - CLAUDE.md §7.25) ────────────────────────
+   "The belly looks too big at the start, as if I had a paunch ... it has to be done by the model's photo" (the owner, a
+   football jersey on terminalx). The fit sentence came from a table that knows the size step and nothing about the garment
+   (lib/prompts.js getFitModifier()). The store's gallery usually has the garment WORN: GET /api/garment-fit reads its cut and
+   where its hem ends on the model (lib/garment-fit.js), and the two answers ride the prompt request as plain facts
+   (fitCut / fitHem - promptFactsOf(), PROMPT_FACT_STRINGS) so the engine builds the sentence from them.
+   A single TOP only, the gallery the widget forwarded (item.pearImages), at most FIT_READ_MAX_PHOTOS asks, one after the
+   other, the first photo that answers wins; nothing waits for it - a prompt asked before the read lands is the table's, and
+   the prefetch below re-asks the four prompts once it has. Gate: traceEnabled(); ?fit_read=1 forces on, ?fit_read=0 off.
+   A TEST record's ctx.fit says { cut, hem, view, n } or { why }. */
+const FIT_READ_MAX_PHOTOS = 4;
+const FIT_READ_FETCH_MS = 12000;
+let _fitReadLog = null;
+function fitReadOn() {
+  try {
+    const v = new URLSearchParams(location.search).get("fit_read");
+    if (v === "0") return false;
+    if (v === "1") return true;
+  } catch (_) { return false; }
+  return typeof traceEnabled === "function" && traceEnabled();
+}
+/** The gallery photos worth asking, in the store's order: http(s) only, each photo once (CLAUDE.md §2.2). Pure. */
+function fitReadCandidates(item) {
+  const list = item && Array.isArray(item.pearImages) ? item.pearImages : [];
+  const out = [];
+  for (const u of list) {
+    if (typeof u !== "string" || !/^https?:\/\//i.test(u)) continue;
+    if (out.some((o) => (typeof sameImage === "function" ? sameImage(o, u) : o === u))) continue;
+    out.push(u);
+    if (out.length >= FIT_READ_MAX_PHOTOS) break;
+  }
+  return out;
+}
+/** Reads the fit once per garment and sets item.fitCut / item.fitHem. Never rejects; resolves true when a read landed. */
+function readGarmentFit(item) {
+  if (!item || typeof fetch !== "function" || typeof location === "undefined" || !fitReadOn()) return Promise.resolve(false);
+  if (typeof isBottomsGarment === "function" && isBottomsGarment(item)) return Promise.resolve(false);
+  if (item._fitReadJob) return item._fitReadJob;
+  const photos = fitReadCandidates(item);
+  if (!photos.length) { _fitReadLog = { why: "no-gallery" }; return Promise.resolve(false); }
+  item._fitReadJob = (async () => {
+    let why = "none";
+    for (let n = 0; n < photos.length; n++) {
+      try {
+        const r = await fetch(`${location.origin}/api/garment-fit?image_url=${encodeURIComponent(photos[n])}&v=1`,
+          typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(FIT_READ_FETCH_MS) } : {});
+        if (!r.ok) { why = "http-" + r.status; continue; }
+        const j = await r.json();
+        const f = j && j.fit;
+        if (f && typeof f.cut === "string") {
+          item.fitCut = f.cut;
+          if (typeof f.hem === "string") item.fitHem = f.hem;
+          _fitReadLog = { cut: f.cut, hem: typeof f.hem === "string" ? f.hem : null, view: (j && j.view) || null, n: n + 1 };
+          console.log(`[PEAR] fit read from the store's photo ${n + 1}/${photos.length}: ${f.cut}${f.hem ? ", hem " + f.hem : ""}`);
+          return true;
+        }
+        why = String((j && j.reason) || "none").slice(0, 24);
+      } catch (e) { why = "no-answer"; }
+    }
+    _fitReadLog = { why, n: photos.length };
+    console.log("[PEAR] fit read: the store's photos said nothing (" + why + ") - the table's sentence stays");
+    return false;
+  })();
+  return item._fitReadJob;
+}
+
 function prewarmOrientationAssets() {
   const look = resolveLook();
   /* The wire prompts too, while the shopper is still on their way to go-live: go-live's own
@@ -8767,8 +8833,18 @@ function prewarmOrientationAssets() {
   if (look) {
     if (typeof wireLookPrompt === "function") wireLookPrompt("prefetch").catch(() => {});
   } else if (activeItem && typeof wirePrompt === "function") {
+    const combos = [["front", false], ["back", false], ["front", true], ["back", true]];
     for (const [angle, inProfile] of [["front", false], ["back", false], ["front", true], ["back", true]]) {
       wirePrompt(activeItem, angle, "prefetch", { inProfile }).catch(() => {});
+    }
+    /* THE FIT READ FROM THE PHOTO (TEST sessions): once the store's worn photo has answered, the four prompts are asked
+       again with its two facts, so go-live and every turn find them in the session memo. typeof-guarded (§2.7). */
+    if (typeof readGarmentFit === "function") {
+      const it = activeItem;
+      readGarmentFit(it).then((landed) => {
+        if (!landed || it !== activeItem) return;
+        for (const [angle, inProfile] of combos) wirePrompt(it, angle, "prefetch", { inProfile }).catch(() => {});
+      }).catch(() => {});
     }
   }
   for (const it of (look ? [look.top, look.bottom] : [activeItem])) {
@@ -13720,7 +13796,7 @@ function isBottomsGarment(item) {
    (a corpus of 351,779 prompts matched the in-browser engine byte for byte with only
    these sent). A field added to a builder in lib/prompts.js must be added here AND to
    sanitizePromptRequest() there, or the server will never see it. */
-const PROMPT_FACT_STRINGS = ["name", "title", "type", "category", "subType", "garmentType", "colorHex", "textOcr", "fabric"];
+const PROMPT_FACT_STRINGS = ["name", "title", "type", "category", "subType", "garmentType", "colorHex", "textOcr", "fabric", "fitCut", "fitHem"];
 const PROMPT_FACT_BOOLS = ["backIsPlain", "_backLooksPrinted", "custom"];
 
 function promptFactsOf(item) {
@@ -18185,6 +18261,9 @@ async function goLive() {
          the classifier's verdict never brought them. */
       facts: activeItem ? { color: activeItem.colorHex || null, ocr: typeof activeItem.textOcr === "string" ? activeItem.textOcr.length : null,
         plainBack: typeof activeItem.backIsPlain === "boolean" ? activeItem.backIsPlain : null } : undefined,
+      /* THE FIT READ FROM THE PHOTO: what the store's worn photo said (or why nothing), and the size step on the wire. */
+      fit: typeof _fitReadLog !== "undefined" && _fitReadLog ? _fitReadLog : undefined,
+      delta: typeof getSizeDelta === "function" ? getSizeDelta() : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the

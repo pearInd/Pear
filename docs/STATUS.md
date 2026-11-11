@@ -4,7 +4,9 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-11-11 · **working tree of `feat/prompt-off-browser-pregen-backs`, uncommitted:** "90 degrees and back shows the back on the front" - the early BACK is now withdrawn when the chest comes back round (CLAUDE.md §7.23; `lib/orient-engine.js` + `return-side` §1.22-§1.26, §4e). A 360 decides exactly as before (every orientation suite prints the same output). **Not committed, not deployed, not measured on the real engine** - production (main 189a9ce, Worker 65c50a36) is untouched._
+_Last updated: 2026-11-12 · **working tree, uncommitted:** the fit sentence read from the store's photo of the garment worn (CLAUDE.md §7.25; `lib/garment-fit.js`, `/api/garment-fit`, `readGarmentFit()`, `getPhotoFitModifier()`; TEST sessions only, a shopper's wire byte-identical). Not measured: needs the test Worker deployed and the branch's Preview `PEAR_ORIENT_URL`. Measured 2026-11-11 from five TEST records: the three 360s at 15:20-15:21 decided and were acknowledged on time (209-298ms); the 15:10 "back left on the front" was one 1,473ms BACK acknowledgement, not ours; §7.24's scaling did not act in any of them (the rear sent had no model)._
+
+_Earlier: 2026-11-11 · **working tree of `feat/prompt-off-browser-pregen-backs`, uncommitted:** "90 degrees and back shows the back on the front" - the early BACK is now withdrawn when the chest comes back round (CLAUDE.md §7.23; `lib/orient-engine.js` + `return-side` §1.22-§1.26, §4e). A 360 decides exactly as before (every orientation suite prints the same output). **Not committed, not deployed, not measured on the real engine** - production (main 189a9ce, Worker 65c50a36) is untouched._
 
 _Earlier: 2026-11-07 · **main = 189a9ce** (fast-forward of `feat/prompt-off-browser-pregen-backs`): the page never holds the prompt (§7.21), back photos prepared by the scanner (§7.22, a plan by default - no paid run yet), the fit clause never dropped silently and the closure lock outranking it (Yair's decision, CLAUDE.md §0, `fit-shed` §5, 7 mutations killed). **Worker deployed first: pear-orient 65c50a36-02ff-446b-b890-267293a50fe6** (rollback target dda491e4), fingerprint a96159d14315b11b on the edge and in production's room; /size and /prompt verified against the local modules. One TEST try-on on production (CHICAGO shorts 3108650200, a synthetic page - FOX answered 429): the shorts from the first frame, lettering and stripe on the front, plain back, every prompt from the edge, no words or secrets on the page. Seen, not investigated: the room offered a kids' ladder (4-18) for that product to a 178/74 body._
 
@@ -39,6 +41,9 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 
 ## Waiting on you (manual steps)
 
+- [ ] **The fit read from the model's photo (CLAUDE.md §7.25)** — uncommitted, TEST sessions only. Deploy the test Worker
+  (`cd cloudflare/orient && npx wrangler deploy -c wrangler.preview.jsonc`), push, then one TEST clip at the recommended size and
+  one a size up; the record's `ctx.fit` / `ctx.delta` say what was read and sent. Decide after: open to shoppers or reword.
 - [ ] **The shirt's length across a turn (CLAUDE.md §7.24)** — uncommitted, `fitting-room/app.js`, TEST sessions only. Measure a
       TEST session on the pink jersey (a full turn): the hem should stay put at both swaps. `?ref_scale=0` in the room URL is the
       old behaviour. If it holds, decide whether shoppers get it too.

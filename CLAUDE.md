@@ -2262,6 +2262,30 @@ numbers agree, the mechanism is not proven on the engine.
 - **Next (the owner's idea, not built):** choose the size from a photo of the garment WORN, so the length is the real one and not
   merely the same on both sides - needs the engine's size-to-length response measured first (one garment at three sizes).
 
+### 7.25 The fit read from the model's photo - "the belly looks too big at the start, as if I had a paunch" (2026-11-12, Layers A+B) - TEST SESSIONS ONLY, NOT YET MEASURED ON THE ENGINE
+The owner, three TEST clips of the pink JUVENTUS jersey on terminalx (2026-11-11 15:20-15:21): the front of the first seconds
+drawn ballooned at the stomach; after the 360 the same front sat normally. His direction: "it has to be done by the model's
+photo" (asked, and chosen: READ the fit from the photo - not send the worn photo as the reference, which is §2.38's risk).
+The fit sentence came from `getFitModifier()`'s table: the size step alone, "perfectly tailored" for every true-to-size top,
+"easy relaxed volume through the torso" two sizes up, no word on where the hem ends. **The cause of the balloon is NOT proven**
+(the records of those sessions do not carry the size step - they do from this change, `ctx.delta`).
+- **The read (`lib/garment-fit.js`, `GET /api/garment-fit`):** one question to the classifier's model per gallery photo - worn or
+  not, the view, whole or cropped, `cut` (fitted / regular / relaxed / oversized), `hem` (waist / hip / below-hip / thigh). Nothing
+  for a packshot, a close-up, a side view, an unsure answer. Cached like `/api/garment-box` (memo + CDN, never an error).
+- **The room (`app.js`, `readGarmentFit()`, from `prewarmOrientationAssets()`):** a single TOP, the gallery the widget forwarded
+  (`item.pearImages`), at most 4 asks in order, the first photo that answers wins -> `item.fitCut` / `item.fitHem`, sent with the
+  prompt request (`PROMPT_FACT_STRINGS` = `PROMPT_ITEM_STRINGS`, §3). Nothing waits for it; the four prompts are re-asked when it lands.
+- **The sentence (`lib/prompts.js`, `getPhotoFitModifier()`, `_requestFitRead`):** starts from the photo's cut, one step per size
+  (undersized < close-cut < regular straight-cut < relaxed straight-cut < oversized < very oversized), the hem named at
+  true-to-size only. Fabric words only - lies close, hangs straight, hangs loose - never the body (§2.4), never "volume".
+- **Gate:** `test: true` requests only (a TEST session); the room's `?fit_read=0` off, `=1` on. A shopper's wire is byte-identical
+  (`trace:prompt` identical to HEAD, `prompt-engine` on its pin). A TEST record's `ctx.fit` = `{ cut, hem, view, n }` or `{ why }`.
+- **THE WORDS ARE EXPANDED AT THE EDGE (§7.21):** a preview that relays through the production Worker sends the OLD sentence.
+  Measuring this needs the test Worker (`cloudflare/orient/wrangler.preview.jsonc`, now with the TRACES binding) deployed from
+  this tree and the branch's Preview `PEAR_ORIENT_URL` pointing at it.
+- **Pinned:** `garment-fit` (the read, the model call, every rung, the gates, the lockstep). Unit suite green except `cloak`
+  (esbuild's macOS binary in the Linux sandbox). `qa:visual` NOT run. The model's read of real photos NOT checked (no key here).
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:
