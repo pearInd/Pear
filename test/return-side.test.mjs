@@ -22,6 +22,8 @@
       outbound BACK goes out on the same tick as main's, and no 360 swaps more than main's.
    §4b THE ENGINE'S PACE (2026-10-04): with a slow engine (the PEAK tee's ~750ms acks) the return lands ~57 degrees later;
       the room's `lat` brings it ~26 degrees back without ever landing on a back-facing body; a fast engine is untouched.
+   §4e THE CHEST COMES BACK (2026-11-11): the recorded 360s played to the side view and back again - the early BACK is
+      withdrawn when the chest comes round, not ~0.5s after it faces the lens; §1.22-§1.26 pin the rule and its guards.
    §5 THE WIRING: the sample carries the order (typeof-guarded), both knob lists carry return_side, the
       sanitiser bounds it, the TEST record logs it.
    ============================================================================= */
@@ -219,6 +221,47 @@ console.log("\n── §1 the trigger ──");
     { vote: null, lock: "back", yawAbs: 20, at: 480, ord: -0.7, ordAt: 480 },    // ...and further
   ];
   check("§1.21 an order falling back toward the back never fires", !paced(750, true, falling).some((o) => o.fire));
+  /* THE CHEST COMES BACK (2026-11-11) - "90 degrees and back shows the back on the front". The m1 clip played to the side and
+     back, on literals: the early BACK on the way out, the side, and the chest coming back the way it went. No reading ever
+     reads the back half, and no shoulder vote is cast until ~50 degrees from square. */
+  const sideAndBack = [
+    { vote: "front", lock: "front", yawAbs: 5, at: 0, ord: 1, ordAt: 0 },
+    { vote: null, lock: "front", yawAbs: 53, at: 240, ord: 0.33, ordAt: 240 },   // the early BACK
+    { vote: null, lock: "back", yawAbs: 88, at: 480, ord: 0, ordAt: 480 },       // the side
+    { vote: null, lock: "back", yawAbs: 86, at: 720, ord: 0.02, ordAt: 720 },    // ...held
+    { vote: null, lock: "back", yawAbs: 53, at: 960, ord: 0.33, ordAt: 960 },    // the chest coming back
+    { vote: null, lock: "back", yawAbs: 53, at: 960, ord: 0.33, ordAt: 960 },    // ...the same reading, a tick later
+  ];
+  const cb = run(trig(0.2), sideAndBack);
+  check("§1.22 a turn to the side that comes BACK: the early BACK is withdrawn on the first reading of the chest coming round (0.33)",
+    cb[1].fire === "back" && !cb[2].withdraw && !cb[3].withdraw && cb[4].withdraw === "front", JSON.stringify(cb));
+  check("§1.22b ...and asked for again on every tick it holds (maybeSwap() can refuse one)", cb[5].withdraw === "front", JSON.stringify(cb[5]));
+  const strip = (o) => ({ vote: o.vote, lock: o.lock, yawAbs: o.yawAbs, at: o.at });
+  check("§1.23 a room that sends no order, and ?return_side=0, keep the old withdrawal exactly: nothing on that reading",
+    !run(trig(0.2), sideAndBack.map(strip)).some((o) => o.withdraw) && !run(trig(0), sideAndBack).some((o) => o.withdraw));
+  const on360 = run(trig(0.2), [
+    ...sideAndBack.slice(0, 3),
+    { vote: null, lock: "back", yawAbs: 80, at: 720, ord: 0.09, ordAt: 720 },    // the pose model's jitter at the side (0.09: the most any recorded 360 climbs)
+    { vote: null, lock: "back", yawAbs: 60, at: 960, ord: -0.33, ordAt: 960 },   // the back half: the turn is real
+    { vote: null, lock: "back", yawAbs: 80, at: 1200, ord: -0.1, ordAt: 1200 },
+    { vote: null, lock: "back", yawAbs: 60, at: 1440, ord: 0.33, ordAt: 1440 },  // the return leg's own rules from here
+  ]);
+  check("§1.24 a 360 is untouched: no withdrawal on the way to the back, and the return FRONT still goes out by the order",
+    !on360.some((o) => o.withdraw) && on360[6].fire === "front" && on360[6].via === "order", JSON.stringify(on360));
+  const guard = (reading) => run(trig(0.2), [...sideAndBack.slice(0, 3), { vote: null, lock: "back", at: 720, ordAt: 720, ...reading }])[3];
+  check("§1.25 never on one reading of a mirrored skeleton: the full-width FRONT (0.9+), a square |yaw|, or a step past the snap bar",
+    !guard({ ord: 1, yawAbs: 7, vote: "front" }).withdraw && !guard({ ord: 0.9, yawAbs: 30 }).withdraw &&
+    !guard({ ord: 0.6, yawAbs: 7 }).withdraw && !guard({ ord: 0.84, yawAbs: 30 }).withdraw && guard({ ord: 0.6, yawAbs: 50 }).withdraw === "front" &&
+    /* ...the band's own top, with the step and the |yaw| both passing: 0 -> 0.2 -> 0.9 */
+    !run(trig(0.2), [...sideAndBack.slice(0, 3), { vote: null, lock: "back", yawAbs: 78, at: 720, ord: 0.2, ordAt: 720 },
+      { vote: null, lock: "back", yawAbs: 30, at: 960, ord: 0.9, ordAt: 960 }]).some((o) => o.withdraw),
+    JSON.stringify([guard({ ord: 1, yawAbs: 7, vote: "front" }), guard({ ord: 0.9, yawAbs: 30 }), guard({ ord: 0.6, yawAbs: 7 }), guard({ ord: 0.84, yawAbs: 30 }), guard({ ord: 0.6, yawAbs: 50 })]));
+  check("§1.26 ...nor on a climb under 0.3 from the deepest reading, a reading under 0.3, or one with no fresh |yaw|",
+    !guard({ ord: 0.25, yawAbs: 70 }).withdraw && !guard({ ord: 0.29, yawAbs: 70 }).withdraw && !guard({ ord: 0.5, yawAbs: null }).withdraw &&
+    !run(trig(0.2), [...sideAndBack.slice(0, 2), { vote: null, lock: "back", yawAbs: 80, at: 480, ord: -0.15, ordAt: 480 },
+      { vote: null, lock: "back", yawAbs: 75, at: 720, ord: 0.2, ordAt: 720 }]).some((o) => o.withdraw) &&
+    !run(trig(0.2), [sideAndBack[0], { vote: null, lock: "front", yawAbs: 53, at: 240, ord: 0.6, ordAt: 240 },
+      { vote: null, lock: "back", yawAbs: 45, at: 480, ord: 0.7, ordAt: 480 }]).some((o) => o.withdraw));
   /* PREDICTIVE BACK, gated on the order: a FRONT lock whose |yaw| passed the side and is falling is either a body
      passing to the back (the order on the back side) or one coming round to the lens (the order on the front). */
   const I = E.createOrientEngine(E.sanitizeOrientKnobs({})).internals;
@@ -780,6 +823,52 @@ console.log("\n── §4d the room's side of the 18:21 / 18:22 fixes ──");
   /* 18:22: the camera went 9:16 -> 512x288 at go-live; the gate's baseline described another picture. */
   check("§4d.2 a frame of another shape starts the shoulder baseline afresh, and drops the stale order",
     /if \(_poseTwist\.aspect && Math\.abs\(_poseTwist\.aspect - aspect\) \/ _poseTwist\.aspect > 0\.02\) \{\s*\n\s*_poseTwist = makeTwistState\(\);\s*\n\s*_poseOrd = null; _poseOrdAt = 0;/.test(APP));
+}
+
+console.log("\n── §4e a turn to the side that comes back the way it went (2026-11-11) ──");
+{
+  /* The recorded 360s played up to a peak angle and then the same readings backwards - the shopper looks at the side of
+     the garment and turns back. ?return_side=0 is the rule before (the vote's two-reading withdrawal only). */
+  const ROOM = { early_turn: "50", early_turn_slow: "50" };   // the room's own defaults (app.js ORIENT_KNOB_DEFAULTS)
+  const med = (a) => a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)];
+  const stats = {};
+  for (const peak of [75, 90]) for (const hold of [0, 800]) {   // short of the back half: past ~100 degrees the turn is confirmed and the return leg decides
+    const lagNow = [], lagWas = []; let n = 0, bad = 0, sameBack = 0;
+    for (const rows0 of Object.values(POSES.clips)) {
+      const abs = rows0.filter((r) => r[1] !== null).map((r) => Math.abs(r[1])).sort((a, b) => b - a), sq = abs[Math.floor(abs.length * 0.1)];
+      const k = rows0.findIndex((r) => r[1] !== null && r[1] / sq <= Math.cos(peak * Math.PI / 180));
+      if (k < 2) continue;
+      const fwd = rows0.slice(0, k + 1), rows = fwd.map((r) => r.slice());
+      let t = fwd[k][0];
+      for (let h = 66; h <= hold; h += 66) rows.push([t + h, ...fwd[k].slice(1)]);
+      t = rows[rows.length - 1][0];
+      const turnedAt = t;
+      for (let j = k - 1; j >= 0; j--) { t += fwd[j + 1][0] - fwd[j][0]; rows.push([t, ...fwd[j].slice(1)]); }
+      for (let h = 66; h <= 2500; h += 66) rows.push([t + h, ...fwd[0].slice(1)]);
+      const chest = rows.find((r) => r[0] > turnedAt && r[1] !== null && r[1] / sq >= 0.5)[0];   // the chest back at 60 degrees
+      for (const phase of [0, 60, 125, 190]) {
+        const now = roomRun(rows, { knobs: ROOM, phase }), was = roomRun(rows, { knobs: { ...ROOM, return_side: "0" }, phase });
+        const b = now.find((x) => x.next === "back"), bw = was.find((x) => x.next === "back");
+        if (!b && !bw) continue;
+        n++;
+        if (b && bw && b.t === bw.t) sameBack++;
+        const f = b && now.find((x) => x.next === "front" && x.t > b.t), fw = bw && was.find((x) => x.next === "front" && x.t > bw.t);
+        if (!f || !fw || now.length !== 2 || now[now.length - 1].next !== "front") { bad++; continue; }
+        lagNow.push(f.t - chest); lagWas.push(fw.t - chest);
+      }
+    }
+    stats[`${peak}/${hold}`] = { n, bad, sameBack, now: med(lagNow), was: med(lagWas), worst: Math.max(...lagNow), later: lagNow.filter((x, i) => x > lagWas[i]).length };
+  }
+  const all = Object.values(stats);
+  console.log("        peak/hold: the FRONT goes out, after the chest is back at 60 degrees (median ms, now <- before): " +
+    Object.entries(stats).map(([k, v]) => `${k} ${v.now} <- ${v.was} (worst ${v.worst})`).join("; "));
+  check("§4e.0 the data is not vacuous: every case sends the early BACK in at least 35 runs", all.every((v) => v.n >= 35), JSON.stringify(stats));
+  check("§4e.1 the problem, reproduced: before, the FRONT went out a median 0.45s or more after the chest was back at 60 degrees (a 90-degree turn)",
+    stats["90/0"].was >= 450 && stats["90/800"].was >= 450, JSON.stringify(stats));
+  check("§4e.2 now a median 150ms or less at 90 degrees, and at least 250ms sooner than before at 75 and 90 degrees",
+    stats["90/0"].now <= 150 && stats["90/800"].now <= 150 && all.every((v) => v.was - v.now >= 250), JSON.stringify(stats));
+  check("§4e.3 never later than before, on any run", all.every((v) => v.later === 0), JSON.stringify(stats));
+  check("§4e.4 one BACK and one FRONT per look, ending on the FRONT; the BACK on the same tick as before", all.every((v) => v.bad === 0 && v.sameBack === v.n), JSON.stringify(stats));
 }
 
 console.log("\n── §5 the wiring ──");

@@ -1,0 +1,28 @@
+/* A SEPARATE Worker for testing the orientation engine from a Vercel PREVIEW (2026-11-11, CLAUDE.md §7.23).
+   The production Worker (wrangler.jsonc, "pear-orient" on rt.pear-ai.io) is never touched by this file: it has its
+   own name, its own custom domain and no TRACES binding. Only a Vercel preview build whose PEAR_ORIENT_URL points
+   here (Preview-scoped, this branch only) reaches it.
+
+     cd cloudflare/orient
+     npx wrangler deploy -c wrangler.preview.jsonc
+
+   Remove it when the test is done:  npx wrangler delete --name pear-orient-test
+   (and delete the Preview PEAR_ORIENT_URL variable in Vercel). */
+{
+  "name": "pear-orient-test",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "routes": [{ "pattern": "rt-test.pear-ai.io", "custom_domain": true }],
+  /* Vercel previews of the "pear" project only - never app.pear-ai.io. */
+  "vars": {
+    "ALLOWED_ORIGINS": "https://pear-*-pear2.vercel.app",
+    "RT_SIGNAL_URL": "https://api3.decart.ai/v1/stream",
+    "RT_MODEL": "lucy-vton-3.5",
+    "RT_TELEMETRY_URL": "https://platform.decart.ai/api/v1/telemetry",
+    "RT_FILES_URL": "https://api.decart.ai/v1/files"
+  },
+  "assets": { "directory": "./assets", "binding": "ASSETS", "run_worker_first": true }
+}

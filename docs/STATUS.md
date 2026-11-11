@@ -4,7 +4,9 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-11-07 · **main = 189a9ce** (fast-forward of `feat/prompt-off-browser-pregen-backs`): the page never holds the prompt (§7.21), back photos prepared by the scanner (§7.22, a plan by default - no paid run yet), the fit clause never dropped silently and the closure lock outranking it (Yair's decision, CLAUDE.md §0, `fit-shed` §5, 7 mutations killed). **Worker deployed first: pear-orient 65c50a36-02ff-446b-b890-267293a50fe6** (rollback target dda491e4), fingerprint a96159d14315b11b on the edge and in production's room; /size and /prompt verified against the local modules. One TEST try-on on production (CHICAGO shorts 3108650200, a synthetic page - FOX answered 429): the shorts from the first frame, lettering and stripe on the front, plain back, every prompt from the edge, no words or secrets on the page. Seen, not investigated: the room offered a kids' ladder (4-18) for that product to a 178/74 body._
+_Last updated: 2026-11-11 · **working tree of `feat/prompt-off-browser-pregen-backs`, uncommitted:** "90 degrees and back shows the back on the front" - the early BACK is now withdrawn when the chest comes back round (CLAUDE.md §7.23; `lib/orient-engine.js` + `return-side` §1.22-§1.26, §4e). A 360 decides exactly as before (every orientation suite prints the same output). **Not committed, not deployed, not measured on the real engine** - production (main 189a9ce, Worker 65c50a36) is untouched._
+
+_Earlier: 2026-11-07 · **main = 189a9ce** (fast-forward of `feat/prompt-off-browser-pregen-backs`): the page never holds the prompt (§7.21), back photos prepared by the scanner (§7.22, a plan by default - no paid run yet), the fit clause never dropped silently and the closure lock outranking it (Yair's decision, CLAUDE.md §0, `fit-shed` §5, 7 mutations killed). **Worker deployed first: pear-orient 65c50a36-02ff-446b-b890-267293a50fe6** (rollback target dda491e4), fingerprint a96159d14315b11b on the edge and in production's room; /size and /prompt verified against the local modules. One TEST try-on on production (CHICAGO shorts 3108650200, a synthetic page - FOX answered 429): the shorts from the first frame, lettering and stripe on the front, plain back, every prompt from the edge, no words or secrets on the page. Seen, not investigated: the room offered a kids' ladder (4-18) for that product to a 178/74 body._
 
 _Earlier: 2026-11-02 · branch `feat/prompt-off-browser-pregen-backs`: decision B taken (a shed clause is allowed, with a record); §7.21 and §7.22, neither live yet · main: the edge Worker was running a reverted engine (ba53a7f, 10-15) and has been redeployed from main and verified (fingerprint + replayed turns). The garment's colour/print/plain-back facts now reach the prompt in TEST sessions, with "dark brown" for PEAK instead of "charcoal" (CLAUDE.md §7.14) - **live on production (eed37f3, Worker 0f81922d)**; v12 ran 2026-10-31; the classifier's looping reply it exposed is fixed (023aab6) and verified on production (CHICAGO #000000 \"CHICAGO\" plain back, PEAK #4b3a36); **measured on the real engine 2026-11-01** (§7.14): CHICAGO black with its lettering, side stripe and plain back, every frame right; PEAK warm dark brown (not grey) but darker than the photo in a dim room - no A/B yet. The PEAK A/B (same session without the sentence) rendered the same colour - the sentence does not move it; kept TEST-only until a measurement shows a gain (6 credits in all). The rig is in scripts/rig/ (§7.15). Every runtime model call now reads the whole reply with a length cap (lib/model-reply.js); an empty reply is no longer cached as an answer. The rear/front mask's band is now waited for until go-live (CLAUDE.md §7.16) - measuring it. Audited what the browser can read (§7.18: no key, no source map, no prompt wording in code; the token route no longer mints an unscoped token, lifetime capped at 5 min). The size sentence no longer drops on TEST requests (§7.17); measured: it reaches the engine but the render does not visibly change with the size - kept TEST-only. The reveal now also holds while the primed back is in flight (§7.19). The engine failed in 6 of 12 sessions on 2026-11-01 (giant shirt, rear photo in the scene, no first frame, a disconnect). **The garment matrix (§7.20, 5 credits):** the maxi skirt renders as trousers - naming it a skirt in the prompt was measured (y1: trousers in front, knee shorts at the back) and REVERTED; the zip jacket's generated rear went as a 1.6 MB PNG and froze the render - now a 92 KB JPEG, measured (y2: no stall, 9 fps, the zip jacket on the front) and live for every shopper since, its back view lost to the engine pasting the masked rear into the scene as a giant panel (first reported as "unmasked" - wrong, corrected in §7.20); the button-down session was lost to an engine disconnect (1011). Shoppers' wire unchanged._
 
@@ -36,6 +38,13 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Liquid Glass UI + consent gate | done | main `0827e51`, `89a5848` |
 
 ## Waiting on you (manual steps)
+
+- [ ] **The shirt's length across a turn (CLAUDE.md §7.24)** — uncommitted, `fitting-room/app.js`, TEST sessions only. Measure a
+      TEST session on the pink jersey (a full turn): the hem should stay put at both swaps. `?ref_scale=0` in the room URL is the
+      old behaviour. If it holds, decide whether shoppers get it too.
+- [ ] **The partial turn (CLAUDE.md §7.23)** — uncommitted in the working tree. Try it locally (a 90-degree look and back, a normal
+      and a fast 360); then approve a real-engine measurement (§7.1), commit, and `cd cloudflare/orient && npx wrangler deploy`
+      (the engine runs in the Worker - without the deploy production keeps the old rule). To drop it: `git checkout -- lib/orient-engine.js test/return-side.test.mjs CLAUDE.md docs/STATUS.md`.
 
 - [x] **Branch `feat/prompt-off-browser-pregen-backs`** — on main 2026-11-07 (189a9ce), Worker 65c50a36 deployed first and verified.
 - [ ] **Back photos before the first visitor (§7.22)** — decide the cap (proposed 25 per run per store) and approve a first paid `--pregen-run`.
@@ -318,6 +327,16 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
   covered once `f93ef87` (on `hide/main-v2`) reaches main.
 
 ## Back-image orientation (front/back on a turn)
+
+- **2026-11-11 - the hem jumping at the swaps (CLAUDE.md §7.24), in progress, uncommitted:** the rear photo showed the garment at
+  0.84 of its size in the front photo and the render's length followed it (13-15%). The rear is now redrawn at the front's
+  garment size - TEST sessions only, not measured on the engine. `garment-box` §10.
+- **2026-11-11 - the partial turn (CLAUDE.md §7.23), in progress, uncommitted:** a look to the side that came back the way it went
+  kept the back reference on the chest ~0.5s after it faced the lens (the early BACK was only withdrawn on two FRONT votes). The
+  engine now withdraws it on the first order reading of the chest coming round. Model: 500-517ms -> 51-91ms at 90 degrees; a 360
+  unchanged (byte-identical suite output). Unit suite green except `cloak`, which could not start esbuild in the Linux sandbox this
+  was run from (the repo's node_modules are macOS builds) - run `npm run test:unit` and `npm run qa:visual` on the Mac.
+  **Remains:** the real-engine measurement, the commit, the Worker deploy.
 - **Stage:** in progress — the most active stream.
 - **On main (production):** the orientation engine on Cloudflare (§2.14), the front at the side
   (§2.23-§2.25), the return timed by the engine's pace (`0d0c087`), the back gate (`e43952d`:

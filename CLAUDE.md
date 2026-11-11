@@ -2215,6 +2215,53 @@ second one. `scanner/pregen-backs.js`; no bundle changed.
   either). **Not done:** a paid run on a store; and the garment band (`/api/garment-box`) is still memory + CDN only, so it is cold after
   a deploy (y2: 7.7s) - not part of this stage.
 
+### 7.23 The chest comes back - a turn to the side that returns the way it went (2026-11-11, Layer C) - NOT YET MEASURED ON THE ENGINE, NOT DEPLOYED
+"A 360 works perfectly, but a half turn confuses it - 90 degrees and back shows the back on the front." The early BACK goes
+out at ~50 degrees on the way out (§7.4), for a 360's sake. A look at the side that comes BACK never reads the back half, so
+that BACK stayed "pending" and only the vote's two-reading withdrawal (§2.37) could take it off: a shoulder vote for the FRONT
+(~50 degrees from square) on a |yaw| under the threshold, twice. Replayed on the 12 recorded 360s played to the side and
+backwards again (4 tick phases): the FRONT went out a median ~0.5s (up to 0.8s) AFTER the chest was back at 60 degrees - the back
+reference on a chest facing the lens. A turn past ~110 degrees and a full 360 never took this path (the back half confirms the
+turn; the return leg's rules send the FRONT 0.1-0.3s before the chest shows), which is why only the partial turn failed.
+- **The rule (`makeEarlyTurnTrigger`, THE CHEST COMES BACK):** while an early BACK is unconfirmed, an order reading that has
+  climbed `BACK_OUT_RISE` (0.3) above the deepest one since the BACK went out, reads `BACK_OUT_ORDER` (0.3, ~70 degrees) or
+  more and under `BACK_OUT_MAX` (0.85), on a fresh |yaw| of `BACK_OUT_YAW` (15) or more and a step no larger than the snap bar
+  (0.8), withdraws the BACK on that reading - the existing withdrawal action, asked for on every tick it holds.
+- **Why a 360 cannot reach it:** from the early BACK to the back half a 360's order only falls - over every frame of the 21
+  recorded 360s (the 12 clips and the 9 sessions of `return-side-clips.json`) the largest climb inside that window is 0.09 - and
+  `-ORDER_CONFIRMS` ends the pending there. A mirrored skeleton (+1.0, |yaw| 7 - §2.37) lands past the band, on a square |yaw|,
+  with a step past the snap bar: three guards, each pinned. A return too fast to land a reading in the band, a reading with no
+  fresh |yaw|, a room that sends no order and `?return_side=0` keep the old withdrawal exactly.
+- **Measured on the model only:** the FRONT now goes out a median 51-91ms after the chest is back at 60 degrees on a 90-degree
+  look (was 500-517), 105-202 at 75 degrees (was 513); never later than before; one BACK and one FRONT per look; the BACK on the
+  same tick. Every orientation suite prints byte for byte what it printed before (return-side's landing models, the pinned
+  scripted sessions' hash, turn-yaw-window, turn-hold, torso-twist, head-frame, side-profile). `return-side` §1.22-§1.26 and §4e;
+  eight mutations of the rule each fail a check. What is left over: a return fast enough to jump from the side past 0.85 in one
+  reading still waits for the second reading (~0.45s worst) - one reading there is what a mirrored skeleton looks like.
+- **Only `lib/orient-engine.js` changed** - neither bundle. **Needs a Worker deploy to reach production (§2.14)**, and by §7.1 a
+  real-engine measurement first: a 90-degree look and back, a normal and a fast 360, frame by frame. Not done - no credits approved.
+
+### 7.24 The back at the front's size - "the shirt's length goes up and down during the turns" (2026-11-11, Layer B) - TEST SESSIONS ONLY, NOT YET MEASURED ON THE ENGINE
+The owner's clip (a pink football jersey on terminalx, the turns themselves right): the hem at ~480px with the FRONT reference on
+the body, ~439 within one frame of the BACK landing (2.37 -> 2.40s), back down when the FRONT returned (3.27 -> 3.30s) - 13-15% of
+the shirt's length, at the two swaps and nowhere else. The store photos: the front a packshot whose garment box is 69% of the
+photo's height (0.153-0.847), the rear on a model, 58% (0.243-0.826) - 0.84 of it. Not the mask (the band ends at 0.832, the hem in
+the pixels at 0.826 - §7.12 holds). The engine draws the garment at the size it has in the reference. One product, one clip: the
+numbers agree, the mechanism is not proven on the engine.
+- **The change (`app.js` only - `scaleRearToFront()`, `refScalePlan()`, inside `garmentBlobCached()` after the mask):** a single
+  TOP's distinct REAR photo is redrawn with ONE factor (never a stretch) so its garment box has the front box's height, its collar
+  on the front's collar row, its middle on the front's middle; the uncovered margin is the photo's own backdrop. The boxes are
+  the ones `/api/garment-box` already answers (`raw`, kept for a packshot too - `refBoxRecord()`); no new request for a top.
+- **It abstains** (the rear as before): no box for either photo (no answer by go-live), a full look, a bottom, a difference under
+  6% (`REF_SCALE_MIN`), a re-encode over 1.6x. Bounded 0.75-1.4x and to what keeps the garment whole in the photo.
+- **Gate:** TEST sessions only (`traceEnabled()`); `?ref_scale=1` forces on, `?ref_scale=0` off. A TEST record's `ctx.ref` carries
+  `{ did: "scaled", z, dx, dy }`. The orientation engine, the swap timing, the prompt and the front reference are untouched.
+- **Pinned:** `garment-box` §10 (the reported boxes -> 1.19x, the abstains, the bounds, the gate, where it sits).
+  `turn-yaw-window`'s pre-encode check allows the longer gap between the mask and the heavy-reference step. Unit suite green
+  except `cloak` (esbuild's macOS binary in the Linux sandbox this ran from). `qa:visual` NOT run.
+- **Next (the owner's idea, not built):** choose the size from a photo of the garment WORN, so the length is the real one and not
+  merely the same on both sides - needs the engine's size-to-length response measured first (one garment at three sizes).
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:

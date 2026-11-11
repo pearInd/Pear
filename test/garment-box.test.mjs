@@ -361,5 +361,43 @@ console.log("\n── §9 THE BAND IS WAITED FOR UNTIL GO-LIVE (2026-11-01) ─�
   W.relaxReferenceBands();
 }
 
+console.log("\n── §10 THE BACK AT THE FRONT'S SIZE (2026-11-11) ──");
+{
+  const span = APP.slice(APP.indexOf("const REF_SCALE_MIN"), APP.indexOf("/** The front photo of the single TOP"));
+  const mk = (search, test) => new Function("location", "traceEnabled", span + "\nreturn { refScalePlan, refScaleOn, REF_SCALE_MIN };")({ search }, () => test);
+  const { refScalePlan: plan } = mk("", true);
+  /* The reported product (terminalx, the pink jersey): the server's own boxes - a packshot front, a rear on a model. */
+  const front = { y0: 0.153, x0: 0.153, y1: 0.847, x1: 0.847 }, back = { y0: 0.243, x0: 0.156, y1: 0.826, x1: 0.773 };
+  const p = plan(front, back);
+  const at = (v, axis) => v * p.z + (axis === "y" ? p.dy : p.dx);
+  check("§10.1 the reported jersey: the rear is drawn 1.19x - its garment the front's height, collar on the front's collar row",
+    !!p && p.z === 1.19 && Math.abs(at(back.y0, "y") - front.y0) < 0.003 && Math.abs(at(back.y1, "y") - front.y1) < 0.003, JSON.stringify(p));
+  check("§10.2 ...centred where the front's garment is, and ONE factor for both axes (never a stretch)",
+    Math.abs((at(back.x0, "x") + at(back.x1, "x")) / 2 - 0.5) < 0.003 && Object.keys(p).sort().join() === "dx,dy,z", JSON.stringify(p));
+  check("§10.3 it abstains: the same size, a difference under 6%, a missing or degenerate box",
+    plan(front, { ...front }) === null && plan(front, { y0: 0.16, x0: 0.16, y1: 0.83, x1: 0.84 }) === null &&
+    plan(front, null) === null && plan(null, back) === null && plan(front, { y0: 0.4, x0: 0.2, y1: 0.5, x1: 0.8 }) === null);
+  const big = plan({ y0: 0.02, x0: 0.02, y1: 0.98, x1: 0.98 }, { y0: 0.4, x0: 0.3, y1: 0.7, x1: 0.7 });
+  check("§10.4 bounded: never more than 1.4x, never under 0.75x", big.z === 1.4 && plan({ y0: 0.4, x0: 0.3, y1: 0.6, x1: 0.7 }, { y0: 0.05, x0: 0.1, y1: 0.95, x1: 0.9 }).z === 0.75, JSON.stringify(big));
+  const wide = plan({ y0: 0.05, x0: 0.05, y1: 0.95, x1: 0.95 }, { y0: 0.2, x0: 0.06, y1: 0.8, x1: 0.94 });
+  check("§10.5 the garment stays whole inside the photo: a wide rear is enlarged only as far as its width allows",
+    !!wide && wide.z <= 0.98 / 0.88 + 0.001 && 0.06 * wide.z + wide.dx >= 0.009 && 0.94 * wide.z + wide.dx <= 0.991, JSON.stringify(wide));
+  check("§10.6 a smaller rear garment is the usual case, a larger one is drawn smaller - the plan stays inside the photo",
+    (() => { const q = plan(back, front); return !!q && q.z < 1 && front.y0 * q.z + q.dy >= 0.009 && front.y1 * q.z + q.dy <= 0.991; })());
+  check("§10.7 TEST sessions only until measured: off for a shopper, on for TEST, ?ref_scale=1 forces on, =0 forces off",
+    mk("", false).refScaleOn() === false && mk("", true).refScaleOn() === true &&
+    mk("?ref_scale=1", false).refScaleOn() === true && mk("?ref_scale=0", true).refScaleOn() === false);
+  const blobFn = fnSrc("function garmentBlobCached(url) {");
+  check("§10.8 it runs after the mask and before the pre-encode, typeof-guarded - what is encoded is what is sent",
+    blobFn.indexOf("maskReferenceBand(normalized, url, await bandJob)") < blobFn.indexOf("scaleRearToFront(normalized, url)") &&
+    blobFn.indexOf("scaleRearToFront(normalized, url)") < blobFn.indexOf("preEncodeReference(blob)") && /typeof scaleRearToFront === "function"/.test(blobFn));
+  const rearFn = fnSrc("function referenceFrontOfRear(url) {"), scaleFn = fnSrc("async function scaleRearToFront(blob, url) {");
+  check("§10.9 only a single TOP's distinct rear photo (never a full look, a bottom, the front itself), matched with sameImage() (§2.2)",
+    /resolveLook\(\)/.test(rearFn) && /isBottomsGarment\(it\)/.test(rearFn) && /sameImage\(back, url\)/.test(rearFn) && !/===\s*url|url\s*===/.test(rearFn));
+  check("§10.10 the box is kept for a packshot too (before the band's verdict), and a failure sends the photo as it was",
+    /refBoxRecord\(url, j\);[^\n]*\n\s*const b = j && j\.band;/.test(APP) && /catch \(e\) \{\s*\n\s*refMaskNote\(\{ did: "unscaled", why: "failed" \}\);[\s\S]*?return blob;/.test(scaleFn) &&
+    /if \(!plan\) return blob;/.test(scaleFn));
+}
+
 console.log(fails === 0 ? "\ngarment-box: OK" : `\ngarment-box: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

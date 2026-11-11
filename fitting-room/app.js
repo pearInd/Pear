@@ -8272,6 +8272,9 @@ function garmentBlobCached(url) {
       if (normalized && bandJob && typeof maskReferenceBand === "function") {
         normalized = await maskReferenceBand(normalized, url, await bandJob);
       }
+      /* THE BACK AT THE FRONT'S SIZE: a top's rear photo redrawn so the garment is the size it has in the front photo
+         (TEST sessions until measured). typeof-guarded: suites run this standalone. */
+      if (normalized && bandJob && typeof scaleRearToFront === "function") normalized = await scaleRearToFront(normalized, url);
       /* THE HEAVY REFERENCE: an opaque PNG over REF_HEAVY_BYTES - a generated rear - goes as a JPEG of the same pixels.
          typeof-guarded: suites run this standalone. */
       if (normalized && typeof lightenHeavyReference === "function") normalized = await lightenHeavyReference(normalized);
@@ -8429,6 +8432,16 @@ function hurryReferenceBands() {
 /** Back in the preview: a reference built from now on may wait for its band again. */
 function relaxReferenceBands() { _refBandHurry = false; }
 const _refBandJobs = new Map();   // `${canonical url}|${region}` -> Promise<{y0,y1}|null>
+/* THE BACK AT THE FRONT'S SIZE (below, refScalePlan): where the garment is in each photo the server was asked about - its
+   raw box as fractions of the photo, kept for a worn photo AND a packshot ("no-person" has a box and no band). */
+const _refBoxes = new Map();      // canonical url -> { y0, y1, x0, x1 }
+function refBoxKey(url) { return (typeof canonicalImageUrl === "function" && canonicalImageUrl(url)) || url; }
+function refBoxRecord(url, j) {
+  const r = j && Array.isArray(j.raw) ? j.raw.slice(0, 4).map(Number) : null;   // [ymin, xmin, ymax, xmax] of 1000
+  if (!r || r.length < 4 || !r.every((v) => Number.isFinite(v) && v >= 0 && v <= 1000)) return;
+  const box = { y0: r[0] / 1000, x0: r[1] / 1000, y1: r[2] / 1000, x1: r[3] / 1000 };
+  if (box.y1 - box.y0 > 0.1 && box.x1 - box.x0 > 0.1) _refBoxes.set(refBoxKey(url), box);
+}
 const _refMaskLog = [];           // what the mask did, numbers only - read into a TEST record's ctx
 
 function refMaskNote(o) {
@@ -8491,6 +8504,7 @@ function referenceBackBand(url) {
         typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(REF_BAND_FETCH_MS) } : {});
       if (!r.ok) { _refBandJobs.delete(key); refMaskNote({ did: "whole", why: "http-" + r.status, ...(hint.side ? { side: hint.side } : {}) }); return null; }
       const j = await r.json();
+      refBoxRecord(url, j);   // THE BACK AT THE FRONT'S SIZE - the box, whatever the band's verdict
       const b = j && j.band;
       const ok = b && [b.y0, b.y1].every((v) => typeof v === "number" && v >= 0 && v <= 1) && b.y1 - b.y0 > 0.1;
       if (!ok) {
@@ -8636,6 +8650,105 @@ async function maskReferenceBand(blob, url, band) {
   } catch (e) {
     refMaskNote({ did: "whole", why: "failed" });
     console.warn("[PEAR] rear reference mask failed - sending the photo whole:", e?.message || e);
+    return blob;
+  } finally {
+    try { bmp && bmp.close && bmp.close(); } catch (_) { /* already closed */ }
+  }
+}
+
+/* ── THE BACK AT THE FRONT'S SIZE (2026-11-11) - "the shirt's length goes up and down during the turns" ──────────────────
+   The owner's clip (a pink football jersey, terminalx), frame by frame: the hem sat at ~480px with the FRONT reference on
+   the body, jumped to ~439 within one frame when the BACK landed (2.37 -> 2.40s) and back down when the FRONT returned
+   (3.27 -> 3.30s) - 13-15% of the shirt's length. The two store photos: the front is a packshot whose garment box is 69% of
+   the photo's height (0.153-0.847); the rear is on a model, its box 58% (0.243-0.826) - 0.84 of the front's. The mask is not
+   the cause (the server's band ends at 0.832, the hem in the pixels at 0.826). The engine draws the garment at the size it
+   has in the reference, so every swap between two photos framed differently changes its length.
+   So a TOP's distinct REAR photo is redrawn - ONE factor for both axes, never a stretch - so that its garment box has the
+   front box's height, its collar on the front's collar row and its middle on the front's middle; what the move uncovers is
+   the photo's own backdrop. The orientation engine, the swap timing and the front reference are untouched: only the rear
+   photo's pixels change. IT ABSTAINS - the rear goes exactly as before - without a box for either photo (no answer by
+   go-live, a failed ask), in a full look, on a bottom, when the two already agree within REF_SCALE_MIN, or when the
+   re-encode is over 1.6x the photo. NOT YET MEASURED ON THE ENGINE: on for TEST sessions only (the store key TEST or
+   ?pear_trace=1); ?ref_scale=1 forces it on, ?ref_scale=0 off. A TEST record's ctx.ref says { did: "scaled", z }. */
+const REF_SCALE_MIN = 0.06;        // a difference smaller than this is left alone
+const REF_SCALE_RANGE = [0.75, 1.4];
+function refScaleOn() {
+  try {
+    const v = new URLSearchParams(location.search).get("ref_scale");
+    if (v === "0") return false;
+    if (v === "1") return true;
+  } catch (_) { return false; }
+  return typeof traceEnabled === "function" && traceEnabled();
+}
+/** Where to draw the rear photo so its garment box matches the front's: { z, dx, dy } - draw the photo z times its size
+    with its top-left at (dx*W, dy*H) - or null when there is nothing worth doing. Pure. */
+function refScalePlan(front, back) {
+  const okBox = (b) => b && [b.y0, b.y1, b.x0, b.x1].every((v) => typeof v === "number" && v >= 0 && v <= 1) && b.y1 - b.y0 > 0.15 && b.x1 - b.x0 > 0.1;
+  if (!okBox(front) || !okBox(back)) return null;
+  let z = (front.y1 - front.y0) / (back.y1 - back.y0);
+  z = Math.max(REF_SCALE_RANGE[0], Math.min(REF_SCALE_RANGE[1], z));
+  const bw = back.x1 - back.x0, bh = back.y1 - back.y0;
+  z = Math.min(z, 0.98 / bw, 0.98 / bh);               // the garment stays whole inside the photo
+  if (!(Math.abs(z - 1) >= REF_SCALE_MIN)) return null;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const left = clamp((front.x0 + front.x1) / 2 - (bw * z) / 2, 0.01, 0.99 - bw * z);   // the box's left edge after the move
+  const top = clamp(front.y0, 0.01, 0.99 - bh * z);                                    // ...and its collar row
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  return { z: r3(z), dx: r3(left - back.x0 * z), dy: r3(top - back.y0 * z) };
+}
+/** The front photo of the single TOP whose distinct rear photo this URL is, or null (a full look, a bottom, an upload). */
+function referenceFrontOfRear(url) {
+  if (!url || /^(data:|blob:)/i.test(url)) return null;
+  if ((typeof resolveLook === "function" ? resolveLook() : null)) return null;
+  const it = typeof activeItem !== "undefined" ? activeItem : null;
+  if (!it || (typeof isBottomsGarment === "function" && isBottomsGarment(it))) return null;
+  const back = typeof distinctBackOf === "function" ? distinctBackOf(it) : null;
+  if (!back || !sameImage(back, url)) return null;
+  const g = typeof galleryOf === "function" ? galleryOf(it) : null;
+  const front = (g && g.front) || it.img || null;
+  return front && !sameImage(front, url) ? front : null;
+}
+/** The rear reference redrawn at the front's garment size, or the SAME Blob untouched. Never rejects. */
+async function scaleRearToFront(blob, url) {
+  if (!blob || typeof createImageBitmap !== "function" || !refScaleOn()) return blob;
+  let bmp = null;
+  try {
+    const frontUrl = referenceFrontOfRear(url);
+    if (!frontUrl) return blob;
+    /* The front's box comes with its own band ask (referenceFrontHint) - waited for as the band is, never past go-live. */
+    await referenceBackBand(frontUrl);
+    const plan = refScalePlan(_refBoxes.get(refBoxKey(frontUrl)), _refBoxes.get(refBoxKey(url)));
+    if (!plan) return blob;
+    bmp = await createImageBitmap(blob);
+    const W = bmp.width, H = bmp.height;
+    if (W < 64 || H < 64) return blob;
+    const png = /^image\/png$/i.test(blob.type || "");
+    const off = typeof OffscreenCanvas !== "undefined"
+      ? new OffscreenCanvas(W, H)
+      : Object.assign(document.createElement("canvas"), { width: W, height: H });
+    const ctx = off.getContext("2d", { alpha: png, willReadFrequently: true });
+    if (!png) {
+      /* The backdrop: the photo's own top corners (painted backdrop after the mask, studio backdrop on a packshot). */
+      ctx.drawImage(bmp, 0, 0);
+      const side = Math.max(2, Math.round(W * 0.03));
+      const mean = (x) => { const d = ctx.getImageData(x, 1, side, side).data; let r = 0, g = 0, b = 0; for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; } const n = d.length / 4; return [r / n, g / n, b / n]; };
+      const a = mean(1), c = mean(W - side - 1);
+      ctx.fillStyle = `rgb(${Math.round((a[0] + c[0]) / 2)},${Math.round((a[1] + c[1]) / 2)},${Math.round((a[2] + c[2]) / 2)})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bmp, Math.round(plan.dx * W), Math.round(plan.dy * H), Math.round(plan.z * W), Math.round(plan.z * H));
+    const type = png ? "image/png" : "image/jpeg";
+    const encode = (q) => (off.convertToBlob ? off.convertToBlob({ type, quality: q }) : new Promise((res) => off.toBlob(res, type, q)));
+    let out = await encode(0.92);
+    if (!png && out && out.size > blob.size * 1.6) out = await encode(0.85);
+    if (!out || !out.size || out.size > blob.size * 1.6) { refMaskNote({ did: "unscaled", why: "heavy" }); return blob; }
+    refMaskNote({ did: "scaled", z: plan.z, dx: plan.dx, dy: plan.dy, kb: [Math.round(blob.size / 1024), Math.round(out.size / 1024)] });
+    console.log(`[PEAR] rear reference: redrawn at the front's garment size - x${plan.z} (${W}x${H}) -`, abbrevImg(url));
+    return out;
+  } catch (e) {
+    refMaskNote({ did: "unscaled", why: "failed" });
+    console.warn("[PEAR] rear reference scale failed - sending it as it was:", e?.message || e);
     return blob;
   } finally {
     try { bmp && bmp.close && bmp.close(); } catch (_) { /* already closed */ }
