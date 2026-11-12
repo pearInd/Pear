@@ -19,6 +19,7 @@
     "test:unit": "node test/run.mjs",
     "fixtures": "node test/e2e/fixtures.mjs",
     "test:visual": "playwright test test/e2e/visual-agent.spec.mjs",
+    "test:kinds": "playwright test test/e2e/garment-kinds.spec.mjs",
     "inspect:visuals": "node scripts/inspect-visuals.mjs",
     "qa:visual": "npm run test:visual && npm run inspect:visuals",
     "qa:visual:dist": "node scripts/build.mjs --qa && PEAR_VISUAL_OVERLAY=dist-qa npm run qa:visual",

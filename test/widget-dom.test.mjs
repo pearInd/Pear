@@ -427,7 +427,8 @@ await run("N'. a normal embed asks for no debug", SUPPORT_PAGE, ({ params }) => 
 
 /* ── O. one article, numbered photos (terminalx / Magento) ────────────────────────────
    <sku>-<n><timestamp>.jpg: the digits after the dash differ per photo, and the id veto read them as six products.
-   With the TEST key the gallery is whole; any other key is the wire as it was (one photo), until it is measured. */
+   Closed on main by productIdRuns()/shareProductIdRun() (bb2e099) for every key; pinned here on the product the TEST
+   records of 2026-11-11 were taken on, where the room had got one photo of six (the branch predated that fix). */
 const TX = (n) => `https://media.terminalx.com/pub/media/catalog/product/cache/f112238e8de94b6d480bd02e7a9501b8/k/0/k088920001-${n}1792932605.jpg?image_type_mobile=webp_jpeg_like_70`;
 const TX_PAGE = `
 <html><head>
@@ -439,15 +440,15 @@ const TX_PAGE = `
   <div class="product-thumbnails"><img src="https://media.terminalx.com/pub/media/catalog/product/cache/f112238e8de94b6d480bd02e7a9501b8/k/0/k088920002-11792999999.jpg"></div>
   <button class="add-to-cart">Add to cart</button>
 </body></html>`;
-await run("O. numbered photos of one article, TEST key", TX_PAGE, ({ params }) => {
+await run("O. numbered photos of one article", TX_PAGE, ({ params }) => {
   const list = (params.get("garment_images") || "").split(",").filter(Boolean).map(decodeURIComponent);
   check("O1 all six photos of the article reach the room", list.length === 6 && [1, 2, 3, 4, 5, 6].every((n) => list.includes(TX(n))), JSON.stringify(list));
   check("O2 ...and never the next article's (k088920002)", !list.some((u) => /k088920002/.test(u)), JSON.stringify(list));
-}, { attrs: { "data-pear-key": "TEST" } });
-await run("O'. the same page under a store's key", TX_PAGE, ({ params }) => {
-  check("O3 a store's key gets the gallery it got before (TEST only until measured)", !params.has("garment_images") && params.get("garment_url") === TX(1),
-    params.get("garment_images"));
 });
+await run("O'. the same page under the TEST key", TX_PAGE, ({ params }) => {
+  const list = (params.get("garment_images") || "").split(",").filter(Boolean).map(decodeURIComponent);
+  check("O3 the TEST key gets the same six", list.length === 6 && !list.some((u) => /k088920002/.test(u)), JSON.stringify(list));
+}, { attrs: { "data-pear-key": "TEST" } });
 
 console.log("\n" + results.join("\n"));
 console.log(failures ? `\n${failures} FAILING` : "\nALL GREEN");

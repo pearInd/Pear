@@ -445,9 +445,13 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     /* Plus the pixel veto (plain-back-anchor §6) - still a selector, still one whole frozen
        string on the wire; the added term can only refuse a plain claim, never build a string. */
     /const plainBack = angle === "back" && item && item\.backIsPlain === true && item\._backLooksPrinted !== true;/.test(SRC) &&
-    /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(SRC) &&
+    /const plainTee = !dress && !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(SRC) &&
+    /* THE KIND AXIS (2026-11-07): a TEST request's garmentKindOf() selects SKIRT_ANCHOR / DRESS_ANCHOR - frozen too. */
+    /const kind = typeof _requestTest !== "undefined" && _requestTest === true && typeof garmentKindOf === "function"\s*\? garmentKindOf\(item\) : null;/.test(SRC) &&
+    /const dress = kind === "dress";/.test(SRC) && /const skirt = kind === "skirt" && bottoms;/.test(SRC) &&
     !/PLAIN_BACK_ANCHOR\s*\+/.test(SRC) && !/\+\s*PLAIN_BACK_ANCHOR/.test(SRC) &&
-    /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(SRC) &&
+    /\[P\.CORE, dress \? \(angle === "back" \? DRESS_ANCHOR\.back : DRESS_ANCHOR\.front\)\s*: skirt \? \(angle === "back" \? \(plainBack \? SKIRT_ANCHOR\.backPlain : SKIRT_ANCHOR\.back\) : SKIRT_ANCHOR\.front\)\s*: plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(SRC) &&
+    !/(SKIRT|DRESS)_ANCHOR(\.\w+)?\s*\+/.test(SRC) && !/\+\s*(SKIRT|DRESS)_ANCHOR/.test(SRC) &&
     !/(BACK_)?CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC) &&
     !/anchors\.(top|bottom)\s*\+/.test(SRC) &&
     !/PLAIN_TEE_ANCHOR\s*\+/.test(SRC) && !/\+\s*PLAIN_TEE_ANCHOR/.test(SRC),
@@ -568,7 +572,9 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
      imageOnlyPrompt()'s SIZE-OVERRIDE RESTORE comment in app.js. */
   check("the size-override modifier is wired back in, at P.MED",
     /* ...with, on a TEST request only, its compact form as a third element (THE SIZE ALWAYS REACHES THE WIRE, 2026-11-01). */
-    /\[P\.MED,\s*fitSentence\(bottoms \? "lower_body" : "upper_body"\)(,[\s\S]{0,260}?compactFitSentence\(bottoms \? "lower_body" : "upper_body"\)\] : \[\]\))?\],/.test(codeOnly),
+    /\[P\.MED,\s*fitSentence\(fitType\)(,[\s\S]{0,260}?compactFitSentence\(fitType\)\] : \[\]\))?\],/.test(codeOnly) &&
+    /* ...whose type is the region's on every shopper request: dress/skirt are false unless a TEST request names a kind. */
+    /const fitType = dress \? "upper_body" : skirt \? "skirt" : bottoms \? "lower_body" : "upper_body";/.test(codeOnly),
     "documented in IMAGE_ONLY_PROMPT's retirement list, and in imageOnlyPrompt()'s own SIZE-OVERRIDE RESTORE comment");
 }
 

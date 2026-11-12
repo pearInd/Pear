@@ -121,7 +121,9 @@ const INFER_MS = 35, LOOP_MS = 240, TICK_MS = 250, STALE = 100, WAIT = 180;
    `lp`), the reading published INFER_MS later; the tick every 250ms (phase `tp`). `follow`: a tick whose latest reading is
    over STALE old waits for the next one (at most WAIT). Returns the swaps with their send times and the readings' ages. */
 function cadenceRun(rows, { lp, tp, follow, lat = 450 }) {
-  const engine = E.createOrientEngine(E.sanitizeOrientKnobs({}));
+  /* out_land "0": this measures the WAIT; THE OUTBOUND LANDING (lib/orient-engine.js OUT_TARGET, 2026-11-07) holds the early BACK
+     on the pace it is sent - its own replay is return-side §3h. */
+  const engine = E.createOrientEngine(E.sanitizeOrientKnobs({ out_land: "0" }));
   const st = R.makeTwistState();
   const end = rows[rows.length - 1][0];
   const reads = [];

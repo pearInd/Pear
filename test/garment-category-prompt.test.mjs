@@ -388,13 +388,13 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      permitted between entries (each clause carries its rationale inline), hence [\s\S]*?
      rather than \s* - the ORDER and the PRIORITIES are pinned, not the whitespace. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\[P\.CORE, identityLockSentence\(item, angle\)\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)(,[\s\S]{0,260}?compactFitSentence\(bottoms \? "lower_body" : "upper_body"\)\] : \[\]\))?\],\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, dress \? \(angle === "back" \? DRESS_ANCHOR\.back : DRESS_ANCHOR\.front\)\s*: skirt \? \(angle === "back" \? \(plainBack \? SKIRT_ANCHOR\.backPlain : SKIRT_ANCHOR\.back\) : SKIRT_ANCHOR\.front\)\s*: plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\[P\.CORE, identityLockSentence\(item, angle\)\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(fitType\)(,[\s\S]{0,260}?compactFitSentence\(fitType\)\] : \[\]\))?\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
      Whichever of the three the construction/category/angle axes select, it rides at
      P.CORE: fitPrompt() sheds every other priority before it will touch this one. */
   check("the category anchor is tagged P.CORE so it can never be shed",
-    /\[P\.CORE,\s*(plainTee|bottoms|isBottoms)[^\]]*(ANCHOR|anchors)|\[P\.CORE,\s*(BACK_)?CATEGORY_ANCHOR/.test(SRC),
+    /\[P\.CORE,\s*(dress|plainTee|bottoms|isBottoms)[^\]]*(ANCHOR|anchors)|\[P\.CORE,\s*(BACK_)?CATEGORY_ANCHOR/.test(SRC),
     "if the anchor can shed, the bug comes back under budget pressure");
 }
 

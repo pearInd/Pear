@@ -3763,6 +3763,10 @@ async function resolveGarmentCategory(item) {
   } catch (e) {
     console.warn("[PEAR] resolveGarmentCategory() - LLM tier failed, using default:", e?.message || e);
   }
+  /* NEVER SILENTLY (2026-11-07): every tier abstained, so the garment is fitted as a top - the catalog's majority and the
+     old behaviour - and the console says so, with the title it could not read. */
+  console.warn("[PEAR] garment region unknown - every tier abstained; fitted as a top (the default):",
+    String(item.name || item.title || "(no title)").slice(0, 80));
   return "top";
 }
 
@@ -4771,7 +4775,13 @@ window.addEventListener("message", (e) => {
   }
   target.img = front;
   if (Array.isArray(e.data.garment_images) && e.data.garment_images.length) {
+    /* THE FIT READ ASKS THE GALLERY IT HAS (2026-11-12, TEST sessions - CLAUDE.md §7.28): a read that found no worn photo in
+       the gallery the room opened with is asked again when the classifier's verdict brings another one (the 23:42-23:44
+       records: two photos asked, "no-person", and the table's sentence stayed). A read that landed is kept; the
+       prewarm below asks. */
+    const galleryBefore = Array.isArray(target.pearImages) ? target.pearImages.join("|") : "";
     target.pearImages = e.data.garment_images;
+    if (!target.fitCut && galleryBefore !== target.pearImages.join("|")) target._fitReadJob = null;
   }
   // Back asset: TRUST the classifier's verdict completely now, including when it's
   // undefined - that means Gemini genuinely found no back-view photo in this item's
@@ -8177,7 +8187,19 @@ let _refUploadedGen = -1;
    side round to three-quarters (4.30-4.79s). 900 sends it on that same reading at the engine's minimum (+50ms) - ~150ms sooner,
    giving the engine that much more time to draw the print before the chest comes round. Replayed through the deployed engine:
    both sessions' FRONT on the same reading, +201 -> +50ms; the outbound BACK unchanged. */
-const REF_LAT_FLOOR_MS = 900;
+/* 430, not 900 (2026-11-07, the owner's mw5o1vyb: "the back disappears too early"). Read frame by frame with the room's own pose
+   model over the clip, lined up with its record: the FRONT went out on the first reading out of the deep back (o -0.80, ~220
+   degrees) at +50ms and reached camera frames from ~250ms BEFORE its send - the back print gone at ~200 degrees with the back
+   still square to the lens, the front's lettering drawn on the back to ~232 (4.03-4.27s); mw5nc1gp the same (~205, -200ms).
+   900 plans the landing 370ms AFTER the send (lat - LAND_BASE_MS); a pre-uploaded reference lands ~0.2s before it on the
+   owner's camera. The owner's clips by the same method: 900 lost the back at ~200-213 degrees in 4 of 5 sessions (10-18 c07/c08,
+   11-07 x2; one 262), 700 at ~218/~250, and the 10-08 sessions called "front and back work perfectly" (bytes per swap, acks ~430ms
+   -> a lead of -100ms) kept it to ~235-265 with the print sliding off the edge. 430 is that lead. The front print itself shows at
+   ~290-315 degrees in every version (900 gained ~15-25 degrees of it and lost ~50-60 of back). Replayed through the engine on the
+   16 usable KV records (11-01..11-07) at the measured landing offsets (-0.27..-0.10s, the owner's camera): median 216 -> 264,
+   landings before 230 degrees 49/64 -> 0/64, past 300 0 -> 1/64; at every measured offset (incl. the rig's 0..+0.1): median 237
+   -> 273, before 230 41/112 -> 0/108, past 300 0 -> 19/108 (a late engine can land the front on a chest coming round). */
+const REF_LAT_FLOOR_MS = 430;
 /* THE BACK WAITS FOR THE BODY IT LANDS ON (2026-10-17, u4). The engine paints a new reference onto frames it already holds,
    and an id is acknowledged in ~0.28s where the image bytes every outbound rule was placed for took ~0.43s - so a pre-upload
    session's BACK reaches a body older than the one it was decided on, by as much as the session's render lags. Read frame by
@@ -8460,7 +8482,18 @@ function referenceBackHint(url) {
   for (const it of items) {
     if (!it) continue;
     const back = typeof distinctBackOf === "function" ? distinctBackOf(it) : null;
-    if (back && sameImage(back, url)) return { region: isBottomsGarment(it) ? "bottom" : "top" };
+    if (back && sameImage(back, url)) {
+      /* A DRESS GOES WHOLE (2026-11-07, TEST sessions until measured - CLAUDE.md §7.23). Its band is asked for as a top or a
+         bottom, and either one paints half of the dress away: the box for a top is the bodice (the skirt below it painted out),
+         the box for a bottom ("שמלת ג'ינס" reads as one) starts at the waist (the bodice painted out). Run on the real photo
+         through this file's own mask code, a strapless maxi's front came out as a bodice over a smeared block. Sent whole, the
+         dress rendered on every frame (rig d1). The cost, stated: the store's model is in the rear photo again (§2.38). */
+      if (typeof traceEnabled === "function" && traceEnabled() && typeof garmentKindOf === "function" && garmentKindOf(it) === "dress") {
+        refMaskNote({ did: "whole", why: "dress" });
+        return null;
+      }
+      return { region: isBottomsGarment(it) ? "bottom" : "top" };
+    }
   }
   return null;
 }
@@ -8482,6 +8515,11 @@ function referenceFrontHint(url) {
   if ((typeof resolveLook === "function" ? resolveLook() : null)) return null;
   const it = typeof activeItem !== "undefined" ? activeItem : null;
   if (!it || isBottomsGarment(it)) return null;
+  /* A DRESS GOES WHOLE - see referenceBackHint(): below the bodice's "hem" is the rest of the dress. */
+  if (typeof traceEnabled === "function" && traceEnabled() && typeof garmentKindOf === "function" && garmentKindOf(it) === "dress") {
+    refMaskNote({ did: "whole", why: "dress", side: "front" });
+    return null;
+  }
   const back = typeof distinctBackOf === "function" ? distinctBackOf(it) : null;
   if (back && sameImage(back, url)) return null;
   const g = typeof galleryOf === "function" ? galleryOf(it) : null;
@@ -8758,7 +8796,7 @@ async function scaleRearToFront(blob, url) {
 /* Warm the cache with the front AND back assets of the active subject (both halves of a
    full look) - fire-and-forget from setAngle/goLive so the fetches overlap the user's
    next action (or the WebRTC handshake) instead of serialising into the first swap. */
-/* ── THE FIT READ FROM THE PHOTO (2026-11-11, TEST sessions only until measured - CLAUDE.md §7.25) ────────────────────────
+/* ── THE FIT READ FROM THE PHOTO (2026-11-11, TEST sessions only until measured - CLAUDE.md §7.28) ────────────────────────
    "The belly looks too big at the start, as if I had a paunch ... it has to be done by the model's photo" (the owner, a
    football jersey on terminalx). The fit sentence came from a table that knows the size step and nothing about the garment
    (lib/prompts.js getFitModifier()). The store's gallery usually has the garment WORN: GET /api/garment-fit reads its cut and
@@ -12081,7 +12119,7 @@ function createOrientationWatcher() {
    parameters, and no others, are forwarded - the tuning knobs, never the garment, the
    store key or anything else on the page URL. */
 const ORIENT_KNOB_KEYS = ["pose_pass", "post_peak", "early_turn", "early_turn_return", "early_turn_slow",
-  "early_turn_speed", "early_turn_loss", "predict_back", "return_side", "lat_lead", "back_gate", "lead_project", "front_fix"];
+  "early_turn_speed", "early_turn_loss", "predict_back", "return_side", "lat_lead", "back_gate", "lead_project", "out_land", "front_fix"];
 const ORIENT_LINK_STEP_TIMEOUT_MS = 1200;   // a healthy link answers in ~10ms; past this, prove it with a ping
 const ORIENT_LINK_STEP_HARD_MS = 4000;      // past this a reply is abandoned and the link replaced regardless
 const ORIENT_LINK_RETRY_MS = 3000;
@@ -13203,6 +13241,9 @@ const PRESENTATION_PARAMS = new Set([
   // output format, letterbox colour - adidas.co.il's thumbnail and zoom slide of ONE
   // photo differ only in these. Lockstep with pear-widget.js PRESENTATION_PARAMS.
   "sw", "sh", "sm", "sfrm", "bgcolor",
+  // terminalx.com (Magento): the JSON-LD/og:image copy of a photo carries
+  // ?image_type_mobile=webp_jpeg_like_70 and the gallery copy carries nothing - one photo.
+  "image_type_mobile",
 ]);
 
 /* Image-resizer endpoints (Next.js /_next/image, Cloudflare /cdn-cgi/image, imgproxy)
@@ -13790,6 +13831,87 @@ function isBottomsGarment(item) {
   if (TOPS_TOKENS.test(fields)) return false;
   return BOTTOMS_TOKENS.test(fields);
 }
+
+/* @pear-shared:garment-kind BEGIN - kept byte for byte in fitting-room/app.js and lib/prompts.js (test/garment-kind.test.mjs §1). */
+/* ── THE GARMENT KIND (2026-11-07) - "the skirt rendered as trousers; a dress cannot render at all" ──────────────────────
+   isBottomsGarment() names every garment a top or a bottom. Two kinds need more than their region:
+     · A SKIRT is a bottom, and the bottoms wording ("pants/shorts", "leg profile", a fit sentence about "a clean break at
+       the ankle") made the engine draw trousers. Measured 2026-11-07 on the real engine: the same skirt photo, the same
+       clip, a byte-identical reference upload - wide black trousers on every frame with the bottoms wording (rig session
+       s3-control), a skirt with its slit with a skirt's wording (s2). The wording, not the engine (CLAUDE.md §7.23).
+     · A DRESS is fitted as a top, whose wording ends "Keep the subject's lower body ... unmodified" - the skirt of the
+       dress is instructed away - and the room's top-front mask paints it out of the reference as well. With the whole
+       photo and a dress's wording it rendered a floor-length dress on every frame (d1).
+   garmentKindOf() reads the product's own TITLE (name/title) and answers "dress", "skirt" or null. null is today's path,
+   by region, and it is the answer whenever the title is not unambiguous: a set ("סט", "חליפה", "set", "co-ord", "suit",
+   "two piece"), a title naming both kinds, or any other garment noun beside the kind ("Top and Skirt", "שמלה עם ז'קט").
+   The grammar that keeps the common compounds right:
+     · English names the head noun LAST: "shirt dress", "t-shirt dress", "jeans skirt" are a dress and a skirt - the
+       garment noun right before the kind modifies it - while "dress shirt", "dress pants", "dress shoes" are not dresses
+       (a garment or shoe noun right after "dress" makes it an adjective).
+     · Hebrew names it FIRST, in construct: "שמלת חולצה", "חצאית מכנס" - a bare garment noun right after שמלת/חצאית
+       modifies it. "חצאית וחולצה" is two garments: the ו (and) is not a modifier.
+     · Hebrew is matched at a word start with the kind's own endings, one prefix letter allowed (ו ה ב ל מ ש כ): חשמל
+       ("electric", as in כחול חשמל) is not a dress, חצאים ("halves") is not a skirt. Fabric words (ג'ינס, denim) are no
+       garment here, so "שמלת ג'ינס" is a dress - which isBottomsGarment() calls a bottom.
+   An explicit type/category/subType of exactly "dress" or "skirt" decides only when the title names no garment at all.
+   NOT the vision verdict: Gemini's garment_category "dress" covers jumpsuits and overalls too, and a jumpsuit given a
+   dress's wording would grow a skirt. Self-contained (CLAUDE.md §2.6) - the suites slice this block and run it alone. */
+const GARMENT_KIND_EN_NOUNS = "t-?shirts?|shirts?|tees?|tops?|blouses?|tanks?|camis?|camisoles?|jackets?|coats?|" +
+  "cardigans?|blazers?|hoodies?|sweaters?|sweatshirts?|pullovers?|vests?|pants|trousers?|jeans|shorts|leggings|" +
+  "joggers?|jumpsuits?|rompers?|overalls|playsuits?|bodysuits?|kimonos?|bras?|bikinis?";
+const GARMENT_KIND_HE_NOUNS = "חולצ|טישרט|טי-שירט|סווטשירט|סוודר|גופי|ז'קט|ג'קט|מעיל|קפוצ|בלייזר|קרדיגן|טופ|מכנס|" +
+  "שורט|ברמודה|טייץ|טייצ|לגינ|אוברול|סרבל|חזיי|ביקיני";
+const GARMENT_KIND_RE = Object.freeze({
+  enDress: /^(?:[a-z]+-)*(?:sun|mini|midi|maxi|shirt|slip|sweater|shift|smock|tee|night)?dress(?:es)?$/,
+  enSkirt: /^(?:[a-z]+-)*(?:mini|midi|maxi)?skirts?$/,
+  heDress: /^[והבלמשכ]?שמל(?:ה|ת|ות|ונ)/,
+  heSkirt: /^[והבלמשכ]?חצאי(?:ת|ות)/,
+  enNoun: new RegExp("^(?:" + GARMENT_KIND_EN_NOUNS + ")$"),
+  enAfterDress: new RegExp("^(?:" + GARMENT_KIND_EN_NOUNS + "|shoes?|socks?|boots?|slacks|suits?)$"),
+  heNoun: new RegExp("^[והבלמשכ]?(?:" + GARMENT_KIND_HE_NOUNS + ")"),
+  heNounBare: new RegExp("^(?:" + GARMENT_KIND_HE_NOUNS + ")"),
+  enSet: /^(?:sets?|co-?ords?|suits?|(?:two|2|three|3)-pieces?)$/,
+  heSet: /^[והבלמשכ]?(?:סט(?:ים)?$|חליפ)/,
+  setPhrase: /\b(?:two|2|three|3)\s+pieces?\b/,
+});
+
+/**
+ * The garment's KIND, where its region alone renders it wrong - see the block comment above.
+ * @param {{name?:string, title?:string, type?:string, category?:string, subType?:string}|null|undefined} item
+ * @returns {"dress"|"skirt"|null} null = no kind of its own: the region decides, exactly as before.
+ */
+function garmentKindOf(item) {
+  if (!item) return null;
+  const R = GARMENT_KIND_RE;
+  /* Apostrophes, gereshes and smart quotes folded onto one spelling, lower-cased - the same fold as _normApos()
+     (CLAUDE.md §3), kept here so the block runs alone. */
+  const fold = (s) => String(s == null ? "" : s)
+    .replace(/[ʼ׳‘’′]/g, "'").replace(/[״“”″]/g, '"').toLowerCase();
+  const text = fold([item.name, item.title].filter((s) => typeof s === "string" && s.trim()).join(" "));
+  const words = text.split(/[\s,.;:!?/\\|()[\]{}+&*_"]+/).filter((w) => /[a-z0-9א-ת]/.test(w));
+  if (R.setPhrase.test(text) || words.some((w) => R.enSet.test(w) || R.heSet.test(w))) return null;
+  const tag = words.map((w) => (R.enDress.test(w) || R.heDress.test(w) ? "dress"
+    : R.enSkirt.test(w) || R.heSkirt.test(w) ? "skirt"
+    : R.enNoun.test(w) || R.heNoun.test(w) ? "noun" : ""));
+  const en = (w) => /^[a-z0-9]/.test(w);
+  for (let i = 0; i < words.length; i++) {
+    if (tag[i] === "dress" && en(words[i]) && i + 1 < words.length && R.enAfterDress.test(words[i + 1])) tag[i] = "";
+  }
+  for (let i = 0; i < words.length; i++) {
+    if (tag[i] !== "dress" && tag[i] !== "skirt") continue;
+    if (en(words[i]) && i > 0 && tag[i - 1] === "noun" && en(words[i - 1])) tag[i - 1] = "";
+    if (!en(words[i]) && /ת$/.test(words[i]) && i + 1 < words.length && tag[i + 1] === "noun" && R.heNounBare.test(words[i + 1])) tag[i + 1] = "";
+  }
+  if (tag.includes("noun")) return null;
+  const kinds = new Set(tag.filter(Boolean));
+  if (kinds.size === 1) return kinds.has("dress") ? "dress" : "skirt";
+  if (kinds.size > 1) return null;
+  const marks = [item.type, item.category, item.subType].map((s) => fold(s).trim()).filter(Boolean);
+  const dress = marks.some((m) => /^dress(?:es)?$/.test(m)), skirt = marks.some((m) => /^skirts?$/.test(m));
+  return dress === skirt ? null : dress ? "dress" : "skirt";
+}
+/* @pear-shared:garment-kind END */
 
 /* The garment facts the prompt engine reads - plain fields only. Checked against the
    engine itself: the moved builders read exactly these off an item, and nothing else
@@ -18264,6 +18386,8 @@ async function goLive() {
       /* THE FIT READ FROM THE PHOTO: what the store's worn photo said (or why nothing), and the size step on the wire. */
       fit: typeof _fitReadLog !== "undefined" && _fitReadLog ? _fitReadLog : undefined,
       delta: typeof getSizeDelta === "function" ? getSizeDelta() : undefined,
+      /* THE GARMENT KIND the TEST prompt and reference were chosen by ("dress", "skirt", or null for the region's path - §7.23). */
+      kind: activeItem && typeof garmentKindOf === "function" ? garmentKindOf(activeItem) : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the
