@@ -384,9 +384,9 @@ console.log("\n── §10 THE BACK AT THE FRONT'S SIZE (2026-11-11) ──");
     !!wide && wide.z <= 0.98 / 0.88 + 0.001 && 0.06 * wide.z + wide.dx >= 0.009 && 0.94 * wide.z + wide.dx <= 0.991, JSON.stringify(wide));
   check("§10.6 a smaller rear garment is the usual case, a larger one is drawn smaller - the plan stays inside the photo",
     (() => { const q = plan(back, front); return !!q && q.z < 1 && front.y0 * q.z + q.dy >= 0.009 && front.y1 * q.z + q.dy <= 0.991; })());
-  check("§10.7 off for everyone since 2026-11-12 (its first session failed on the engine) - a TEST session too; only ?ref_scale=1 turns it on",
-    mk("", false).refScaleOn() === false && mk("", true).refScaleOn() === false &&
-    mk("?ref_scale=1", false).refScaleOn() === true && mk("?ref_scale=1", true).refScaleOn() === true && mk("?ref_scale=0", true).refScaleOn() === false);
+  check("§10.7 TEST sessions only until measured: off for a shopper, on for TEST, ?ref_scale=1 forces on, =0 forces off",
+    mk("", false).refScaleOn() === false && mk("", true).refScaleOn() === true &&
+    mk("?ref_scale=1", false).refScaleOn() === true && mk("?ref_scale=0", true).refScaleOn() === false);
   const blobFn = fnSrc("function garmentBlobCached(url) {");
   check("§10.8 it runs after the mask and before the pre-encode, typeof-guarded - what is encoded is what is sent",
     blobFn.indexOf("maskReferenceBand(normalized, url, await bandJob)") < blobFn.indexOf("scaleRearToFront(normalized, url)") &&

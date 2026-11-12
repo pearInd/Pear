@@ -337,9 +337,6 @@ to the `Camera + engine bootstrap` banner, from `const LOOK_BAND_TIMEOUT_MS = 35
 `/* Per-product view lookup` and `scanner/scan-store.js` from
 `async function saveClassification(` to `/* ── Gemini classification` — keep the
 garment_cache read/write helpers inside those spans.
-`garment-kind` compares the block between `/* @pear-shared:garment-kind BEGIN` and `/* @pear-shared:garment-kind END */` in
-`lib/prompts.js` and `fitting-room/app.js` byte for byte and runs it alone (§7.23) - keep it self-contained; it also slices
-`app.js` from `function referenceBackHint(url) {` to `/** The server's band for this rear photo` (the dress's whole photos).
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
@@ -1601,7 +1598,6 @@ same commit. Whichever is wrong is the one that wins.
 | Centimetre/inch unit regexes (`SIZE_CHART_CM_RE`, `SIZE_CHART_IN_RE`, `SIZE_CHART_DECLARED_IN_RE`) | `pear-widget.js` (caption tier + the inches/cm twin) ↔ `scanner/size-chart-reader.src.js` ↔ `lib/sizing.js` (cell/header tier) - `size-chart-shared-fixes` §0 |
 | The page's grid finder (`sizeChartGrid` incl. ARIA div-grids, `sizeChartTables` twin collapse, `sizeChartIsGridEl`) | `pear-widget.js` (the live collector) ↔ `scanner/size-chart-reader.src.js` (the scanner) - `size-chart-shared-fixes` §0 asserts the same text |
 | Garment region classifier (`isBottomsGarment`, `BOTTOMS_TOKENS`, `TOPS_TOKENS`) | `app.js` ↔ `lib/prompts.js` (server copy honours the browser's verdict; asserted identical by `prompt-engine` §2) |
-| Garment KIND (`garmentKindOf`, `GARMENT_KIND_*`, the `@pear-shared:garment-kind` block) | `app.js` ↔ `lib/prompts.js` - byte-identical, `garment-kind` §1 (§7.23). Its apostrophe fold copies `_normApos` |
 | Orientation knobs the browser forwards vs the knobs the engine reads | `app.js: ORIENT_KNOB_KEYS` ↔ `lib/orient-engine.js: ORIENT_KNOB_KEYS` (`orient-engine` §2) |
 | Orientation values both halves need | `ORIENT_YAW_FRESH_MS`, `PRESENCE_PROMPT_YAW_SUPPRESS_DEG`, `ORIENT_EARLY_TURN_DEFAULT_SPEED` and the `?early_turn_speed` parse (`ORIENT_EARLY_TURN_MIN_SPEED`) in `app.js` (the pose loop, the presence prompt) ↔ `lib/orient-engine.js` (`orient-engine` §2) |
 | Prompt facts the browser sends vs the fields the engine accepts | `app.js: PROMPT_FACT_STRINGS / PROMPT_FACT_BOOLS` ↔ `lib/prompts.js: PROMPT_ITEM_STRINGS / PROMPT_ITEM_BOOLS` (`prompt-engine` §3) |
@@ -1661,8 +1657,6 @@ npm run scan             # scanner/scan-store.js over a storefront
 
 npm run qa:visual        # the visual gate: drive a 360 + swap, then score the frames
 npm run test:visual      #   …just the agent  (npx playwright test test/e2e/visual-agent.spec.mjs)
-npm run test:kinds       # the garment kinds through the real room, mocked engine, nothing billed (§7.23)
-node scripts/try-on.mjs  # links to try the kinds on yourself, TEST mode, on the branch preview (--bookmarklet, --demo, custom product)
 npm run inspect:visuals  #   …just the scoring (node scripts/inspect-visuals.mjs)
 npm run fixtures         # regenerate test/fixtures/ (generated, gitignored, --force to rebuild)
 
@@ -1815,7 +1809,6 @@ off (the side reading itself) - return-side's clip landings put two fast turns l
 window - one session later (r2). **Measured live, and raised to 700 the same day:** at 530, u2's FRONT went out on the side
 reading and landed ~0.1s after its send - a white panel on a chest already turning to the lens (4.30-4.44s); 700 sends it from
 the reading before. u3 (normal turn) and u4 (fast turn) at 700: the front clean on every frame.
-**Raised to 900 on 2026-10-18 (cc37cb9, the owner: "stronger angles, at once") and lowered to 430 on 2026-11-07 - §7.24.**
 
 ### 7.6 The back waits for the body it lands on (2026-10-17, u4)
 u4 (a 1.6x-speed turn, the output 1.18s behind the camera): BACK went out on the side reading (order -0.01),
@@ -2140,9 +2133,6 @@ two fixes were measured once each (y1, y2 - 5 credits in all).
   fingerprint (9d1a4aa564eaae66) are 0999e6f's again, `skirt-anchor` removed. **Not tried, the next suspects:** the lower-body
   size sentence ("clean break at the ankle" - every rung of that ladder is trouser-shaped), and the engine itself - its
   lower-body path may only draw legged garments (the reference was a clear skirt in both photos). Measure one at a time.
-  **ANSWERED 2026-11-07 (§7.23): the wording, not the engine.** With no trouser word anywhere (a skirt anchor AND a skirt fit
-  sentence) the same skirt rendered as a skirt; with today's bottoms wording, on the same clip and byte-identical reference
-  upload, as wide trousers again. y1 had renamed the noun but kept the trouser fit sentence.
 - **x3, the zip jacket (4327481085):** three front photos, no back, so the server generated one (`synthesizeBackView`) - a
   **1,594 KB PNG** (store photos are 50-110 KB). The prime held the uplink 4s and failed; the render froze on ONE frame for the
   whole window (2 fps out, a 3.1s stall) - the jacket itself was never seen. **Fixed for TEST sessions (743242d):**
@@ -2225,136 +2215,7 @@ second one. `scanner/pregen-backs.js`; no bundle changed.
   either). **Not done:** a paid run on a store; and the garment band (`/api/garment-box`) is still memory + CDN only, so it is cold after
   a deploy (y2: 7.7s) - not part of this stage.
 
-### 7.23 The garment KIND - a skirt and a dress (2026-11-07, TEST requests/sessions until the shipped build is measured)
-Asked: "make the try-on work for every garment type Gemini can identify". Discovery first: Gemini's photo classifier answers a
-closed list (`pants | top | dress | unknown`, the same four in the DB CHECK, `archive/supabase_setup_v13.sql`), the title classifier
-`top | bottom | unknown`; the room collapses everything to two regions with "top" as the silent default. Two kinds rendered wrong:
-- **The skirt rendered as trousers - the WORDING.** Four approved rig sessions (clip shirt1915, 178/74, production 150dc57), the
-  wording swapped in the test browser only: today's bottoms wording = wide black trousers on every frame (s3-control); the same
-  photo with a skirt anchor and a skirt fit sentence, no trouser word = a skirt with its slit, front and back (s2; s1 with the front
-  photo cleaned above the waistband, the same). The reference upload was byte-identical between s2 and s3 (42,813 B). Weak spot in
-  both: the side view mid-stride reads leg-shaped.
-- **A dress cannot render today - the WORDING and the REFERENCE.** It is fitted as a top: the anchor ends "Keep the subject's lower
-  body ... unmodified", and the garment box for a top boxes the BODICE, so the room's top-front mask (`refMaskHemRow` abstains -
-  the colour never stops) paints the whole skirt of the dress out of the reference (proven free: the room's own mask code run on the
-  real photo left a bodice over a smeared block). With the whole photo and a dress's wording the engine rendered a floor-length dress
-  on every frame (d1, Princess Polly's strapless A-line maxi - FOX sells no dress); straps were drawn on its back for a moment.
-What shipped (branch `feat/garment-kinds`):
-- **`garmentKindOf()`** - the `@pear-shared:garment-kind` block, byte-identical in `lib/prompts.js` and `app.js`: the TITLE alone
-  answers "dress", "skirt" or null (= today's path by region). English head noun last ("shirt dress" is a dress, "dress shirt" is a
-  shirt), Hebrew first ("שמלת חולצה", "חצאית מכנס"), Hebrew matched at a word start with the kind's own endings (חשמל, חצאים are not
-  garments), sets and second garment nouns abstain ("Top and Skirt", "חצאית וחולצה", "סט", "suit", "two piece"). An explicit type of
-  exactly dress/skirt decides only when the title names no garment. NOT the vision verdict - Gemini's "dress" covers jumpsuits.
-- **The engine, TEST requests only** (`_requestTest`): `SKIRT_ANCHOR` (front, printed back, plain back) + a skirt rung in
-  `getFitModifier`/`getCompactFitModifier` (no trouser word); `DRESS_ANCHOR` (front, back) + the upper-body fit sentence. The skirt's
-  front and plain back reproduce byte for byte the 12 prompts s2 sent (`garment-kind` §3.1); the dress's are d1's generalised from
-  "flares from the waist past the knees" to "falls from the waist to the reference's hem" - **not measured in that form**. A skirt
-  must also be a bottom by region; a dress is a dress whatever the region says ("שמלת ג'ינס" reads as a bottom). The hem's length
-  is the reference's - no mini/midi/maxi words (strict image-only: the photo carries the length, as it did in s2 and d1).
-- **The room, TEST sessions only** (`traceEnabled()`): a dress's front and rear photos go WHOLE (`referenceFrontHint`/
-  `referenceBackHint` return null, `ctx.ref` says `why: "dress"`); the TEST record carries `ctx.kind`. The cost, stated: the store's
-  model is in the rear photo again (§2.38's failure mode). And `resolveGarmentCategory()` now logs its "top" default instead of
-  staying silent.
-- **Budget (trace:prompt's TEST section):** the dress anchor is ~90 chars longer than the top's. With a long print the dress front
-  sheds the fit sentence at -2/-1/+2, and a button-front dress loses the closure lock on every rung (the fit clause still goes
-  first, both logged - §0's rule holds; `garment-kind` §3.11 pins it). Not reworded unmeasured.
-- **Proven:** a shopper's wire is unchanged - trace:prompt's shopper rows and audit identical to main's, `prompt-engine` §1 on its
-  pin, `garment-kind` §3.8; unit suite, build, `qa:visual` 40/40; `test:kinds` routes a dress, a skirt, jeans, a tank top and a zip
-  jacket through the real room in TEST mode and keeps today's words for a shopper's dress (it fails with the gate removed). 11
-  mutants caught in `garment-kind` §5. **Needs a `wrangler deploy`** (`lib/prompts.js` changed; fingerprint 6ea2ab50) before a
-  TEST session through the edge reads it.
-- **MEASURED on the shipped build 2026-11-07** (3 approved sessions; the branch room built like production and served by the rig's
-  `--room-dir`, the deployed Worker fd7c141f, no rig override - the words came from the edge's token expansion):
-  · skirt (record mw5m6emk, kind "skirt", rear mask as before): a black ankle-length skirt on every frame, the slit at the side and
-    back, length steady; the side mid-stride now reads as a skirt with a slit. Back acked 1.27s, 7 fps, no stall.
-  · dress (mw5m83zi, kind "dress", `ref` whole/whole): a floor-length dress on every frame, front, side and back; no handbag pasted.
-    Defects: straps drawn on the back 3.7-4.3s (the product is strapless; d1 showed them for a moment), the skirt slightly sheer
-    in front, and it hangs straighter than d1's flared one (the generalised "falls" wording). Acks 207/220ms, 10 fps.
-  · PEAK tee regression (mw5mow0f, kind null, the white-tee clip): the PEAK print on the chest from the first frame, brown, steady
-    size. The back view came out plain - the engine acknowledged the primed back in 6.1s and never acknowledged the turn's back
-    in the 2.3s left (`swap-fail` "Control channel closed" at teardown), so the front reference drew the back. Wording and photos
-    on this path are byte-identical to main's: the back view of a no-kind garment is UNVERIFIED on this build, not failed.
-  · PEAK again, one more approved session (mw5mzaje): every swap acked (primed back 310ms, the turn's back 209ms, the front
-    216ms), 9 fps, no stall - the front print from the first frame, plain sides, the printed back on the back (4.3-4.6s), the
-    front on its way back at the end. The no-kind path is clean on this build.
-- **Not done / open:** the merge to main (production's room takes /size and /prompt from the origin until then); then the switch
-  to shoppers. Jumpsuits/rompers/overalls, sets, jackets layered over a top, swimwear/underwear, and
-  per-type measurement fields are not built (owner's decisions open). A denim dress is still sized on the waist chart
-  (`titleNamesPants` misses שמלת) and fitted with the bottoms presence gate - the kind does not move a region. A dress in a full
-  look still stitches as a top over a bottom.
-
-### 7.24 The back holds to the side - the return's floor 900 -> 430 (2026-11-07, Layer C)
-"The back disappears too early." The owner's clip (record mw5o1vyb, PEAK, the feat/garment-kinds preview) read with the room's own
-lite pose model over every frame, lined up with the record's order readings: the back print from ~115 degrees (3.13s), gone at
-**~200** (4.03s) with the back still square to the lens, the FRONT's "PEAK" lettering drawn on the back to ~232, the side plain,
-PEAK on the chest from ~288. The FRONT went out on the first reading out of the deep back (o -0.80, ~220) at +50ms and reached
-camera frames from ~250ms BEFORE its send; mw5nc1gp the same (~205, -200ms).
-- **Cause: `REF_LAT_FLOOR_MS` 900** (app.js, cc37cb9). The projection plans the landing (lat - LAND_BASE_MS) after the send:
-  +370ms at 900, where a pre-uploaded reference lands ~0.2s before it on the owner's camera - ~0.6s of turn early.
-- **Which version held the back - the owner's clips, the same method:** 10-08 11:41 ("front and back work perfectly"; bytes per
-  swap, acks ~430 -> a lead of -100ms): ~235, the print sliding off the edge, plain side, PEAK ~303. 10-18 at 700: ~250 / ~218.
-  10-18 at 900: ~262 / ~213 / ~205. 11-07 at 900: ~205 / ~200. The front print appears at ~290-315 in every version - 900 gained
-  ~15-25 degrees of it and cost ~50-60 of back plus the front lettering on the back.
-- **430 = the 10-08 sessions' lead.** Replayed through lib/orient-engine.js (reproduces every recorded send within a few degrees)
-  on the 16 usable KV records of 11-01..11-07, landing = the body angle at send + each measured landing offset: the owner's camera
-  (-0.27..-0.10s) median 216 -> 264 degrees, before 230 49/64 -> 0/64, past 300 0 -> 1/64; every measured offset (incl. the rig's
-  0..+0.1) median 237 -> 273, before 230 41/112 -> 0/108, past 300 0 -> 19/108 - a late engine can land the front on a chest
-  coming round. `return-side` §3g replays the two 11-07 records (`test/return-side-floor.json`): at 900 each is its own record, at
-  the room's floor the FRONT goes out on a later reading (o >= -0.4); 900 fails it. Room only - no Worker deploy.
-- **The rig** (`scripts/rig/rig.mjs`): `--clip-from=<s>` and `--rate=<x>`; the clip is a Blob now - the routed response carried no
-  byte ranges, so a seek past 0 was silently ignored (n1's turn started late and its return fell after the 5s window).
-- **MEASURED on the real engine (3 rig sessions, PEAK, the white V-neck clip as the camera, the room built from this branch with
-  430 served by `--room-dir`):** n3 (record mw6x1bsi, a clean engine: 9 fps out, no stall, lag 1.2s) - FRONT on the projection at
-  o -0.36 (~249 degrees) +211ms; frame by frame: the back print from ~110 (2.50s) through the back view, sliding off the edge at the
-  return's side (3.30s), the side plain (3.40-3.50), PEAK back on the chest from the three-quarter front (3.80 on); no front lettering
-  on the back, no back print on the chest. n2 (mw5pgzqq, a degraded engine: 6 fps, lag 0.9 -> 2.0s, an 800ms tick gap, so FRONT went
-  out on the side reading): the same picture (the print off the edge at 3.71-3.81, PEAK from 4.10). n1 (mw5p6a5x): FRONT on o -0.34
-  (~250) +190ms, the back print on to at least ~245; its landing fell after the window (the rig's seek bug above). Seen, not
-  changed: the outbound early BACK (50 degrees, §7.4) leaves the chest plain from ~50 degrees to the side. Not yet measured: a fast
-  turn, and the owner's own camera.
-
-### 7.25 The chest keeps its print to the side - the outbound landing (2026-11-07, Layer C, lib/orient-engine.js)
-"Fix this part" - the owner, on rig n3's frames 1.80-2.20 (§7.24's verifying session): PEAK gone from a three-quarter chest,
-plain to the side. The same mechanism as the return: the early BACK fires on the first |yaw| reading past 50 (a body at 70-85
-degrees), and a pre-uploaded reference reaches camera frames 0.13-0.42s BEFORE its send - read off each clip with the pose
-model: mw5o1vyb -0.13, mw5nc1gp -0.32, n3 -0.42 (the render's lag 1.04 / 0.89 / 1.2s; roughly the lag minus ~0.9s). So PEAK left
-the chest at 41-65 degrees in every clip read (11-07 x3, 10-18 c06-c08; c07 drew an open shirt on the chest after it); the old
-200ms room delay (`?ref_back_delay=200`) moved one session to ~70-85 and not the other (10-18 c03 / c05).
-- **THE OUTBOUND LANDING (`makeEarlyTurnTrigger`, OUT_TARGET 105, OUT_LEAD_MS -100, OUT_PAST 0, OUT_STALE_MS 600):** mirrored
-  from THE LANDING, PROJECTED - on the FRONT leg, when the room sends the order and a pace, the early BACK goes out once the
-  order's own angle + the turn's speed x (the reading's age - 100ms) reaches 105, scheduled between readings (LEAD_SCHEDULE_MS),
-  and is HELD until then; held, it goes out at once on the first reading at or past the side (order <= 0; head out of frame, a
-  side view the world |yaw| confirms, OUT_SIDE_YAW 85 - a headless order keeps its counted sign) or when the order is 600ms stale,
-  and the pass-based PREDICTIVE BACK (after the side) is untouched. A re-arm square to the lens drops a hold. No order, no pace or
-  `?out_land=0`: the |yaw| fire exactly as before. Knob `out_land` in both ORIENT_KNOB_KEYS lists.
-- **A fixed lead, not the pace (rig n4, mw6y86ck):** the first cut led by (lat - LAND_BASE_MS) as the return does, and on a live
-  session it never engaged - the outbound BACK is the session's FIRST swap, and the pace the room sends then is its cold start's
-  (899ms; 430-475 after the first acks), so it read a slow engine and fired at once. A pre-uploaded reference's landing does not
-  follow its ack; -100ms is the return floor's lead (430 - 530). Replays with the pace as each room really sent it.
-- **Replayed** on every usable KV record with the offsets read off the clips (the owner's camera, -0.32/-0.25/-0.20/-0.13s):
-  landing median 50 -> 82 degrees, before 75 90/96 -> 20/96, past 130 0 -> 1/96. Released only past -0.15/-0.3: ~7 degrees more and
-  n4's back left to ~130-160 (a back that late puts the FRONT's print on a back facing the lens, the worse failure); released at
-  +0.1 or on any |yaw|-confirmed side view: 4-5 degrees earlier. `return-side` §3h: the four records of the report, each at its
-  own clip's offset, 60 / 46 / 50 / 48 -> 91 / 83 / 66 / 81 degrees (n3, the highest lag, gains least); `?out_land=0` is each
-  record; a room that sends no pace keeps today's outbound; the rule off fails 3. §3c/§3e.4/§4b and `pose-follow` §3 (the
-  return's rules and the pose wait leave the outbound alone) run with `out_land=0`, which is what they always measured;
-  `head-frame` §4.1 (a headless 360) is what added the |yaw|-confirmed release.
-- **Production with main's room:** the rule reads only that a pace is sent, so main's rooms get it as soon as the Worker is
-  deployed. **A Worker deploy** (the engine); the room's only change is the knob key.
-- **DEPLOYED 2026-11-08 (Worker e5b3083b, from main b8fbc11; rollback fd7c141f).** Checked through the deployed Worker's own
-  protocol: the four §3h records decide exactly as the local engine - BACK 231 / 482 / 244 / 255ms later, `out_land=0` each
-  record's own send. **SEEN LIVE - "works perfectly" (the owner, record mw6zejh5, 2026-11-08 00:35, PEAK, his own camera;
-  camera 28 fps, output 9 fps, no stall):** the early BACK held at the 70-degree reading (the old rule's fire) and sent on the
-  first reading past the side (-0.38, ~112); FRONT on -0.09 (~265) +182ms. Frame by frame (the room's pose model over the clip):
-  PEAK on the chest to ~70 degrees, sliding off the edge (2.20-2.67s); the side plain; the back print in at the edge at ~98
-  (3.03s), through the back, off the edge at ~265-275 (4.03-4.56s); the side plain; PEAK back from ~283 (4.70s). Before the
-  deploy, two rig sessions ran the engine from a local `wrangler dev`, the page's /orient socket proxied to it by the rig
-  (`--orient-local`, scratch): n4 (mw6y86ck) ran the first, pace-led cut - its outbound was the old one (the cold-start pace,
-  fixed above), PEAK held to ~70 degrees at a low lag (0.91s); n5 (mw6yo1ab) was degraded (camera 9 fps, readings 450ms apart
-  jumping from 49 degrees to the side, the engine's control channel closed before the FRONT) and its BACK went out on the side
-  reading, where the old rule fires too. A clean PEAK session after the Worker deploy is the check.
-
-### 7.26 The chest comes back - a turn to the side that returns the way it went (2026-11-11, Layer C) - NOT YET MEASURED ON THE ENGINE, NOT DEPLOYED
+### 7.23 The chest comes back - a turn to the side that returns the way it went (2026-11-11, Layer C) - NOT YET MEASURED ON THE ENGINE, NOT DEPLOYED
 "A 360 works perfectly, but a half turn confuses it - 90 degrees and back shows the back on the front." The early BACK goes
 out at ~50 degrees on the way out (§7.4), for a 360's sake. A look at the side that comes BACK never reads the back half, so
 that BACK stayed "pending" and only the vote's two-reading withdrawal (§2.37) could take it off: a shoulder vote for the FRONT
@@ -2380,7 +2241,7 @@ turn; the return leg's rules send the FRONT 0.1-0.3s before the chest shows), wh
 - **Only `lib/orient-engine.js` changed** - neither bundle. **Needs a Worker deploy to reach production (§2.14)**, and by §7.1 a
   real-engine measurement first: a 90-degree look and back, a normal and a fast 360, frame by frame. Not done - no credits approved.
 
-### 7.27 The back at the front's size - "the shirt's length goes up and down during the turns" (2026-11-11, Layer B) - OFF (?ref_scale=1 only): FAILED ITS FIRST ENGINE SESSION 2026-11-12
+### 7.24 The back at the front's size - "the shirt's length goes up and down during the turns" (2026-11-11, Layer B) - TEST SESSIONS ONLY, NOT YET MEASURED ON THE ENGINE
 The owner's clip (a pink football jersey on terminalx, the turns themselves right): the hem at ~480px with the FRONT reference on
 the body, ~439 within one frame of the BACK landing (2.37 -> 2.40s), back down when the FRONT returned (3.27 -> 3.30s) - 13-15% of
 the shirt's length, at the two swaps and nowhere else. The store photos: the front a packshot whose garment box is 69% of the
@@ -2401,16 +2262,7 @@ numbers agree, the mechanism is not proven on the engine.
 - **Next (the owner's idea, not built):** choose the size from a photo of the garment WORN, so the length is the real one and not
   merely the same on both sides - needs the engine's size-to-length response measured first (one garment at three sizes).
 
-- **MEASURED 2026-11-12, FAILED - now off for everyone.** The first session in which it acted (production b00cf88, TEST,
-  terminalx k088920001, the store's rear on a model, redrawn x1.19): on the swap to BACK the engine drew a torso filling the
-  frame for 1.25s, then "This item is not supported", and the room reported no picture (clip PEAR-fit-1794476730393). The same
-  photos by a direct link with `?ref_scale=0`, twice: the turn completed, neither symptom. `refScaleOn()` now returns false
-  unless `?ref_scale=1` (`garment-box` §10.7). **Not known:** why a x1.19 redraw does this (the head cut at the top edge? the
-  re-encode?) - no record was pulled. **Consequence:** the hem step at the swaps this section was written for (13-15% on this
-  jersey) is back whenever the rear is on a model and the front is a packshot. Open decision for the owner: A/B the redraw
-  again, shrink the front instead, or prefer a generated rear when the classifier says the back is plain.
-
-### 7.28 The fit read from the model's photo - "the belly looks too big at the start, as if I had a paunch" (2026-11-12, Layers A+B) - TEST SESSIONS ONLY, NOT YET MEASURED ON THE ENGINE
+### 7.25 The fit read from the model's photo - "the belly looks too big at the start, as if I had a paunch" (2026-11-12, Layers A+B) - TEST SESSIONS ONLY, NOT YET MEASURED ON THE ENGINE
 The owner, three TEST clips of the pink JUVENTUS jersey on terminalx (2026-11-11 15:20-15:21): the front of the first seconds
 drawn ballooned at the stomach; after the 360 the same front sat normally. His direction: "it has to be done by the model's
 photo" (asked, and chosen: READ the fit from the photo - not send the worn photo as the reference, which is §2.38's risk).
@@ -2435,7 +2287,7 @@ The fit sentence came from `getFitModifier()`'s table: the size step alone, "per
   (esbuild's macOS binary in the Linux sandbox). `qa:visual` NOT run. The model's read of real photos NOT checked (no key here).
 
 
-### 7.29 An early FRONT the back votes overturn is a correction - "the back/front should be more consistent, smoother" (2026-11-12, Layer C) - NOT YET MEASURED ON THE ENGINE, NOT DEPLOYED
+### 7.26 An early FRONT the back votes overturn is a correction - "the back/front should be more consistent, smoother" (2026-11-12, Layer C) - NOT YET MEASURED ON THE ENGINE, NOT DEPLOYED
 
 - **Reported** with two clips (terminalx, TEST). The records: three 360s; two landed on time (BACK acked 201-218ms, FRONT at the
   side). In the third (23:44) the shopper shifted on the spot at the back after one rising reading (-0.96, -0.79, then -0.57,
@@ -2454,27 +2306,6 @@ The fit sentence came from `getFitModifier()`'s table: the size step alone, "per
   waiting a reading would land every clean 360's FRONT ~0.2s later.
 - **To measure (§7.1):** deploy the test Worker (`cloudflare/orient`, `wrangler deploy -c wrangler.preview.jsonc`), record 360s
   incl. one with a pause at the back; then production Worker BEFORE the merge.
-
-
-- **Measured by the owner on the branch preview (2026-11-12, test Worker d2ec3ba1): "works perfectly".** That engine had the
-  return's floor at 900 and no outbound landing. **Merged with main (§7.24, §7.25) the same day:** on the nine TEST records
-  replayed with the floor at 430, the early FRONT of 23:44 no longer goes out at all (the FRONT is sent at -0.31, as the body
-  comes round) - the correction stays as the net under it. `measure-partial-turn --base origin/main`: 44/44 full 360s decide
-  as main.
-
-### 7.30 One article, numbered photos - the gallery on terminalx was one photo of six (2026-11-12, Layer A) - CLOSED BY MAIN'S bb2e099
-
-- **Found** while reading the TEST records for §7.27/§7.28: `ctx.fit = { why: "no-person", n: 2 }` and no real rear - the room
-  got the packshot and a generated rear, of a page that lists six photos.
-- **Cause:** this branch was cut on 2026-11-07 BEFORE main's terminalx fix (bb2e099: `productIdRuns()` / `shareProductIdRun()`,
-  every key). Magento names photos `<sku>-<n><timestamp>.jpg`; the longest digit run differs per photo and the id veto threw
-  out five of six. A TEST-only duplicate (`sharesPhotoStem()`, 180e9d5) was written here before the merge showed main already
-  had the rule; it was removed in the merge - one rule, main's.
-- **Pinned:** `widget-dom` O, on the product of the records (six photos reach the room under any key; never the next article's).
-- **What the merge unlocks in TEST sessions on terminalx:** §7.28's fit read gets worn photos (photos 2-4 answered regular/hip
-  on the live route) and §7.27's scaling has a worn rear to act on. Neither had acted in any session recorded so far.
-- **To measure:** terminalx, TEST: `ctx.fit` carries a cut and hem; the belly at the recommended size and one up; the hem across
-  a 360 with the store's own rear. Then decide on lifting the TEST gates of §7.27/§7.28.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 

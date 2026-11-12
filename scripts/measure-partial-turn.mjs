@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Measure the partial turn ("look to the side and come back") on the recorded 360s - CLAUDE.md §7.26.
+/* Measure the partial turn ("look to the side and come back") on the recorded 360s - CLAUDE.md §7.23.
    Plays each recorded clip up to PEAK degrees and then backwards to square, through the real browser measurement and the real
    orientation engine, and compares the engine in a git ref (the rule BEFORE) with the working tree (the rule NOW).
 

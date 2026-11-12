@@ -2236,9 +2236,6 @@ const PRESENTATION_PARAMS = new Set([
   // output format, letterbox colour - adidas.co.il's thumbnail and zoom slide of ONE
   // photo differ only in these. Lockstep with pear-widget.js PRESENTATION_PARAMS.
   "sw", "sh", "sm", "sfrm", "bgcolor",
-  // terminalx.com (Magento): the JSON-LD/og:image copy of a photo carries
-  // ?image_type_mobile=webp_jpeg_like_70 and the gallery copy carries nothing - one photo.
-  "image_type_mobile",
 ]);
 
 /* Resizer endpoints keep the REAL asset in a `url=` param; their own path is the same
@@ -3108,7 +3105,7 @@ app.get("/api/garment-box", classifyLimiter, async (req, res) => {
 /* GET /api/garment-fit?image_url=…&v=N
      -> { fit: { cut, hem } | null, reason, view, source, v }
 
-   THE FIT READ FROM THE PHOTO (2026-11-11, CLAUDE.md §7.28). How a top sits on the store's own model - its cut and where
+   THE FIT READ FROM THE PHOTO (2026-11-11, CLAUDE.md §7.25). How a top sits on the store's own model - its cut and where
    its hem ends - for the prompt's fit sentence (lib/prompts.js). The room asks for the product's gallery photos in a TEST
    session; `fit: null` means "this photo says nothing" (a packshot, a close-up, an unsure answer) and the prompt keeps the
    table's sentence. Cached like /api/garment-box: a verdict in this instance's memory and at the CDN, never an error. */

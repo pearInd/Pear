@@ -425,31 +425,6 @@ await run("N'. a normal embed asks for no debug", SUPPORT_PAGE, ({ params }) => 
     params.has("garment_url") && !params.has("pear_debug") && !params.has("orient_debug"), [...params.keys()].join(","));
 });
 
-/* ── O. one article, numbered photos (terminalx / Magento) ────────────────────────────
-   <sku>-<n><timestamp>.jpg: the digits after the dash differ per photo, and the id veto read them as six products.
-   Closed on main by productIdRuns()/shareProductIdRun() (bb2e099) for every key; pinned here on the product the TEST
-   records of 2026-11-11 were taken on, where the room had got one photo of six (the branch predated that fix). */
-const TX = (n) => `https://media.terminalx.com/pub/media/catalog/product/cache/f112238e8de94b6d480bd02e7a9501b8/k/0/k088920001-${n}1792932605.jpg?image_type_mobile=webp_jpeg_like_70`;
-const TX_PAGE = `
-<html><head>
-  <meta property="og:image" content="${TX(1)}">
-  <script type="application/ld+json">${JSON.stringify({ "@type": "Product", name: "JUVENTUS AWAY", image: [1, 2, 3, 4, 5, 6].map(TX) })}</script>
-</head><body>
-  <h1>JUVENTUS AWAY</h1>
-  <div class="imageWrapper_1nYG"><img class="image_1FmI" src="${TX(1)}"></div>
-  <div class="product-thumbnails"><img src="https://media.terminalx.com/pub/media/catalog/product/cache/f112238e8de94b6d480bd02e7a9501b8/k/0/k088920002-11792999999.jpg"></div>
-  <button class="add-to-cart">Add to cart</button>
-</body></html>`;
-await run("O. numbered photos of one article", TX_PAGE, ({ params }) => {
-  const list = (params.get("garment_images") || "").split(",").filter(Boolean).map(decodeURIComponent);
-  check("O1 all six photos of the article reach the room", list.length === 6 && [1, 2, 3, 4, 5, 6].every((n) => list.includes(TX(n))), JSON.stringify(list));
-  check("O2 ...and never the next article's (k088920002)", !list.some((u) => /k088920002/.test(u)), JSON.stringify(list));
-});
-await run("O'. the same page under the TEST key", TX_PAGE, ({ params }) => {
-  const list = (params.get("garment_images") || "").split(",").filter(Boolean).map(decodeURIComponent);
-  check("O3 the TEST key gets the same six", list.length === 6 && !list.some((u) => /k088920002/.test(u)), JSON.stringify(list));
-}, { attrs: { "data-pear-key": "TEST" } });
-
 console.log("\n" + results.join("\n"));
 console.log(failures ? `\n${failures} FAILING` : "\nALL GREEN");
 process.exit(failures ? 1 : 0);

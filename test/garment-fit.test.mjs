@@ -1,5 +1,5 @@
 /* THE FIT READ FROM THE PHOTO - "the belly looks too big at the start, as if I had a paunch ... it has to be done by
-   the model's photo" (the owner, a football jersey on terminalx, 2026-11-11). See lib/garment-fit.js, CLAUDE.md §7.28.
+   the model's photo" (the owner, a football jersey on terminalx, 2026-11-11). See lib/garment-fit.js, CLAUDE.md §7.25.
    ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
    §1  THE READ: a worn, whole, front or back photo with a confident answer gives { cut, hem }; a packshot, a close-up,
        a side view, an unsure or malformed answer gives nothing (the prompt keeps the table's sentence).
@@ -98,8 +98,6 @@ console.log("── §4 the room and the endpoint ──");
   const job = APP.slice(APP.indexOf("function readGarmentFit(item)"), APP.indexOf("function prewarmOrientationAssets()"));
   check("a bottom is never asked about", /isBottomsGarment\(item\)\) return Promise\.resolve\(false\)/.test(job));
   check("one job per garment", /if \(item\._fitReadJob\) return item\._fitReadJob;/.test(job));
-  check("...asked again when the classifier brings another gallery and nothing had landed",
-    /if \(!target\.fitCut && galleryBefore !== target\.pearImages\.join\("\|"\)\) target\._fitReadJob = null;/.test(APP));
   check("the asks are bounded", /const FIT_READ_MAX_PHOTOS = 4;/.test(APP) && /out\.length >= FIT_READ_MAX_PHOTOS/.test(APP));
   check("a failed ask never throws into the room", /catch \(e\) \{ why = "no-answer"; \}/.test(job));
   check("the prompts are re-asked once the read lands, for the garment still on", /readGarmentFit\(it\)\.then\(\(landed\) => \{\n\s+if \(!landed \|\| it !== activeItem\) return;\n\s+for \(const \[angle, inProfile\] of combos\) wirePrompt\(it, angle, "prefetch", \{ inProfile \}\)/.test(APP));

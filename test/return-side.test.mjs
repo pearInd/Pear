@@ -400,8 +400,7 @@ console.log("\n── §3c the two PEAK sessions of 2026-10-04, from their own r
      room's estimate is taken from its own acks (734, 807: 770). The second (05:55) carries `lt` per tick. Each record's
      FRONT went out on the first reading past the side; the clip showed the back print on the chest for ~0.3s after it. */
   const replay = (rec, knobs, latFor) => {
-    /* out_land "0": this measures the RETURN's pace; THE OUTBOUND LANDING (§3h) also reads that a pace is sent. */
-    const engine = E.createOrientEngine(E.sanitizeOrientKnobs({ out_land: "0", ...knobs }));
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
     let l = rec.ticks[0].l; const sent = [];
     for (const k of rec.ticks) {
       const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
@@ -510,10 +509,9 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
       !!Rg && !!onG && onG.o === Rg.o && onG.t - Rg.t >= 0 && onG.t - Rg.t <= 260, JSON.stringify({ Rg, onG }));
   }
   {
-    /* Every outbound BACK is untouched: the projection only reads the BACK leg. (THE OUTBOUND LANDING - §3h - is its own rule,
-       off on both sides here, so this keeps asking only what the RETURN's projection does to the outbound: nothing.) */
+    /* Every outbound BACK is untouched: the projection only reads the BACK leg. */
     for (const name of ["f-0609", "m2-0555", "s-0611", "m1-0455", "m3-1702"]) {
-      const on = replay(PACE[name], { out_land: "0" }), off = replay(PACE[name], { lead_project: "0", out_land: "0" });
+      const on = replay(PACE[name], {}), off = replay(PACE[name], { lead_project: "0" });
       const back = (sw) => JSON.stringify(sw.filter((x) => x.next === "back").slice(0, 1));
       check(`§3e.4 ${name}: the outbound BACK is the same with the projection`, back(on) === back(off), JSON.stringify({ on, off }));
     }
@@ -659,89 +657,6 @@ console.log("\n── §3d THE BACK WAITS FOR AN ENGINE THAT CAN KEEP UP - the t
   check("§3d.3 a room that measures no engine is the rule exactly (the back as before)", JSON.stringify(blind) === JSON.stringify(run3(rec, { back_gate: "0" }, () => null, null)));
 }
 
-console.log("\n── §3g THE FLOOR - the owner's two PEAK sessions of 2026-11-07 (the back gone at ~200 degrees), from their own records ──");
-{
-  /* REF_LAT_FLOOR_MS 900 -> 430 (app.js, THE ENGINE'S PACE). A pre-uploaded reference reaches the body ~0.2s BEFORE its send on the
-     owner's camera (mw5o1vyb -0.25s, mw5nc1gp -0.20s, read off the clips with the room's pose model), where 900 planned it 370ms
-     AFTER: the FRONT went out on the first reading out of the deep back (~220 degrees) and the back print left at ~200-205, the
-     back still to the lens. 430 is the lead the 10-08 sessions ran with (bytes acks ~430ms against LAND_BASE_MS 530). Each record
-     replayed through the real engine with the room's knob defaults and the pace the room now sends. */
-  const FLOOR = JSON.parse(readFileSync(new URL("./return-side-floor.json", import.meta.url), "utf8"));
-  const floor = Number((APP.match(/^const REF_LAT_FLOOR_MS = (\d+);/m) || [])[1]);
-  const front = (rec, lat) => {
-    const engine = E.createOrientEngine(E.sanitizeOrientKnobs({ back_gate: "0", early_turn: "50", early_turn_slow: "50", out_land: "0" }));
-    let l = rec.ticks[0].l, back = false;
-    for (const k of rec.ticks) {
-      const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
-        yawAbs: k.y, yawAt: k.y === null ? 0 : k.t - k.ya, lostAt: k.la === null ? 0 : k.t - k.la,
-        ord: k.o, ordAt: k.o === null ? 0 : k.t - (k.oa ?? 0), lat, latHi: k.lh, lock: l, profile: !!k.p, dualView: !!k.d }));
-      for (const a of acts) if (a.do === "swap" && a.next !== l) {
-        if (a.next === "back") back = true; else if (back) return { o: k.o, send: k.t + (a.delay || 0) };
-        l = a.next;
-      }
-    }
-    return null;
-  };
-  check("§3g.1 the room's floor is 430 - the 10-08 sessions' lead (bytes acks ~430ms against LAND_BASE_MS 530)", floor === 430, String(floor));
-  for (const key of ["o-0029", "c-0009"]) {
-    const rec = FLOOR[key];
-    const old = front(rec, 900), now = front(rec, floor);
-    check(`§3g.2 ${rec.id} at 900 is its own record: FRONT on the first reading out of the deep back (o <= -0.75), within 25ms of its send`,
-      !!old && old.o <= -0.75 && Math.abs(old.send - rec.sent) <= 25, JSON.stringify(old));
-    check(`§3g.3 ${rec.id} at the room's floor: FRONT on a later reading (o >= -0.4), 150ms+ after the record's send`,
-      !!now && now.o >= -0.4 && now.send - rec.sent >= 150, JSON.stringify(now));
-  }
-}
-
-console.log("\n── §3h THE OUTBOUND LANDING - the chest keeps its print to the side (2026-11-07), from three records ──");
-{
-  /* The owner, on rig n3's frames 1.80-2.20: "fix this part" - the chest plain from a three-quarter front to the side. The early
-     BACK fired on the first |yaw| past 50 (a body at 70-85 degrees) and a pre-uploaded reference reaches camera frames 0.13-0.42s
-     before its send (read off each clip: o-0029 -0.13, c-0009 -0.32, r-n3 -0.42), so PEAK left the chest at 41-65 degrees.
-     lib/orient-engine.js OUT_TARGET: the early BACK is held until its projected landing reaches the target, scheduled between
-     readings. Each record replayed through the real engine; the landing is the body angle (the record's own order readings on
-     the FRONT leg, camera time) at the send plus that clip's own offset. */
-  const FLOOR = JSON.parse(readFileSync(new URL("./return-side-floor.json", import.meta.url), "utf8"));
-  const floor = Number((APP.match(/^const REF_LAT_FLOOR_MS = (\d+);/m) || [])[1]);
-  const backSend = (rec, knobs, latOf) => {
-    const engine = E.createOrientEngine(E.sanitizeOrientKnobs({ back_gate: "0", early_turn: "50", early_turn_slow: "50", ...knobs }));
-    let l = rec.ticks[0].l;
-    for (const k of rec.ticks) {
-      const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
-        yawAbs: k.y, yawAt: k.y === null ? 0 : k.t - k.ya, lostAt: k.la === null ? 0 : k.t - k.la,
-        ord: k.o, ordAt: k.o === null ? 0 : k.t - (k.oa ?? 0), lat: latOf(k), latHi: k.lh, lock: l, profile: !!k.p, dualView: !!k.d }));
-      for (const a of acts) if (a.do === "swap" && a.next !== l) {
-        if (a.next === "back" && k.t > rec.reveal) return k.t + (a.delay || 0);
-        l = a.next;
-      }
-    }
-    return null;
-  };
-  const bodyAt = (rec, ct) => {
-    const rd = []; const seen = new Set();
-    for (const k of rec.ticks) if (typeof k.o === "number" && typeof k.oa === "number") { const at = k.t - k.oa; if (!seen.has(at)) { seen.add(at); rd.push({ at, o: k.o }); } }
-    let iMin = 0; rd.forEach((x, i) => { if (x.o < rd[iMin].o) iMin = i; });
-    const out = rd.slice(0, iMin + 1).map((x) => ({ at: x.at, a: Math.acos(Math.max(-1, Math.min(1, x.o))) * 180 / Math.PI }));
-    for (let i = 1; i < out.length; i++) if (out[i].at >= ct && out[i - 1].at <= ct) return out[i - 1].a + (out[i].a - out[i - 1].a) * (ct - out[i - 1].at) / Math.max(1, out[i].at - out[i - 1].at);
-    return null;
-  };
-  /* The pace as the room sent it: the rule reads only THAT one is sent (r-n4's first swap went out at the cold start's 899ms). */
-  const pace = (k) => (typeof k.lt === "number" ? k.lt : null);
-  for (const key of ["o-0029", "c-0009", "r-n3", "r-n4"]) {
-    const rec = FLOOR[key];
-    const old = backSend(rec, { out_land: "0" }, (k) => k.lt), now = backSend(rec, {}, pace);
-    const lOld = bodyAt(rec, old + rec.outOff * 1000), lNow = bodyAt(rec, now + rec.outOff * 1000);
-    check(`§3h.1 ${rec.id}: ?out_land=0 is its own record - the BACK within 25ms of its send`, old !== null && Math.abs(old - rec.backSent) <= 25, String(old - rec.backSent));
-    check(`§3h.2 ${rec.id}: the BACK goes out later (${now - old}ms), never past 600ms - and lands at ${Math.round(lNow)} degrees, not ${Math.round(lOld)}`,
-      now !== null && now - old >= 100 && now - old <= 600 && lOld < 65 && lNow >= lOld + 12 && lNow <= 105, JSON.stringify({ old, now, lOld, lNow }));
-    const noPace = backSend(rec, {}, () => null);
-    check(`§3h.3 ${rec.id}: a room that sends no pace keeps today's outbound`, noPace === old, JSON.stringify({ old, noPace }));
-  }
-  check("§3h.4 the rule lives inside makeEarlyTurnTrigger (turn-yaw-window runs it standalone) and its knob is in both lists",
-    /function makeEarlyTurnTrigger\([\s\S]*?const OUT_TARGET = 105;[\s\S]*?const OUT_PAST = 0;[\s\S]*?const OUT_LEAD_MS = -100;[\s\S]*?const OUT_STALE_MS = 600;/.test(ENGINE_SRC) &&
-    E.ORIENT_KNOB_KEYS.includes("out_land") && /const ORIENT_KNOB_KEYS = \[[^\]]*"out_land"/.test(APP));
-}
-
 console.log("\n── §4 thirteen real 360s, at four tick phases ──");
 {
   const clips = { ...POSES.clips, "s3.mp4 (reported)": S3.rows };
@@ -811,11 +726,10 @@ console.log("\n── §4b the engine's pace: a slow engine's return goes out ea
     for (const phase of [0, 60, 125, 190]) {
       const ret = (sw, ack) => { const b = sw.find((x) => x.next === "back"); const f = b && sw.find((x) => x.next === "front" && x.t > b.t);
         return { back: b ? b.t : null, front: f ? Math.round(th(f.t - landAt(ack))) : null, n: sw.length }; };
-      /* out_land "0" throughout: this section measures the RETURN's pace rules; THE OUTBOUND LANDING (§3h) reads the pace too. */
-      const none = roomRun(rows, { phase, knobs: { out_land: "0" } });
-      const fast = roomRun(rows, { phase, lat: FAST, knobs: { out_land: "0" } });
-      const slowOff = roomRun(rows, { phase, lat: SLOW, knobs: { lat_lead: "0", back_gate: "0", out_land: "0" } });
-      const slowOn = roomRun(rows, { phase, lat: SLOW, knobs: { back_gate: "0", out_land: "0" } });
+      const none = roomRun(rows, { phase });
+      const fast = roomRun(rows, { phase, lat: FAST });
+      const slowOff = roomRun(rows, { phase, lat: SLOW, knobs: { lat_lead: "0", back_gate: "0" } });
+      const slowOn = roomRun(rows, { phase, lat: SLOW, knobs: { back_gate: "0" } });
       const fr = (sw) => { const b = sw.find((x) => x.next === "back"); const f = b && sw.find((x) => x.next === "front" && x.t > b.t); return f ? f.t : null; };
       res.push({ name, phase, same: JSON.stringify(none) === JSON.stringify(fast), noLater: fr(fast) !== null && fr(none) !== null && fr(fast) >= fr(none) - 25,   // m5 φ0: scheduled 10ms ahead of the side rule's next tick
         backSame: JSON.stringify(none.filter((x) => x.next === "back").slice(0, 1)) === JSON.stringify(fast.filter((x) => x.next === "back").slice(0, 1)),
