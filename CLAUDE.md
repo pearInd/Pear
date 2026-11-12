@@ -2286,6 +2286,27 @@ The fit sentence came from `getFitModifier()`'s table: the size step alone, "per
 - **Pinned:** `garment-fit` (the read, the model call, every rung, the gates, the lockstep). Unit suite green except `cloak`
   (esbuild's macOS binary in the Linux sandbox). `qa:visual` NOT run. The model's read of real photos NOT checked (no key here).
 
+
+### 7.26 An early FRONT the back votes overturn is a correction - "the back/front should be more consistent, smoother" (2026-11-12, Layer C) - NOT YET MEASURED ON THE ENGINE, NOT DEPLOYED
+
+- **Reported** with two clips (terminalx, TEST). The records: three 360s; two landed on time (BACK acked 201-218ms, FRONT at the
+  side). In the third (23:44) the shopper shifted on the spot at the back after one rising reading (-0.96, -0.79, then -0.57,
+  -0.77, -0.93): THE LANDING, PROJECTED had sent the FRONT on that reading - at that tick the same picture as the clean 23:42
+  turn (-1.03, -0.83) - and the front's logos sat on a back facing the lens. The engine asked for the BACK twice (14356, 14599);
+  the room dropped both on the swap cooldown the wrong FRONT had started.
+- **The rule** (`lib/orient-engine.js`, `fixEarlyFront()`, outside `step()`): a BACK decided while an early FRONT is still
+  unconfirmed by a front vote (the trigger's `pending.to === "front"`) goes out with `resetSwapCooldown` and as a predictive
+  BACK, so the FRONT that follows is not held by the cooldown either. Once per 4s. `?front_fix=0` is the rule before it
+  (knob lists in the engine and `fitting-room/app.js`, in lockstep).
+- **What it cannot change:** only a BACK the engine already decides, and only when it goes out. A 360 whose early FRONT is right
+  gets a front vote within a reading or two and no BACK is decided. Proven on the records: `test/return-side.test.mjs` §6
+  (fixture `test/return-side-fix.json`), the 9 TEST records of 2026-11-11 replay identically except 23:44, the engine replay
+  corpus is byte-identical, `scripts/measure-partial-turn.mjs`: 44/44 full 360s decide tick by tick as before.
+- **Not decided here, on purpose:** the early FRONT itself. At its tick the wobble and the clean turn are indistinguishable;
+  waiting a reading would land every clean 360's FRONT ~0.2s later.
+- **To measure (§7.1):** deploy the test Worker (`cloudflare/orient`, `wrangler deploy -c wrangler.preview.jsonc`), record 360s
+  incl. one with a pause at the back; then production Worker BEFORE the merge.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:

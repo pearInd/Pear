@@ -949,8 +949,56 @@ console.log("\n── §5 the wiring ──");
   check("§5.15 the sanitiser bounds latHi like lat; both knob lists carry back_gate", hj.latHi === null && hb.latHi === 5000 &&
     E.ORIENT_KNOB_KEYS.includes("back_gate") && /const ORIENT_KNOB_KEYS = \[[^\]]*"back_gate"/.test(APP));
   check("§5.16 the gate wraps step() from outside (the suites slice step() by text) and is what the engine exports",
-    /const gatedStep = \(s\) => gateBack\(s, step\(s\)\);/.test(ENGINE_SRC) && /return \{\s*\n\s*step: gatedStep,/.test(ENGINE_SRC) &&
+    /const gatedStep = \(s\) => gateBack\(s, step\(s\)\);/.test(ENGINE_SRC) && /const fixedStep = \(s\) => \{[^}]*fixEarlyFront\(s, [^;]*gatedStep\(s\)\);\s*\};/.test(ENGINE_SRC) && /return \{\s*\n\s*step: fixedStep,/.test(ENGINE_SRC) &&
     ENGINE_SRC.indexOf("function gateBack(") > ENGINE_SRC.indexOf("function armLine()"));
+}
+
+console.log("\n── §6 an early FRONT the back votes overturn is a correction (2026-11-12), from its own records ──");
+{
+  const FIX = JSON.parse(readFileSync(new URL("./return-side-fix.json", import.meta.url), "utf8")).sessions;
+  /* The room's side, modelled: the lock follows a swap that goes out; a swap inside the 1500ms cooldown is dropped unless
+     it is a FRONT after a predictive BACK (maybeSwap's withdrawal) or the engine reset the cooldown on that tick. */
+  const run = (ticks, knobs) => {
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
+    let lock = null, lastAt = -1e9, lastPred = false; const sent = [], dropped = [];
+    for (const k of ticks) {
+      const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
+        yawAbs: k.y, yawAt: k.y === null ? 0 : k.t - k.ya, lostAt: k.la === null ? 0 : k.t - k.la,
+        ord: k.o, ordAt: k.o === null ? 0 : k.t - (k.oa ?? 0), lat: k.lt, latHi: k.lh, lock, profile: !!k.p, dualView: !!k.d }));
+      for (const a of acts) {
+        if (a.do === "resetSwapCooldown") lastAt = -1e9;
+        if (a.do !== "swap") continue;
+        const t = k.t + (a.delay || 0);
+        if (lock === null && a.next === "front") { lock = "front"; continue; }
+        if (t - lastAt < 1500 && !(a.next === "front" && lastPred)) { dropped.push([k.t, a.next]); continue; }
+        if (a.next === lock) continue;
+        lock = a.next; lastAt = t; lastPred = a.predictive === true; sent.push([k.t, a.next, a.predictive === true]);
+      }
+    }
+    return { sent, dropped };
+  };
+  const before = run(FIX.wobble, { front_fix: "0" }), after = run(FIX.wobble, {});
+  check("§6.1 ?front_fix=0 replays what the session did: BACK, the early FRONT at 13881, and the BACK asked at 14356 and 14599 dropped on the cooldown",
+    JSON.stringify(before.sent.map((x) => [x[0], x[1]])) === JSON.stringify([[13154, "back"], [13881, "front"]]) &&
+    JSON.stringify(before.dropped) === JSON.stringify([[14356, "back"], [14599, "back"]]), JSON.stringify(before));
+  check("§6.2 the same BACK now goes out on the tick it is decided (14356), as a predictive one, and nothing is dropped",
+    JSON.stringify(after.sent.slice(0, 3)) === JSON.stringify([[13154, "back", true], [13881, "front", false], [14356, "back", true]]) &&
+    after.dropped.length === 0, JSON.stringify(after));
+  check("§6.3 ...and the FRONT that follows goes out as the body comes round (the 14842 reading, order -0.31) - not a cooldown later",
+    after.sent.length === 4 && after.sent[3][0] === 14842 && after.sent[3][1] === "front", JSON.stringify(after.sent));
+  const c0 = run(FIX.clean, { front_fix: "0" }), c1 = run(FIX.clean, {});
+  check("§6.4 a clean 360 (23:42) is the same with and without it: one BACK, one FRONT, the same ticks",
+    JSON.stringify(c0) === JSON.stringify(c1) && c1.sent.length === 2 && c1.dropped.length === 0, JSON.stringify({ c0, c1 }));
+  {
+    /* Bounded: the wobble twice within 4s - the second correction meets the cooldown as before. */
+    const twice = FIX.wobble.concat(FIX.wobble.filter((k) => k.t >= 12400).map((k) => ({ ...k, t: k.t + 2700 })));
+    const r = run(twice, {});
+    const fixes = r.sent.filter((x, i) => x[1] === "back" && i > 0 && r.sent[i - 1][1] === "front" && x[0] - r.sent[i - 1][0] < 1500);
+    check("§6.5 once per 4s: a second overturned FRONT inside it gets no second pass", fixes.length === 1, JSON.stringify(r));
+  }
+  check("§6.6 both knob lists carry front_fix; the trigger's own withdrawal keeps its single reset",
+    E.ORIENT_KNOB_KEYS.includes("front_fix") && /const ORIENT_KNOB_KEYS = \[[^\]]*"front_fix"/.test(APP) &&
+    /acts\.some\(\(a\) => a && a\.do === "resetSwapCooldown"\)\) return acts;/.test(ENGINE_SRC));
 }
 
 console.log(`\n${fails ? `✗ ${fails} failed` : "✓ all passed"}`);

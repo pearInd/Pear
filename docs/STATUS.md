@@ -41,6 +41,9 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 
 ## Waiting on you (manual steps)
 
+- [ ] **An overturned early FRONT passes the cooldown (CLAUDE.md §7.26)** — uncommitted, `lib/orient-engine.js` (+ knob list in
+  `fitting-room/app.js`). Unit + replay green; needs the test Worker deployed and 360s recorded (one with a pause at the back).
+  Open, found in the same records: on terminalx the widget hands the room 1 of 6 photos, so §7.24/§7.25 never act there.
 - [ ] **The fit read from the model's photo (CLAUDE.md §7.25)** — uncommitted, TEST sessions only. Deploy the test Worker
   (`cd cloudflare/orient && npx wrangler deploy -c wrangler.preview.jsonc`), push, then one TEST clip at the recommended size and
   one a size up; the record's `ctx.fit` / `ctx.delta` say what was read and sent. Decide after: open to shoppers or reword.
