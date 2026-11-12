@@ -8706,8 +8706,13 @@ async function maskReferenceBand(blob, url, band) {
    the photo's own backdrop. The orientation engine, the swap timing and the front reference are untouched: only the rear
    photo's pixels change. IT ABSTAINS - the rear goes exactly as before - without a box for either photo (no answer by
    go-live, a failed ask), in a full look, on a bottom, when the two already agree within REF_SCALE_MIN, or when the
-   re-encode is over 1.6x the photo. NOT YET MEASURED ON THE ENGINE: on for TEST sessions only (the store key TEST or
-   ?pear_trace=1); ?ref_scale=1 forces it on, ?ref_scale=0 off. A TEST record's ctx.ref says { did: "scaled", z }. */
+   re-encode is over 1.6x the photo. A TEST record's ctx.ref says { did: "scaled", z }.
+   OFF SINCE 2026-11-12, ?ref_scale=1 ONLY - the first session it ever acted in. Until that day no TEST session on this
+   jersey had sent the store's own rear (the room was handed one photo of six and a generated rear); with the whole gallery
+   the rear on a model went out redrawn x1.19 and the engine answered the swap to BACK with a torso filling the frame for
+   1.25s and then "This item is not supported" (the owner's clip PEAR-fit-1794476730393; the room: "the connection gave no
+   picture"). The same photos with ?ref_scale=0, twice, turned without either. Why a x1.19 redraw does that is NOT known -
+   so it is not on for anyone, a TEST session included, until it has been A/B'd with ?ref_scale=1. */
 const REF_SCALE_MIN = 0.06;        // a difference smaller than this is left alone
 const REF_SCALE_RANGE = [0.75, 1.4];
 function refScaleOn() {
@@ -8716,7 +8721,7 @@ function refScaleOn() {
     if (v === "0") return false;
     if (v === "1") return true;
   } catch (_) { return false; }
-  return typeof traceEnabled === "function" && traceEnabled();
+  return false;
 }
 /** Where to draw the rear photo so its garment box matches the front's: { z, dx, dy } - draw the photo z times its size
     with its top-left at (dx*W, dy*H) - or null when there is nothing worth doing. Pure. */

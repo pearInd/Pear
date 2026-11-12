@@ -2380,7 +2380,7 @@ turn; the return leg's rules send the FRONT 0.1-0.3s before the chest shows), wh
 - **Only `lib/orient-engine.js` changed** - neither bundle. **Needs a Worker deploy to reach production (§2.14)**, and by §7.1 a
   real-engine measurement first: a 90-degree look and back, a normal and a fast 360, frame by frame. Not done - no credits approved.
 
-### 7.27 The back at the front's size - "the shirt's length goes up and down during the turns" (2026-11-11, Layer B) - TEST SESSIONS ONLY, NOT YET MEASURED ON THE ENGINE
+### 7.27 The back at the front's size - "the shirt's length goes up and down during the turns" (2026-11-11, Layer B) - OFF (?ref_scale=1 only): FAILED ITS FIRST ENGINE SESSION 2026-11-12
 The owner's clip (a pink football jersey on terminalx, the turns themselves right): the hem at ~480px with the FRONT reference on
 the body, ~439 within one frame of the BACK landing (2.37 -> 2.40s), back down when the FRONT returned (3.27 -> 3.30s) - 13-15% of
 the shirt's length, at the two swaps and nowhere else. The store photos: the front a packshot whose garment box is 69% of the
@@ -2400,6 +2400,15 @@ numbers agree, the mechanism is not proven on the engine.
   except `cloak` (esbuild's macOS binary in the Linux sandbox this ran from). `qa:visual` NOT run.
 - **Next (the owner's idea, not built):** choose the size from a photo of the garment WORN, so the length is the real one and not
   merely the same on both sides - needs the engine's size-to-length response measured first (one garment at three sizes).
+
+- **MEASURED 2026-11-12, FAILED - now off for everyone.** The first session in which it acted (production b00cf88, TEST,
+  terminalx k088920001, the store's rear on a model, redrawn x1.19): on the swap to BACK the engine drew a torso filling the
+  frame for 1.25s, then "This item is not supported", and the room reported no picture (clip PEAR-fit-1794476730393). The same
+  photos by a direct link with `?ref_scale=0`, twice: the turn completed, neither symptom. `refScaleOn()` now returns false
+  unless `?ref_scale=1` (`garment-box` §10.7). **Not known:** why a x1.19 redraw does this (the head cut at the top edge? the
+  re-encode?) - no record was pulled. **Consequence:** the hem step at the swaps this section was written for (13-15% on this
+  jersey) is back whenever the rear is on a model and the front is a packshot. Open decision for the owner: A/B the redraw
+  again, shrink the front instead, or prefer a generated rear when the classifier says the back is plain.
 
 ### 7.28 The fit read from the model's photo - "the belly looks too big at the start, as if I had a paunch" (2026-11-12, Layers A+B) - TEST SESSIONS ONLY, NOT YET MEASURED ON THE ENGINE
 The owner, three TEST clips of the pink JUVENTUS jersey on terminalx (2026-11-11 15:20-15:21): the front of the first seconds
