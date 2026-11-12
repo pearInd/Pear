@@ -2307,6 +2307,24 @@ The fit sentence came from `getFitModifier()`'s table: the size step alone, "per
 - **To measure (§7.1):** deploy the test Worker (`cloudflare/orient`, `wrangler deploy -c wrangler.preview.jsonc`), record 360s
   incl. one with a pause at the back; then production Worker BEFORE the merge.
 
+
+### 7.27 One article, numbered photos - the gallery on terminalx was one photo of six (2026-11-12, Layer A) - TEST KEY ONLY, NOT YET MEASURED
+
+- **Found** while reading the TEST records for §7.24/§7.25: `ctx.fit = { why: "no-person", n: 2 }` and no real rear. The page
+  lists six photos (JSON-LD `Product.image`); the room got the packshot and a generated rear.
+- **Cause** (`widget/pear-widget.js`, `collectGalleryImages()`): Magento names them `<sku>-<n><timestamp>.jpg`
+  (`k088920001-11792932605`, `k088920001-21792932605`). `extractProductId()` takes the longest digit run - the part after the
+  dash, different per photo - and the id veto rejected five of six as "another product".
+- **The rule:** `sharesPhotoStem()` - same directory, same file name up to its first separator (6+ characters, a digit in it)
+  confirms the same article before the digits are asked. **Only under `data-pear-key="TEST"`**: with the whole gallery the
+  classifier picks the real rear (a photo with a model in it) instead of the generated one, which changes what a shopper sees
+  and has not been measured (§7.1). A store's key gets the wire it got.
+- **What it unlocks, in TEST:** §7.25's fit read gets worn photos (photos 2-4 answered regular/hip on the live route), §7.24's
+  scaling has a worn rear to act on.
+- **Pinned:** `widget-dom` O (the six reach the room; the next article's photo does not; a store's key is unchanged).
+- **To measure:** terminalx, TEST: `ctx.fit` carries a cut and hem; the belly at the recommended size and one up; the back
+  view with the store's own rear photo across a 360 (hem steady, no model pasted in). Then decide on lifting the TEST gate.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:

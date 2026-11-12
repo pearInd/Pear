@@ -41,9 +41,10 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 
 ## Waiting on you (manual steps)
 
-- [ ] **An overturned early FRONT passes the cooldown (CLAUDE.md §7.26)** — uncommitted, `lib/orient-engine.js` (+ knob list in
-  `fitting-room/app.js`). Unit + replay green; needs the test Worker deployed and 360s recorded (one with a pause at the back).
-  Open, found in the same records: on terminalx the widget hands the room 1 of 6 photos, so §7.24/§7.25 never act there.
+- [x] **An overturned early FRONT passes the cooldown (CLAUDE.md §7.26)** — `5a0cf16`, test Worker `d2ec3ba1`; the owner recorded
+  on the preview 2026-11-12: "works perfectly". Production Worker + main: pending the merge of main into this branch.
+- [ ] **The whole gallery on terminalx (CLAUDE.md §7.27)** — `widget/pear-widget.js`, TEST key only. Measure: `ctx.fit` reads a cut,
+  the belly at the recommended size, the store's real rear across a 360. Then decide on lifting the gate.
 - [ ] **The fit read from the model's photo (CLAUDE.md §7.25)** — uncommitted, TEST sessions only. Deploy the test Worker
   (`cd cloudflare/orient && npx wrangler deploy -c wrangler.preview.jsonc`), push, then one TEST clip at the recommended size and
   one a size up; the record's `ctx.fit` / `ctx.delta` say what was read and sent. Decide after: open to shoppers or reword.

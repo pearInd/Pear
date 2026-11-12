@@ -954,6 +954,19 @@
      Returns "" when no such run is found (e.g. filenames are plain words) -
      callers must treat that as "no signal" rather than "no match", so stores
      without numeric ids in their CDN paths aren't over-filtered. */
+  /** Two photo URLs in the same directory whose file names share everything up to the first separator - an article
+   *  code of 6+ characters with a digit in it ("k088920001-1…" / "k088920001-2…"). See collectGalleryImages(). Pure. */
+  function sharesPhotoStem(a, b) {
+    function parts(u) {
+      var path = String(u || "").split("?")[0].split("#")[0];
+      var cut = path.lastIndexOf("/");
+      if (cut === -1) return null;
+      var stem = path.slice(cut + 1).split(/[-_.]/)[0].toLowerCase();
+      return { dir: path.slice(0, cut).toLowerCase(), stem: stem };
+    }
+    var x = parts(a), y = parts(b);
+    return !!x && !!y && x.dir === y.dir && x.stem === y.stem && x.stem.length >= 6 && /\d/.test(x.stem);
+  }
   function extractProductId(url) {
     if (!url) return "";
     /* SFCC paths carry a per-asset cache segment ("/dw1a2b3c4d/") - a hex hash, not an
@@ -1341,6 +1354,13 @@
       if (seenPaths.indexOf(path) !== -1) return;
       if (!isPrimary) {
         var confirmedByShopifyId = shopifyId && u.indexOf(shopifyId) !== -1;
+        /* ONE ARTICLE, NUMBERED PHOTOS (2026-11-12, TEST key only until measured - CLAUDE.md §7.27). terminalx (Magento)
+           names a product's photos <sku>-<n><timestamp>.jpg in one directory: k088920001-11792932605, k088920001-21792932605.
+           The digits after the dash are the longest run, so extractProductId() read a different "id" on each and the veto
+           below threw out five of the six photos as another product's - the room got the packshot alone: no real rear,
+           no worn photo for the fit read or the hem. The same directory and the same name up to its first separator IS
+           the same article, said by the store's own naming; that confirms before the digits are asked. */
+        if (!confirmedByShopifyId && STORE_KEY === "TEST" && sharesPhotoStem(primaryUrl, u)) confirmedByShopifyId = true;
         if (!confirmedByShopifyId) {
           var candId = extractProductId(u);
           if (primaryRegexId && candId && candId !== primaryRegexId) {
