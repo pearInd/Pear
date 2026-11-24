@@ -2317,7 +2317,12 @@ engine (no Worker deploy). Unit, build, `qa:visual` 40/40 green, `trace:prompt` 
 is one session: does the render hold through 5-8s (the engine has never been watched past 5s here), and does the countdown
 end with the clip.
 
-### 7.28 The half turn - the return arms when the vote and the order confirm the back together (2026-11-24, Layer C) - NOT YET MEASURED ON THE ENGINE
+### 7.28 The half turn - the return arms when the vote and the order confirm the back together (2026-11-24, Layer C) - REVERTED THE SAME EVENING
+**Reverted** at the owner's request ("find when I said everything works perfectly, including the garment's length and the turn, and
+do it that way"): the last such approval is 5a0cf16 on 2026-11-12 (the preview, test Worker d2ec3ba1 - after the 11-11 length
+report and its fix §7.24); 97089a8's "works perfectly" (11-08) predates the length report. `lib/orient-engine.js` and `return-side`
+are 5a0cf16's again; the Worker is rolled back to 1ce110ae (deployed from that tree). Kept: the 8s window (§7.27). What follows is
+what was tried, kept so it is not re-tried blind.
 "Fix the angles so it works smoothly" - the owner's 17:21:32 clip + TEST record (mwuue58l): a turn to ~130 degrees that came back
 the way it went. Frame by frame: the print left a three-quarter chest at 2.75s (an "open shirt" to ~3.0s) and came back only at
 4.25s, the chest plain at ~45-60 degrees 4.10-4.20s. The record: the early BACK on the order 0.35 (|yaw| 71); the back vote and

@@ -1001,37 +1001,5 @@ console.log("\n── §6 an early FRONT the back votes overturn is a correction
     /acts\.some\(\(a\) => a && a\.do === "resetSwapCooldown"\)\) return acts;/.test(ENGINE_SRC));
 }
 
-console.log("\n── §7 THE HALF TURN - the return armed when the vote and the order confirm the back together (2026-11-24) ──");
-{
-  /* The owner's 17:21 sessions: a turn to ~130 degrees and back the same way (the order -0.06 -> -0.53 in one reading, the
-     back vote on that same reading, |yaw| 60-89 throughout), and a full 360 seconds earlier. The lock follows the engine. */
-  const HT = JSON.parse(readFileSync(new URL("./return-side-halfturn.json", import.meta.url), "utf8")).sessions;
-  const run = (ticks, knobs = { early_turn: "50", early_turn_slow: "50" }) => {
-    const engine = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
-    let lock = null; const sent = [];
-    for (const k of ticks) {
-      if (lock === null) lock = k.l ?? null;
-      const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
-        yawAbs: k.y, yawAt: k.y === null ? 0 : k.t - k.ya, lostAt: k.la === null ? 0 : k.t - k.la,
-        ord: k.o, ordAt: k.o === null ? 0 : k.t - (k.oa ?? 0), lat: k.lt, latHi: k.lh, lock, profile: !!k.p, dualView: !!k.d }));
-      for (const a of acts) if (a.do === "swap") {
-        if (lock === null && a.next === "front") { lock = "front"; continue; }
-        if (a.next !== lock) { sent.push([k.t + (a.delay || 0), a.next, k.o]); lock = a.next; }
-      }
-    }
-    return sent;
-  };
-  const half = run(HT.halfTurn), main0 = run(HT.halfTurn, { early_turn: "50", early_turn_slow: "50", return_side: "0" });
-  check("§7.1 the half turn: the same BACK (10720, order 0.35), and the FRONT on the chest rule at 0.28 (11916) - not the shoulder votes at 0.71 (12232)",
-    JSON.stringify(half) === JSON.stringify([[10720, "back", 0.35], [11916, "front", 0.28]]), JSON.stringify(half));
-  check("§7.2 ?return_side=0 is main's return exactly: the FRONT on the votes at 0.71, as the session sent it",
-    JSON.stringify(main0) === JSON.stringify([[10720, "back", 0.35], [12232, "front", 0.71]]), JSON.stringify(main0));
-  const full = run(HT.full);
-  check("§7.3 the full 360 a few seconds earlier is untouched: BACK at 0.37, the projected FRONT at -0.63 (+50ms)",
-    JSON.stringify(full) === JSON.stringify([[11427, "back", 0.37], [13102, "front", -0.63]]), JSON.stringify(full));
-  check("§7.4 the half-turn arm stands aside when the re-arm below arms on the same tick (|yaw| under the return threshold), and needs a NEW order reading on the back half",
-    /const halfTurn = lock === pending\.to && pending\.to === "back" && sideOrder > 0 && orderSeen && newOrd &&\s*ord <= -ORDER_CONFIRMS && !\(fresh && yawAbs < thresholdFor\(lock\)\);/.test(ENGINE_SRC));
-}
-
 console.log(`\n${fails ? `✗ ${fails} failed` : "✓ all passed"}`);
 process.exit(fails ? 1 : 0);
