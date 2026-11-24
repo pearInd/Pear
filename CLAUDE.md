@@ -2355,6 +2355,12 @@ the arms away from the body - so the engine's cold state is a likely part of it,
 - **Why a guess, stated:** the front is the same image at the start and after the turn, so the reference's bytes are not what differs;
   the factor is the only reference lever left, and 0.82 is a first value, not a measured one. If the start is still huge with it, the
   cause is the engine's cold state and the next levers are the reveal (hold until it settles) and the prompt - neither tried.
+- **Measured 2026-11-24 18:38-18:39 (two TEST sessions, 0.82, `ctx.ref` {did: "fit", z 0.82 / 0.814}):** "the length improved". The swaps
+  are clean and the angles right: the back print leaves at 2.70s (~75 degrees) and returns at 4.95s (~60), acked 320-394ms, no stall; the
+  length holds at the hip. What is left is the TENT - the hem pulled out to the hands whenever the arms leave the body (second clip
+  0.8-2.0s, 4.4-6.0s) - plus the shopper walking up to the lens at the end (input, not render). So the default is **0.74** (the same night,
+  not yet measured). The wire prompt's "adapt the garment drape to the subject's exact silhouette" (the anchor, P.CORE) is the other suspect
+  for the tent and was not touched: prompt clauses failed twice (§7.10, §2.38).
 - **The check (§7.1):** one TEST session per value - `ctx.ref` must say `fit`; the start must match the settled shirt, no swap may
   change its size, the back print on the back only. Worse on any frame: off (`?ref_fit=0` is the old behaviour).
 

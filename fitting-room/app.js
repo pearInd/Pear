@@ -8776,7 +8776,13 @@ async function scaleRearToFront(blob, url) {
    TEST sessions (the store key TEST or ?pear_trace=1); ?ref_fit=1 forces it on, ?ref_fit=0 off; ?ref_fit_s=<0.5-1.2> sets the factor.
    When it is on, scaleRearToFront() (the rear matched to the front's size) stands aside - this is that, for both. A TEST record's
    ctx.ref says { did: "fit", z, s }. */
-const REF_FIT_SCALE_DEFAULT = 0.82;
+/* 0.82 -> 0.74 (2026-11-24, the owner's 18:38-18:39 sessions, record ctx.ref {did:"fit", z:0.82}): "the length improved - stricter,
+   it must not jump at all". Frame by frame at 0.82: the swaps are clean (the back print leaves at 2.70s on a body ~75 degrees round
+   and returns at 4.95s on ~60, acked 320-394ms, no stall) and the length holds at the hip; what is left is the TENT - the hem pulled
+   out to the hands whenever the arms leave the body a little (0.8-2.0s and 4.4-6.0s of the second clip) - and a smaller garment in
+   the reference is the lever that narrowed it. The wire prompt's "adapt the garment drape to the subject's exact silhouette" is the
+   other suspect and is NOT touched (prompt clauses have failed twice: a bare chest, a crop top - §7.10, §2.38). */
+const REF_FIT_SCALE_DEFAULT = 0.74;
 function refFitOn() {
   try {
     const v = new URLSearchParams(location.search).get("ref_fit");
