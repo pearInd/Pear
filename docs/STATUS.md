@@ -4,7 +4,9 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-11-24 · **working tree on main (0a04764 + uncommitted):** the measurement window is **8s instead of 5s** (`LIVE_DURATION_MS`/`VIDEO_LENGTH_MS` in `fitting-room/app.js`; the countdown, billing stop and clip follow; the re-anchor cadence stays 625ms; CLAUDE.md §7.27) - **16 credits a session instead of 10**. Unit suite, build and `qa:visual` (40/40) green, `trace:prompt` byte-identical; **not measured on the real engine yet** (§7.1). The new render-engine key is in the local `.env` and mints a token; **Vercel (Production + Preview) still has the old one** - yours to set, then redeploy. No Worker deploy needed._
+_Last updated: 2026-11-24 (17:30) · **main = 9c4769a, live on app.pear-ai.io (dpl_4dysdi8M…, the countdown reads 8)** - the 8s window; Vercel's `DECART_API_KEY` updated by you at 17:12 and in that deployment. **Working tree, uncommitted:** the half turn (CLAUDE.md §7.28, `lib/orient-engine.js` + `return-side` §7) - the return now arms on a turn to the side that comes back; replayed on your 17:21:32 record the FRONT goes out 310ms sooner, full 360s identical. **Needs a `wrangler deploy`**; not measured on the engine._
+
+_Earlier: 2026-11-24 · **working tree on main (0a04764 + uncommitted):** the measurement window is **8s instead of 5s** (`LIVE_DURATION_MS`/`VIDEO_LENGTH_MS` in `fitting-room/app.js`; the countdown, billing stop and clip follow; the re-anchor cadence stays 625ms; CLAUDE.md §7.27) - **16 credits a session instead of 10**. Unit suite, build and `qa:visual` (40/40) green, `trace:prompt` byte-identical; **not measured on the real engine yet** (§7.1). The new render-engine key is in the local `.env` and mints a token; **Vercel (Production + Preview) still has the old one** - yours to set, then redeploy. No Worker deploy needed._
 
 _Earlier: 2026-11-12 (evening) · **main = 0a04764, tree = 5a0cf16, reverted from ff2a5ea at the owner's request** (5a0cf16 is the last build the owner measured and approved, "works perfectly", on the branch preview with test Worker d2ec3ba1; b00cf88, 7a240ab and ff2a5ea made the room worse for him). **Production Worker pear-orient 1ce110ae-4011-44ee-b6ee-4a4dd49273a7**, deployed BEFORE main; `rt.pear-ai.io/size` answers X-Pear-Api a867dcc5e62d4ea5, and the served room carries the same. Vercel production READY on 0a04764 (dpl_9DTfbqdssrkh97tghhW7PXq78y1z), aliased to app.pear-ai.io. **Rollback target:** ff2a5ea (kept on `feat/prompt-off-browser-pregen-backs`) + Worker b96af6a1-8673-424b-bbfc-626c57e7646e. What leaves production with the revert: main's §7.23 garment kinds (TEST only), §7.24 return floor 430, §7.25 outbound landing, the terminalx whole-gallery widget fix (bb2e099) and 7a240ab's rear-redraw switch-off. At 5a0cf16 the redraw is on in TEST sessions; a shopper's session never had it._
 
@@ -45,10 +47,10 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 
 ## Waiting on you (manual steps)
 
-- [ ] **The new render-engine key in Vercel (2026-11-24)** — set `DECART_API_KEY` in the Vercel project (Production and
-  Preview) to the key you gave, then redeploy (a changed env var reaches only a new deployment). The local `.env` already has it.
-- [ ] **The 8-second measurement (CLAUDE.md §7.27)** — uncommitted on main. Approve one real-engine session (16 credits) to
-  check it frame by frame (§7.1), then commit + push to main (no Worker deploy: only `fitting-room/` changed).
+- [x] **The new render-engine key in Vercel (2026-11-24)** — updated by you at 17:12 (Production + Preview); live with 9c4769a.
+- [x] **The 8-second measurement (CLAUDE.md §7.27)** — on main 9c4769a and live. Still to see on a real session: the render holding 5-8s.
+- [ ] **The half turn (CLAUDE.md §7.28)** — uncommitted. Approve: commit, `cd cloudflare/orient && npx wrangler deploy`, then a
+  session turning to the side and back (and a normal 360). The outbound BACK landing at ~52 degrees is a separate decision (§7.6).
 - [ ] **An overturned early FRONT passes the cooldown (CLAUDE.md §7.26)** — uncommitted, `lib/orient-engine.js` (+ knob list in
   `fitting-room/app.js`). Unit + replay green; needs the test Worker deployed and 360s recorded (one with a pause at the back).
   Open, found in the same records: on terminalx the widget hands the room 1 of 6 photos, so §7.24/§7.25 never act there.

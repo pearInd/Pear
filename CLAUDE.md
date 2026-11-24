@@ -2317,6 +2317,22 @@ engine (no Worker deploy). Unit, build, `qa:visual` 40/40 green, `trace:prompt` 
 is one session: does the render hold through 5-8s (the engine has never been watched past 5s here), and does the countdown
 end with the clip.
 
+### 7.28 The half turn - the return arms when the vote and the order confirm the back together (2026-11-24, Layer C) - NOT YET MEASURED ON THE ENGINE
+"Fix the angles so it works smoothly" - the owner's 17:21:32 clip + TEST record (mwuue58l): a turn to ~130 degrees that came back
+the way it went. Frame by frame: the print left a three-quarter chest at 2.75s (an "open shirt" to ~3.0s) and came back only at
+4.25s, the chest plain at ~45-60 degrees 4.10-4.20s. The record: the early BACK on the order 0.35 (|yaw| 71); the back vote and
+the order's first back-half reading (-0.06 -> -0.53) on the SAME reading, so the vote cleared the pending BACK and the back-half
+rule (§2.37) never armed the return; the re-arm needs |yaw| under the return threshold, and the look stayed at 60-89 - the FRONT
+went out only on the shoulder votes at 0.71 (12232). `makeEarlyTurnTrigger` (THE HALF TURN): a back vote on a NEW order reading
+at or past -ORDER_CONFIRMS arms the return there, unless the re-arm arms on that same tick (|yaw| under the threshold) - so a 360
+that reaches the back square arms exactly as before. Replayed: the FRONT on the chest rule at 0.28 (11916), 310ms sooner; the full
+360 of 17:21:14 unchanged; `?return_side=0` is the old return. `measure-partial-turn`: 44/44 full 360s tick-identical at peaks
+100/120/130/150; the modelled partial turns (228 runs) return exactly as before (their order crosses -0.2 a reading before the
+vote does, so the back-half rule already armed them). `return-side` §7 (fixture `test/return-side-halfturn.json`).
+NOT changed, the owner's call: the outbound BACK still goes out on the first reading past 50 (§7.4) and lands on frames ~0.2s
+older (§2.36) - in this clip on a body at ~52 degrees (the open shirt at 2.75s). `?ref_back_delay=200` (§7.6, off since 10-18)
+is the lever; replayed it would land ~70. **Needs a `wrangler deploy`** (the engine runs in the Worker; the room is unchanged).
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:
