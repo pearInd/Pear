@@ -2339,6 +2339,25 @@ older (§2.36) - in this clip on a body at ~52 degrees (the open shirt at 2.75s)
 is the lever; replayed it would land ~70. Deployed: main dae5cc7, Worker 5364c65d (rollback 1ce110ae), verified by replaying
 the two records over wss://rt.pear-ai.io/orient.
 
+### 7.29 The garment's size in the reference - "the shirt starts huge and then settles" (2026-11-24, Layer B) - TEST SESSIONS ONLY, AN EXPERIMENT, NOT YET MEASURED ON THE ENGINE
+The owner (three PEAK/Wings sessions 18:11-18:16 on the 11-12 turn, "the angles are good"): "the length keeps changing - at the start it's
+huge, then it settles; I want the garment's size and length not to change at all". Frame by frame (clips + records mwuw6uik..mwuwbmse):
+every session opens on a boxy tent-wide tee (hem out to the hands) for ~2.5s, then it narrows to the shirt the shopper keeps from the
+turn on - the FRONT sent at ~3s is the very image the session opened on, and the swaps (acked 200-400ms, rendered 210-470ms) landed
+right. The start also varies by session: the 17:21 session of the same product opened normal, with the arms down; these three had
+the arms away from the body - so the engine's cold state is a likely part of it, which a reference cannot fix.
+- **The lever tried (`fitReferenceBox()`, `refFitPlan()`, app.js after `scaleRearToFront`):** a single TOP's front AND rear photos are
+  redrawn so the garment's box (the server's) has the SAME height in both - the front's own times `REF_FIT_SCALE_DEFAULT` (0.82) - and
+  the same centre; one factor per photo, the backdrop painted. It abstains without a box, in a full look, on a bottom, under 3%.
+  TEST sessions (key TEST or `?pear_trace=1`); `?ref_fit=1/0` forces, `?ref_fit_s=0.5-1.2` sets the factor; `scaleRearToFront` stands aside
+  while it is on. A TEST record's `ctx.ref` says `{ did: "fit", z, s }`. The orientation engine, the swap timing, the prompt and the
+  Worker are untouched (no deploy). `garment-box` §11.
+- **Why a guess, stated:** the front is the same image at the start and after the turn, so the reference's bytes are not what differs;
+  the factor is the only reference lever left, and 0.82 is a first value, not a measured one. If the start is still huge with it, the
+  cause is the engine's cold state and the next levers are the reveal (hold until it settles) and the prompt - neither tried.
+- **The check (§7.1):** one TEST session per value - `ctx.ref` must say `fit`; the start must match the settled shirt, no swap may
+  change its size, the back print on the back only. Worse on any frame: off (`?ref_fit=0` is the old behaviour).
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:

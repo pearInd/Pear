@@ -399,5 +399,44 @@ console.log("\n── §10 THE BACK AT THE FRONT'S SIZE (2026-11-11) ──");
     /if \(!plan\) return blob;/.test(scaleFn));
 }
 
+console.log("\n── §11 THE SAME GARMENT BOX IN BOTH PHOTOS (2026-11-24, TEST sessions only) ──");
+{
+  const span = APP.slice(APP.indexOf("const REF_FIT_SCALE_DEFAULT"), APP.indexOf("/** The front photo of the single TOP this URL belongs to"));
+  const mk = (search, test) => new Function("location", "traceEnabled", span + "\nreturn { refFitPlan, refFitOn, refFitScale, REF_FIT_SCALE_DEFAULT };")({ search }, () => test);
+  const { refFitPlan: plan, REF_FIT_SCALE_DEFAULT: S } = mk("", true);
+  const front = { y0: 0.1, x0: 0.15, y1: 0.9, x1: 0.85 }, back = { y0: 0.24, x0: 0.2, y1: 0.82, x1: 0.78 };
+  const pf = plan(front, front, 0.82), pb = plan(back, front, 0.82);
+  const at = (b, p, k, axis) => b[k] * p.z + (axis === "y" ? p.dy : p.dx);
+  const h = (b, p) => (b.y1 - b.y0) * p.z;
+  check("§11.1 both photos end with the SAME garment height - the front's own times the factor",
+    !!pf && !!pb && Math.abs(h(front, pf) - 0.8 * 0.82) < 0.004 && Math.abs(h(back, pb) - 0.8 * 0.82) < 0.004, JSON.stringify({ pf, pb }));
+  const c = (b, p) => [(at(b, p, "x0", "x") + at(b, p, "x1", "x")) / 2, (at(b, p, "y0", "y") + at(b, p, "y1", "y")) / 2];
+  check("§11.2 ...and the same centre (the front box's), one factor for both axes (never a stretch)",
+    Math.abs(c(front, pf)[0] - c(back, pb)[0]) < 0.004 && Math.abs(c(front, pf)[1] - c(back, pb)[1]) < 0.004 && Object.keys(pb).sort().join() === "dx,dy,z");
+  check("§11.3 it abstains: no change worth making (under 3%), a missing or degenerate box, a bad factor",
+    plan(front, front, 1) === null && plan(front, front, 0.99) === null && plan(front, null, 0.82) === null && plan(null, front, 0.82) === null &&
+    plan(front, { y0: 0.4, x0: 0.2, y1: 0.5, x1: 0.8 }, 0.82) === null && plan(front, front, 0) === null && plan(front, front, NaN) === null);
+  const big = plan({ y0: 0.4, x0: 0.3, y1: 0.55, x1: 0.7 }, { y0: 0.02, x0: 0.02, y1: 0.98, x1: 0.98 }, 1.2);
+  check("§11.4 bounded: never more than 1.45x, and a garment stays whole inside the photo", !!big && big.z <= 1.45 && big.z <= 0.98 / 0.4 + 0.001 &&
+    0.3 * big.z + big.dx >= 0.009 && 0.7 * big.z + big.dx <= 0.991, JSON.stringify(big));
+  check("§11.5 the plan stays inside the photo for both", [[front, pf], [back, pb]].every(([b, p]) =>
+    at(b, p, "y0", "y") >= 0.009 && at(b, p, "y1", "y") <= 0.991 && at(b, p, "x0", "x") >= 0.009 && at(b, p, "x1", "x") <= 0.991));
+  check("§11.6 TEST sessions only until measured: off for a shopper, on for TEST, ?ref_fit=1 forces on, =0 off; ?ref_fit_s= bounded 0.5-1.2",
+    mk("", false).refFitOn() === false && mk("", true).refFitOn() === true && mk("?ref_fit=1", false).refFitOn() === true && mk("?ref_fit=0", true).refFitOn() === false &&
+    mk("?ref_fit_s=0.7", true).refFitScale() === 0.7 && mk("?ref_fit_s=3", true).refFitScale() === S && mk("?ref_fit_s=x", true).refFitScale() === S);
+  const blobFn = fnSrc("function garmentBlobCached(url) {");
+  check("§11.7 it runs after the rear scaling and before the pre-encode, typeof-guarded - what is encoded is what is sent",
+    blobFn.indexOf("scaleRearToFront(normalized, url)") < blobFn.indexOf("fitReferenceBox(normalized, url)") &&
+    blobFn.indexOf("fitReferenceBox(normalized, url)") < blobFn.indexOf("preEncodeReference(blob)") && /typeof fitReferenceBox === "function"/.test(blobFn));
+  const scaleFn = fnSrc("async function scaleRearToFront(blob, url) {"), fitFn = fnSrc("async function fitReferenceBox(blob, url) {"), frontFn = fnSrc("function referenceFitFront(url) {");
+  check("§11.8 the rear-to-front scaling stands aside while it is on (never a second redraw of the same photo)",
+    /refFitOn\(\)\) return blob;/.test(scaleFn));
+  check("§11.9 only a single TOP's front or distinct rear (never a full look, a bottom), matched with sameImage() (§2.2)",
+    /resolveLook\(\)/.test(frontFn) && /isBottomsGarment\(it\)/.test(frontFn) && /sameImage\(front, url\)/.test(frontFn) && !/===\s*url|url\s*===/.test(frontFn));
+  check("§11.10 a failure or no plan sends the photo as it was; the orientation engine is not named",
+    /if \(!plan\) return blob;/.test(fitFn) && /catch \(e\) \{\s*\n\s*refMaskNote\(\{ did: "unfit", why: "failed" \}\);[\s\S]*?return blob;/.test(fitFn) &&
+    !/orient|swap|maybeSwap|effectiveAngle/i.test(fitFn));
+}
+
 console.log(fails === 0 ? "\ngarment-box: OK" : `\ngarment-box: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);
