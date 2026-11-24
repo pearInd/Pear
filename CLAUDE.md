@@ -2331,7 +2331,8 @@ that reaches the back square arms exactly as before. Replayed: the FRONT on the 
 vote does, so the back-half rule already armed them). `return-side` §7 (fixture `test/return-side-halfturn.json`).
 NOT changed, the owner's call: the outbound BACK still goes out on the first reading past 50 (§7.4) and lands on frames ~0.2s
 older (§2.36) - in this clip on a body at ~52 degrees (the open shirt at 2.75s). `?ref_back_delay=200` (§7.6, off since 10-18)
-is the lever; replayed it would land ~70. **Needs a `wrangler deploy`** (the engine runs in the Worker; the room is unchanged).
+is the lever; replayed it would land ~70. Deployed: main dae5cc7, Worker 5364c65d (rollback 1ce110ae), verified by replaying
+the two records over wss://rt.pear-ai.io/orient.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
