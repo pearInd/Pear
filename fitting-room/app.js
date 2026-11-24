@@ -163,7 +163,7 @@ function showDemoGateLockedMessage() {
    so the credits consumed per session are deterministic:
 
       credits/session = CREDITS_PER_SECOND × (LIVE_DURATION_MS / 1000)
-                      = 2 × (5000 / 1000) = 10 credits per 5-second session.
+                      = 2 × (8000 / 1000) = 16 credits per 8-second session (10 for the 5s window before 2026-11-24).
 
    ⚠️ CRITICAL - the SDK does NOT honour model.fps / model.width / model.height on
    Chromium. Its mirror path uses MediaStreamTrackProcessor (passes every frame
@@ -184,8 +184,11 @@ function showDemoGateLockedMessage() {
    bridges a Decart output stall. It changes nothing on the wire: createThrottledInputStream()
    repaints at exactly LIVE_INFERENCE_FPS whatever the camera delivers, and it no longer
    asks the shared camera for a lower rate (see its applyConstraints note). */
-const LIVE_DURATION_MS    = 5000;   // BILLED Decart window = 5s → hard-capped session; 2 credits/s × 5s = 10 credits
-const VIDEO_LENGTH_MS     = 5000;   // == LIVE_DURATION_MS → frozen-hold tail is zero; the 5s clip is all real live motion
+/* 5s -> 8s (2026-11-24, the owner's decision): "the measurement time 8 seconds instead of 5". The countdown, the
+   billing stop, the clip and CREDITS_PER_SESSION all follow from these two; REANCHOR_MS keeps its 5s-era cadence
+   (see its own note). A session now costs 16 credits instead of 10. */
+const LIVE_DURATION_MS    = 8000;   // BILLED Decart window = 8s → hard-capped session; 2 credits/s × 8s = 16 credits
+const VIDEO_LENGTH_MS     = 8000;   // == LIVE_DURATION_MS → frozen-hold tail is zero; the 8s clip is all real live motion
 const LIVE_FPS            = 60;     // local getUserMedia capture rate (mirror-smooth preview; throttled to LIVE_INFERENCE_FPS)
 const LIVE_INFERENCE_FPS  = 10;     // frames/s handed to Decart - trims per-frame upload/encode; credits are per-SECOND, not per-frame
                                     //   ENFORCED client-side by createThrottledInputStream() - the SDK's own fps cap is a no-op on Chromium.
@@ -193,9 +196,9 @@ const LIVE_INFERENCE_FPS  = 10;     // frames/s handed to Decart - trims per-fra
 /* ── Credit model (Decart bills per second of generation) ────────────────────
    CREDITS_PER_SECOND is the Decart rate; CREDITS_PER_SESSION is DERIVED from the
    hard-capped LIVE_DURATION_MS so the two can never drift - change the duration and
-   the per-session cost recomputes automatically. A 5-second session = exactly 10. */
+   the per-session cost recomputes automatically. An 8-second session = exactly 16 (a 5-second one was 10). */
 const CREDITS_PER_SECOND  = 2;
-const CREDITS_PER_SESSION = CREDITS_PER_SECOND * (LIVE_DURATION_MS / 1000);   // 2 × 5 = 10 credits
+const CREDITS_PER_SESSION = CREDITS_PER_SECOND * (LIVE_DURATION_MS / 1000);   // 2 × 8 = 16 credits
 
 /* Safety cap on the wait for Decart's FIRST generated frame. The billed window
    (LIVE_DURATION_MS) is now armed BY that first frame, not by connect - so if a frame
@@ -10018,13 +10021,16 @@ const ORIENT_PROFILE_COOLDOWN_MS = 1200;
    stronger anchor - which this API does not offer a way to send - would.
 
    The floor is a chatter guard for a hypothetical very short window; at LIVE_DURATION_MS
-   =5000 this resolves to 625ms (~8 re-anchors per session). Each rides setPrompt(): a
+   =5000 this resolves to 625ms (~8 re-anchors per session). THE 8s WINDOW (2026-11-24) KEEPS 625ms: the
+   cadence is capped at the 5s window's, so the first five seconds of a session put on the wire exactly what
+   the approved 5s build did (a longer window must not thin the re-anchors the turn was measured with) - ~13
+   re-anchors in 8s. Each rides setPrompt(): a
    small control message, no image bytes (see applyGarment()'s flicker-fix comment), so
    the cost of the extra frequency is negligible and does NOT re-upload the reference -
    the specific technique this file already ruled out re-sending the IMAGE periodically
    for (a full re-upload risks the same mid-stream glitch the flicker fix exists to
    prevent, whether or not the image content actually changed). */
-const REANCHOR_MS = Math.max(500, Math.round(LIVE_DURATION_MS / 8));
+const REANCHOR_MS = Math.max(500, Math.round(Math.min(LIVE_DURATION_MS, 5000) / 8));
 /* ── Foreshortening (silhouette width) thresholds ─────────────────────────────
    Measured RELATIVE to the shopper's own square-on width, never as an absolute pixel
    count: absolute width depends on how far they stand from the lens, their build, and the

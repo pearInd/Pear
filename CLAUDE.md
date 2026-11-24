@@ -2307,6 +2307,16 @@ The fit sentence came from `getFitModifier()`'s table: the size step alone, "per
 - **To measure (§7.1):** deploy the test Worker (`cloudflare/orient`, `wrangler deploy -c wrangler.preview.jsonc`), record 360s
   incl. one with a pause at the back; then production Worker BEFORE the merge.
 
+### 7.27 The measurement is 8 seconds (2026-11-24, the owner's decision) - NOT YET MEASURED ON THE ENGINE
+"Make the measurement time 8 seconds instead of 5." `LIVE_DURATION_MS` and `VIDEO_LENGTH_MS` (`fitting-room/app.js`) are 8000; the
+countdown, the billing stop (`liveDurationTimer`), the recorded clip and `CREDITS_PER_SESSION` (16, was 10) derive from them, and
+`#liveCountdownNum`'s placeholder reads 8. Every "5s window" in this file and the code's comments is now an 8s one. Kept on
+purpose: `REANCHOR_MS` stays 625ms (`Math.min(LIVE_DURATION_MS, 5000) / 8`), so the first five seconds put on the wire exactly
+what the 5s build did. Unchanged: the edge's 90s session cap (§2.32), the token lifetime, the reveal gates, the orientation
+engine (no Worker deploy). Unit, build, `qa:visual` 40/40 green, `trace:prompt` byte-identical. The real-engine check (§7.1)
+is one session: does the render hold through 5-8s (the engine has never been watched past 5s here), and does the countdown
+end with the clip.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:
