@@ -234,8 +234,11 @@ console.log("\n── §4 IT RIDES AT P.CORE - PROMOTED, AND THAT REVERSES AN EA
     /\[P\.MED, fitSentence\(/.test(resolver) &&
     resolver.indexOf("P.CORE, identityLockSentence") < resolver.indexOf("P.MED, fitSentence"),
     "fitPrompt() breaks priority ties by array position, so the order is part of the guarantee");
-  check("...and nothing was left at P.LOW or P.TRIM on this branch",
-    !/\[P\.LOW,/.test(resolver) && !/\[P\.TRIM,/.test(resolver),
+  /* 2026-11-25: ONE P.LOW part is allowed - the hem clause, behind its own request flag (CLAUDE.md §7.30), so it is shed
+     before the fit sentence. Anything else at a lower tier still means a partial promotion. */
+  check("...and nothing was left at P.LOW or P.TRIM on this branch but the flagged hem clause",
+    (resolver.match(/\[P\.LOW,/g) || []).length === 1 && /\[\[P\.LOW, HEM_EDGE_LOCK\]\]/.test(resolver) &&
+    /_requestHemEdge === true && !bottoms/.test(resolver) && !/\[P\.TRIM,/.test(resolver),
     "a leftover lower tier would mean the promotion was partial");
 }
 

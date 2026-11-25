@@ -108,5 +108,18 @@ console.log("── §4 the room and the endpoint ──");
   check("only a verdict is cached", /if \(out\.source === "ai"\) \{\n    _garmentFitMemo\.set/.test(route) && /"no-store"/.test(route));
 }
 
+console.log("\n── THE HEM AS ONE EDGE - its own request flag (CLAUDE.md §7.30) ──");
+{
+  const E = await import(new URL("../lib/prompts.js", import.meta.url).href);
+  const item = { name: "חולצה עם הדפס", type: "tops", category: "top", __bottoms: 0 };
+  const w = (o) => E.promptForRequest(E.sanitizePromptRequest({ item, angle: "front", delta: 0, ...o }));
+  check("the hem clause needs hemEdge: neither a shopper nor `test` alone carries it",
+    !w({}).includes("continuous edge") && !w({ test: true }).includes("continuous edge") && w({ test: true, hemEdge: true }).includes("continuous edge"));
+  check("tops on both sides, never a bottom, within the budget",
+    ["front", "back"].every((angle) => { const p = w({ angle, test: true, hemEdge: true }); return p.includes("continuous edge") && p.length <= 650; }) &&
+    !E.promptForRequest(E.sanitizePromptRequest({ item: { name: "מכנסיים", type: "bottoms", __bottoms: true }, angle: "front", delta: 0, hemEdge: true })).includes("continuous edge"));
+  check("it names the hem as what it IS - no hole, slit, notch or hand", !/hole|slit|notch|gap|hand/i.test("The hem is one straight continuous edge all around."));
+}
+
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");
 process.exit(fails ? 1 : 0);

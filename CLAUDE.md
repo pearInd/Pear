@@ -2364,6 +2364,22 @@ the arms away from the body - so the engine's cold state is a likely part of it,
 - **The check (§7.1):** one TEST session per value - `ctx.ref` must say `fit`; the start must match the settled shirt, no swap may
   change its size, the back print on the back only. Worse on any frame: off (`?ref_fit=0` is the old behaviour).
 
+### 7.30 Triangle notches at the hem, the hem in the hand, consistency (2026-11-25, two 10:35 sessions, "angles and length good") 
+- **The notches are invented.** All six store photos of the Wings tee (fox 1824132400) have a straight hem, front and back: no slit,
+  notch or hole. The clips draw a triangle at the side of the hem while the BACK reference is on (second clip 3.6-6.0s). A TEST-only
+  clause, `HEM_EDGE_LOCK` ("The hem is one straight continuous edge all around.", P.LOW, tops front and back; positive wording, no
+  artifact named) goes out behind its OWN request flag `hemEdge` (the room sends it in TEST sessions), so a shopper's wire is
+  byte-identical (`trace:prompt`) and `test` alone is unchanged; 588->640 front, 554->606 back. NOT YET MEASURED; hem wording drew a
+  crop top once (§7.10) - revert on any harm. `garment-fit` (last section), `color-lock`.
+- **The hem pulled to the hand** shows in both clips at 0.8-2.0s, before any swap, with the arms a little away from the body - the
+  engine's first seconds. No reference or prompt lever is proven for it (naming hands in a prompt risks drawing them). NOT changed.
+- **The inconsistency, found (record mwvvc378, NOT changed):** the second session's FRONT went out at 5.38s, not ~3.4s - the chest was
+  plain (the back reference) from ~4.0 to ~6.4s of the output. The pose model produced a degenerate skeleton for ~1.2s (separation
+  -3.9..-5.4 torso heights, physically impossible, voting "back"), and at 3.39 a baseline re-learn took a 0.26-wide side reading as
+  square-on, so the shoulder order went stale until 5.38 while the |yaw| paths stand down on the back leg. The fix lives in the
+  turn's code (a stale order must stop blocking; the re-learn must not take a turned reading) and the turn is the part the owner
+  approved - it needs his yes and its own measurement.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:

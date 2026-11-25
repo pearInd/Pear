@@ -4,7 +4,9 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-11-24 (night) · **working tree, uncommitted:** an EXPERIMENT for "the shirt starts huge, then settles" - a top's front and rear redrawn to one garment-box size (x0.82 of the front's), TEST sessions only (CLAUDE.md §7.29; `fitReferenceBox`, `garment-box` §11). The turn is untouched (5a0cf16's, Worker 1ce110ae). Not measured on the engine; one TEST session per value is the check._
+_Last updated: 2026-11-25 · Your 10:35 sessions: angles and length good. The hem notches are not in the product photos (all six checked) - a TEST-only hem clause is live to try (CLAUDE.md §7.30, Worker redeployed; shoppers unchanged). Found why the second session showed a plain front 4.0-6.4s (a pose failure that left the turn's order stale) - not changed, it is turn code; needs your yes. The hand-grab at the start has no proven fix._
+
+_Earlier: 2026-11-24 (night) · **working tree, uncommitted:** an EXPERIMENT for "the shirt starts huge, then settles" - a top's front and rear redrawn to one garment-box size (x0.82 of the front's), TEST sessions only (CLAUDE.md §7.29; `fitReferenceBox`, `garment-box` §11). The turn is untouched (5a0cf16's, Worker 1ce110ae). Not measured on the engine; one TEST session per value is the check._
 
 _Earlier: 2026-11-24 (evening) · **the turn is 5a0cf16's again** - your last "works perfectly" that covered the garment's length and the turn (2026-11-12, preview + test Worker d2ec3ba1). The half-turn rule of 17:30 (§7.28) is reverted; the production Worker is rolled back to 1ce110ae (deployed from the 5a0cf16 tree). The tree differs from 5a0cf16 only by the 8s window (§7.27). Seen in your 17:47 shorts session: the rear-to-front size redraw (§7.24) is for shirts only - the shorts' front photo goes whole and its rear photo masked, so their size can jump at a swap; no approved version covered shorts._
 

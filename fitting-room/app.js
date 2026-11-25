@@ -13957,6 +13957,8 @@ function wirePrompt(item, angle, where, opts = {}) {
     delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0,
     /* A TEST session asks for the wording not yet measured on a shopper's wire (lib/prompts.js _requestTest). */
     ...(typeof traceEnabled === "function" && traceEnabled() ? { test: true } : {}),
+    /* THE HEM AS ONE EDGE (2026-11-25, TEST sessions only - CLAUDE.md §7.30): tops only, decided server-side. */
+    ...(typeof traceEnabled === "function" && traceEnabled() ? { hemEdge: true } : {}),
   }, where);
 }
 
