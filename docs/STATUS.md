@@ -37,6 +37,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
+| Other colours when the size is sold out (FOX) | PR open on `claude/project-thread-17ltt0`, **review and merge waiting on you**; no Worker deploy needed (no `lib/` change) | branch |
 | Suggested size when no exact size fits (183/73 "no size" report) | merged ([PR #2](https://github.com/pearInd/Pear/pull/2), `d69562d`); follow-up [PR #3](https://github.com/pearInd/Pear/pull/3) (152/77 -> M; everyone between S and XXL gets a size); PR #4 (smaller than S -> suggested S); then a `wrangler deploy` | main + branch |
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
 | Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done — merged to main 2026-10-13 ([PR #1](https://github.com/pearInd/Pear/pull/1), `306173f`); 2026-10-14: fox men's pants + castro men's jeans saved and live; no new stores unless you ask | main |
@@ -147,6 +148,16 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
       "unavailable right now" (a TEST session says it is the credit).
 
 ---
+
+## Other colours when the size is sold out (2026-11-25)
+- **Stage:** built and tested on the branch, PR open, not merged or deployed.
+- When the recommended size is sold out in the colour on the page, the size result shows the same garment in the
+  other colours that have that size (photo, colour dot, "try on"), instead of "try one size up/down". Tapping one
+  re-opens the room on that colour through the widget's normal launch (classify, back view, cart = that colour).
+  No colour with the size -> the old size-up/down sentence. The size calculation is untouched.
+- Data: FOX's own colour swatches on the product page + each colour's own product JSON (stock). FOX only.
+- Not done: similar items from other models (phase 2); a measurement on the real engine after switching colour.
+- **Waiting on you:** review the preview, then merge (Vercel only).
 
 ## Suggested size (2026-10-13)
 - **Stage:** merged to main (`d69562d`). Follow-up the same day: 152/77 was suggested XXL (the store chart decided

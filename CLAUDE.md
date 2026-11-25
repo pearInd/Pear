@@ -2394,6 +2394,16 @@ reference, the prompt and the UI are unchanged (no Worker deploy). `stream-conti
 measurements in one page - each record's order should be fresh through the turn, no `baseline-relearn` after the reveal beyond the first,
 FRONT ~2.7s; `?` no switch: revert if the first run changes.
 
+### 7.32 Other colours when the recommended size is sold out (2026-11-25, Layer D presentation only) - NOT YET MEASURED ON THE ENGINE
+The owner: when the shopper's size is gone, offer the same garment in other colours that have it, and let them try one -
+instead of "one size up/down". FOX only. The widget (OTHER COLOURS OF THIS GARMENT) reads siblings ONLY from FOX's swatch
+markup (`.custom-color-swatch button[data-product-handle]`) and each sibling's stock ONLY from its own `/products/<h>.js`;
+posts them as PEAR_COLOR_OPTIONS. The room (same name, after `onMeasurementKeydown`) shows them inside `renderStockNotice()`
+when the recommended size is sold out and a colour sells it; none -> the old sentence. A card asks PEAR_TRY_COLOR; the widget
+re-opens the room on that product through `startTryOn()` (the PEAR button's click body, lifted out unchanged), with
+`_activeSibling` making the size/stock lists and the cart that product's, and `?pear_hw=` pre-filling an empty form.
+`calculateSize()`/`lib/sizing.js` untouched; `trace:prompt` identical. `color-alternatives` (24 checks).
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:
