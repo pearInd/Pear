@@ -6882,23 +6882,27 @@ html.pear-store-theme {
    where the green and the sand were, over the store's own background. ── */
 html.pear-store-theme body {
   background:
-    radial-gradient(1100px 760px at 84% -10%, rgba(var(--accent-rgb), .16), transparent 60%),
-    radial-gradient(900px 700px  at -8% 14%,  rgba(var(--accent-rgb), .09), transparent 58%),
-    radial-gradient(900px 900px  at 50% 118%, rgba(var(--accent-rgb), .12), transparent 60%),
-    linear-gradient(180deg, var(--store-bg) 0%, rgba(var(--accent-rgb), .07) 52%, var(--store-bg) 100%),
+    radial-gradient(1100px 760px at 84% -10%, rgba(var(--accent-rgb), .24), transparent 60%),
+    radial-gradient(900px 700px  at -8% 14%,  rgba(var(--accent-rgb), .15), transparent 58%),
+    radial-gradient(900px 900px  at 50% 118%, rgba(var(--accent-rgb), .19), transparent 60%),
+    linear-gradient(180deg, rgba(var(--store-text-rgb), .05), rgba(var(--store-text-rgb), .09)),
+    linear-gradient(180deg, var(--store-bg) 0%, rgba(var(--accent-rgb), .12) 52%, var(--store-bg) 100%),
     var(--store-bg);
   background-attachment: fixed;
 }
-html.pear-store-theme body::before { background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb), .22), transparent 65%); }
-html.pear-store-theme body::after  { background: radial-gradient(circle at 60% 40%, rgba(var(--accent-rgb), .13), transparent 65%); }
+html.pear-store-theme body::before { background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb), .30), transparent 65%); }
+html.pear-store-theme body::after  { background: radial-gradient(circle at 60% 40%, rgba(var(--accent-rgb), .19), transparent 65%); }
 /* the drifting mesh behind the glass: four lights of the accent, as the default's four */
 html.pear-store-theme .liquid-mesh {
   background:
-    radial-gradient(38% 38% at 22% 26%, rgba(var(--accent-rgb), .16), transparent 70%),
-    radial-gradient(42% 42% at 82% 20%, rgba(var(--accent-rgb), .10), transparent 72%),
-    radial-gradient(48% 48% at 70% 84%, rgba(var(--accent-rgb), .13), transparent 72%),
-    radial-gradient(40% 40% at 14% 80%, rgba(var(--accent-rgb), .07), transparent 72%);
+    radial-gradient(38% 38% at 22% 26%, rgba(var(--accent-rgb), .23), transparent 70%),
+    radial-gradient(42% 42% at 82% 20%, rgba(var(--accent-rgb), .15), transparent 72%),
+    radial-gradient(48% 48% at 70% 84%, rgba(var(--accent-rgb), .19), transparent 72%),
+    radial-gradient(40% 40% at 14% 80%, rgba(var(--accent-rgb), .11), transparent 72%);
 }
+/* The owner, on the shaded page: "its colours are too shallow - a little darker so it looks more
+   serious, but not much, so it doesn't look odd". Each wash is ~1.5x stronger and a thin veil of
+   the store's text colour (5-9%) sits under them. */
 
 /* ── 2 · primary actions: a fade between two shades of the accent, the on-primary ink ── */
 html.pear-store-theme body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look,
@@ -6959,8 +6963,14 @@ html.pear-store-theme body :is(.calc-form h1, .calc-form h2, .calc-form p, .calc
   .cookie-banner__text, .size-display):not(#_) {
   text-align: start !important;
 }
-html.pear-store-theme body .gender-group:not(#_) { justify-items: stretch !important; text-align: start !important; }
-html.pear-store-theme body .gender-group > .form-group__label:not(#_) { justify-self: start !important; }
-html.pear-store-theme body .gender-group .gender-switch-wrapper:not(#_) { justify-content: flex-start !important; }
+/* The gender switch stays in the middle, as in the default room (the owner: "centred, not to the
+   right") - so no start-alignment rule for .gender-group here. */
 html.pear-store-theme body .btn-edit-measurements:not(#_),
 html.pear-store-theme body .btn-edit-measurements :is(svg, span):not(#_) { color: var(--store-text); }
+
+/* ── 7 · the owner's cuts for a themed room (2026-11-25, evening) ──
+   "remove the check of 'verified' completely" - the code-verified moment is not shown;
+   "there is a green line ... delete it, not essential and green doesn't fit" - the step bar's
+   track and fill are not drawn (the step label and percent stay). */
+html.pear-store-theme .otp-success:not(#_) { display: none !important; }
+html.pear-store-theme body .step-progress-track:not(#_) { display: none !important; }

@@ -436,6 +436,19 @@ const I18N = {
   demoAlreadyUsed:          { he: "כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!", en: "You've already completed your virtual fitting in this demo. Thank you!" },
 };
 
+/* A THEMED ROOM CARRIES NO ARROWS (the owner, 2026-11-25: "remove all the arrows"). Only when the
+   store's embed named a theme (store-theme.js set the class before this module ran); the default
+   room keeps its strings exactly. */
+try {
+  if (document.documentElement.classList.contains("pear-store-theme")) {
+    for (const k of Object.keys(I18N)) {
+      for (const l of Object.keys(I18N[k])) {
+        if (typeof I18N[k][l] === "string") I18N[k][l] = I18N[k][l].replace(/\s*[\u2190\u2192]\s*$/, "");
+      }
+    }
+  }
+} catch {}
+
 export function getActiveLang() {
   try {
     const stored = localStorage.getItem(LANG_KEY);
