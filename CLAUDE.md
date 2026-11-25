@@ -2394,6 +2394,15 @@ reference, the prompt and the UI are unchanged (no Worker deploy). `stream-conti
 measurements in one page - each record's order should be fresh through the turn, no `baseline-relearn` after the reveal beyond the first,
 FRONT ~2.7s; `?` no switch: revert if the first run changes.
 
+### 7.32 The picture's jumps during a turn - the receive buffer 80 -> 150ms (2026-11-25, the owner's call) - NOT YET MEASURED ON THE ENGINE
+"Everything works perfectly except there are jumps during the measurement when turning." Measured on three of the owner's recordings:
+~10 distinct frames a second, gaps 67-83ms at the median, 133-166ms at p90, single ones 200-267ms; swaps on time, no stall. Which of
+the four places makes the unevenness (our input, the engine's spacing, the network, the screen) is NOT known - §2.41's pace probe was
+reverted. `PLAYOUT_DELAY_HINT` 0.08 -> 0.15 (`config.js`; tried once on 10-09, reverted with the necklace sentence, never alone). A
+local loopback in Chromium (no engine) confirms the browser applies it: average time a frame is held 60ms at 80, 129ms at 150, no
+freeze in either. It adds no frames; only unevenness that arises in transit is absorbed. Nothing else changed (no Worker deploy).
+**The check:** a TEST session with a turn - smoother or not, and nothing else different. Not smoother, or the lag is felt: 0.08.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:
