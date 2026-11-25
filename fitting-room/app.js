@@ -1844,7 +1844,28 @@ function renderStockNotice(size) {
     if (tray) tray.classList.remove("has-stock-notice");
   };
 
+  const altsEl = $("colorAlts");
+  if (altsEl) { altsEl.hidden = true; altsEl.replaceChildren(); }
+
   if (!size || !isSizeSoldOut(size)) return clear();
+
+  /* OTHER COLOURS OF THIS GARMENT (2026-11-25) - colours that still sell this size are
+     offered INSTEAD of the size-up/down sentence; none -> that sentence, as before.
+     typeof-guarded: this region runs as a standalone slice in several suites. */
+  const alts = typeof colorAltsFor === "function" ? colorAltsFor(size) : [];
+  if (alts.length && typeof renderColorAlts === "function") {
+    const ctext = tf("stockSoldOutColors", { size: formatSizeLabel(size) });
+    if (ctext) {
+      el.textContent = ctext;
+      el.hidden = false;
+      if (box) box.classList.add("has-stock-notice");
+      if (tray) tray.classList.add("has-stock-notice");
+      renderColorAlts(alts);
+      console.log("[PEAR] recommended size", formatSizeLabel(size), "is out of stock in this colour - offering",
+        alts.length, "other colour(s)");
+      return;
+    }
+  }
 
   const { down, up } = stockFallbacksFor(size);
   const label = formatSizeLabel(size);
@@ -3215,6 +3236,129 @@ function onMeasurementEnterResolved(e) {
   else e.target.blur();
 }
 
+/* ── OTHER COLOURS OF THIS GARMENT (2026-11-25) ────────────────────────────────
+   Asked for: when the recommended size is gone in this colour, offer the same garment in
+   the colours that still have it - with a way to try one on - INSTEAD of "try one size
+   up/down". The widget reads the colours off the store's own page and each one's stock off
+   its own product JSON (pear-widget.js, OTHER COLOURS OF THIS GARMENT) and posts them as
+   PEAR_COLOR_OPTIONS. Nothing here invents a colour, a photo or a stock answer: a colour
+   is offered only when its own size list carries the recommended size and its own stock
+   list does not mark it gone, both normalised through parseSizeList() exactly as
+   isSizeSoldOut() normalises the page's.
+
+   PRESENTATION ONLY. The size the shopper is told, currentUserSize, the ladder and
+   everything calculateSize() decides are untouched - renderStockNotice() only chooses what
+   to SAY about a sold-out size. No colour with the size -> the size-up/down sentence,
+   exactly as before. Not embedded (no widget) -> no colours -> exactly as before.
+
+   Trying a colour asks the widget (PEAR_TRY_COLOR) to open the room on that product
+   through its own launch, so the back view, the classifier and the cart are that
+   product's. The consent tick is required first, as for Continue, and the measurements
+   are saved the way Continue saves them; the height/weight also ride along (?pear_hw=) so
+   a visitor without a saved profile finds the form filled in. */
+let colorOptions = [];
+let colorTryPending = false;
+
+function sanitizeColorOptions(list) {
+  const out = [];
+  if (!Array.isArray(list)) return out;
+  for (const o of list.slice(0, 8)) {
+    if (!o || typeof o !== "object") continue;
+    const handle = typeof o.handle === "string" ? o.handle : "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(handle)) continue;
+    let image = "";
+    try { const u = new URL(String(o.image || "")); if (u.protocol === "https:") image = u.href; } catch {}
+    if (!image) continue;
+    const strs = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === "string" && x.length <= 12).slice(0, 40) : []);
+    out.push({
+      handle,
+      hex: typeof o.hex === "string" && /^#[0-9a-f]{3,8}$/i.test(o.hex) ? o.hex : "",
+      title: typeof o.title === "string" ? o.title.slice(0, 140) : "",
+      image,
+      sizes: strs(o.sizes),
+      soldOut: strs(o.soldOut),
+    });
+  }
+  return out;
+}
+
+/* The colours that sell `size` right now. */
+function colorAltsFor(size) {
+  if (!size || !colorOptions.length) return [];
+  const token = parseSizeList([size])[0];
+  if (!token) return [];
+  return colorOptions.filter((o) =>
+    parseSizeList(o.sizes).includes(token) && !parseSizeList(o.soldOut).includes(token));
+}
+
+function renderColorAlts(alts) {
+  const wrap = $("colorAlts");
+  if (!wrap) return;
+  wrap.replaceChildren();
+  if (!alts || !alts.length) { wrap.hidden = true; return; }
+  for (const o of alts) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "color-alt";
+    card.dataset.handle = o.handle;
+    card.setAttribute("aria-label", t("colorAltTryAria"));
+    const img = document.createElement("img");
+    img.className = "color-alt-img";
+    img.src = o.image;
+    img.alt = o.title || "";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    const row = document.createElement("span");
+    row.className = "color-alt-row";
+    if (o.hex) {
+      const dot = document.createElement("span");
+      dot.className = "color-alt-dot";
+      dot.style.background = o.hex;
+      row.appendChild(dot);
+    }
+    const label = document.createElement("span");
+    label.className = "color-alt-label";
+    label.textContent = t("colorAltTry");
+    row.appendChild(label);
+    card.append(img, row);
+    card.addEventListener("click", () => tryColorOption(o.handle, card));
+    wrap.appendChild(card);
+  }
+  wrap.hidden = false;
+}
+
+async function tryColorOption(handle, card) {
+  if (colorTryPending || window.parent === window) return;
+  if (!syncConsentGate()) { nudgeConsent(); return; }
+  colorTryPending = true;
+  if (card) card.classList.add("is-busy");
+  try {
+    recordTermsConsent();
+    const h = Number($("height")?.value), w = Number($("weight")?.value);
+    await persistMeasurementsIfLoggedIn($("height")?.value, $("weight")?.value);
+    const hw = Number.isFinite(h) && Number.isFinite(w) && h > 0 && w > 0 ? `${h}x${w}` : "";
+    console.log("[PEAR] trying another colour of this garment:", handle);
+    window.parent.postMessage({ type: "PEAR_TRY_COLOR", handle, hw }, "*");
+  } catch (e) {
+    console.warn("[PEAR] could not switch colour:", e?.message || e);
+  } finally {
+    /* The widget replaces this room; if it does not (an older widget), let the shopper
+       try again rather than leave a dead card. */
+    setTimeout(() => { colorTryPending = false; if (card) card.classList.remove("is-busy"); }, 4000);
+  }
+}
+
+window.addEventListener("message", (e) => {
+  if (e.source !== window.parent || !e.data || e.data.type !== "PEAR_COLOR_OPTIONS") return;
+  colorOptions = sanitizeColorOptions(e.data.options);
+  console.log("[PEAR] other colours of this garment:", colorOptions.length);
+  /* Repaint only what is already showing - never a recompute of the size. */
+  try {
+    if (currentUserSize && $("resultBox")?.classList.contains("show")) renderStockNotice(currentUserSize);
+  } catch {}
+});
+
 /* ── THE SIZE SERVICE ─────────────────────────────────────────────────────────
    POST /api/size - lib/sizing.js behind server.js. The only network call calculateSize()
    makes, and deliberately defined OUTSIDE the Screen 1 region the sizing suites slice:
@@ -4219,8 +4363,9 @@ function enterRoom() {
   } else {
     focusMode = false;
     $("focusBar").hidden = true;
-    renderCatalogPanel();
-    $("catalogPanel").hidden = false;
+    /* The catalog panel ("choose a garment from the catalog") is not shown (Itai, 2026-11-25):
+       the room opens on the store's own garment, never on a picker of ours. */
+    $("catalogPanel").hidden = true;
     setActiveItem(toItem(PEAR_CATALOG[0]), { silent: true });
   }
 
@@ -15707,6 +15852,15 @@ function showSizeForm(opts) {
     const setIf = (id, v) => { const el = $(id); if (el && v != null && v !== "" && !el.value) el.value = String(v); };
     setIf("height", PEAR_USER.height); setIf("weight", PEAR_USER.weight);
   }
+  /* OTHER COLOURS OF THIS GARMENT: a room the widget re-opened on another colour carries
+     the height/weight the shopper had typed (?pear_hw=HxW). Fills an EMPTY field only. */
+  try {
+    const hw = /^(\d{2,3}(?:\.\d)?)x(\d{2,3}(?:\.\d)?)$/.exec(new URLSearchParams(location.search).get("pear_hw") || "");
+    if (hw) {
+      const fill = (id, v) => { const el = $(id); if (el && !el.value) el.value = v; };
+      fill("height", hw[1]); fill("weight", hw[2]);
+    }
+  } catch {}
   try { calculateSize(); } catch {}
   setupConsentPanel();   // terms & accuracy consent - see COMPLIANCE above
 }

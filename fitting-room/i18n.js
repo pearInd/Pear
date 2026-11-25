@@ -351,6 +351,13 @@ const I18N = {
   },
   /* The in-room ladder's marker for a size the store cannot sell. Short because it is
      rendered inside a size button's accessible name, not as visible text. */
+  /* OTHER COLOURS OF THIS GARMENT (app.js) - said when other colours still have the size. */
+  stockSoldOutColors: {
+    he: "אין מידה {size} בצבע הזה. המידה שלך זמינה בצבעים האלה:",
+    en: "No size {size} in this colour. Your size is available in these colours:",
+  },
+  colorAltTry:     { he: "למדוד", en: "Try on" },
+  colorAltTryAria: { he: "למדוד בצבע הזה", en: "Try on in this colour" },
   stockSoldOutBadge: { he: "אזל מהמלאי", en: "Out of stock" },
   errNameRequired:          { he: "נא להזין שם מלא.", en: "Please enter your full name." },
   errEmailInvalid:          { he: "נא להזין כתובת אימייל תקינה.", en: "Please enter a valid email address." },

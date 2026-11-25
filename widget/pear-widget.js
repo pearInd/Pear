@@ -1492,6 +1492,117 @@
       });
   }
 
+  /* ── OTHER COLOURS OF THIS GARMENT (2026-11-25) ─────────────────────────────────
+     Asked for: when the shopper's size is gone in this colour, offer the SAME garment in
+     the colours that still have their size, and let them try one on from the room - in
+     place of "try one size up/down".
+
+     WHERE THE COLOURS COME FROM (FOX, checked on the live store): each colour is its own
+     Shopify product (handle = model + colour code), and the PDP draws one swatch button
+     per colour - `.custom-color-swatch button[data-product-handle]`, its colour in
+     `--product-current-color`, the page's own product marked `.current-product-color`.
+     That theme markup is the ONLY place a sibling is ever learned from: no guessing by
+     handle prefix, no catalogue search. Stock comes from each sibling's own product JSON
+     (`/products/<handle>.js`, Shopify's computed `available`), read with the same
+     sizesFromVariants()/soldOutFromVariants() the page product uses - never from the
+     swatch's own attributes and never assumed. A sibling whose JSON fails, has no images
+     or no declared Size option is left out. A page without that markup has no colours,
+     and the room shows exactly what it showed before.
+
+     While the room shows a sibling (the shopper picked it), _activeSibling holds its
+     variants so the size list, the stock list and the cart all describe THAT product,
+     not the page's. The PEAR button's own click clears it. */
+  var _colorSiblingsPromise = null;
+  var _activeSibling = null;   // sibling record while the room shows it, else null
+  var COLOR_SIBLINGS_MAX = 8;
+
+  function readColorSwatchHandles() {
+    var out = [], seen = {};
+    try {
+      var btns = d.querySelectorAll(".custom-color-swatch button[data-product-handle]");
+      for (var i = 0; i < btns.length; i++) {
+        var b = btns[i];
+        var handle = String(b.getAttribute("data-product-handle") || "").trim();
+        if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(handle) || seen[handle]) continue;
+        seen[handle] = 1;
+        var m = /--product-current-color\s*:\s*(#[0-9a-f]{3,8})\b/i.exec(b.getAttribute("style") || "");
+        out.push({
+          handle: handle,
+          hex: m ? m[1].toLowerCase() : "",
+          current: !!(b.classList && b.classList.contains("current-product-color"))
+        });
+      }
+    } catch (e) { return []; }
+    return out;
+  }
+
+  function colorSiblingFromProduct(p, sw) {
+    if (!p || !p.variants || !p.variants.length) return null;
+    var opts = p.options || [], idx = -1;
+    for (var j = 0; j < opts.length; j++) {
+      var name = String((opts[j] && opts[j].name) || (typeof opts[j] === "string" ? opts[j] : "")).trim().toLowerCase();
+      if (name === "size" || name === "מידה") { idx = j; break; }
+    }
+    var sizes = sizesFromVariants(p.variants, idx);
+    if (!sizes.length) return null;
+    var images = [];
+    var list = p.images || [];
+    for (var i = 0; i < list.length && images.length < MAX_GALLERY_IMAGES; i++) {
+      var u = absolutize(typeof list[i] === "string" ? list[i] : (list[i] && list[i].src));
+      if (u && !isExcludedSrc(u, { declared: true })) images.push(upgradeImageUrl(u));
+    }
+    if (!images.length) return null;
+    var firstAvail = null;
+    for (var v = 0; v < p.variants.length; v++) {
+      if (p.variants[v] && p.variants[v].available === true) { firstAvail = p.variants[v]; break; }
+    }
+    return {
+      handle: sw.handle, hex: sw.hex, title: String(p.title || ""),
+      image: images[0], images: images,
+      sizes: sizes, soldOut: soldOutFromVariants(p.variants, idx),
+      variants: p.variants, sizeOptionIndex: idx,
+      variantId: (firstAvail || p.variants[0]).id
+    };
+  }
+
+  function loadColorSiblings() {
+    if (_colorSiblingsPromise) return _colorSiblingsPromise;
+    var path = w.location.pathname.split("?")[0].replace(/\/$/, "");
+    var swatches = path.indexOf("/products/") === -1 ? [] : readColorSwatchHandles();
+    var others = [];
+    for (var i = 0; i < swatches.length && others.length < COLOR_SIBLINGS_MAX; i++) {
+      if (!swatches[i].current) others.push(swatches[i]);
+    }
+    _colorSiblingsPromise = Promise.all(others.map(function (sw) {
+      return fetch("/products/" + encodeURIComponent(sw.handle) + ".js", { credentials: "same-origin" })
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function (p) { return colorSiblingFromProduct(p, sw); })
+        .catch(function (e) {
+          console.log("[PEAR widget] colour sibling", sw.handle, "unreadable - left out:", e && e.message);
+          return null;
+        });
+    })).then(function (list) {
+      var ok = list.filter(Boolean);
+      console.log("[PEAR widget] other colours of this garment:", ok.length,
+        ok.length ? "(" + ok.map(function (s) { return s.handle; }).join(", ") + ")" : "");
+      return ok;
+    });
+    return _colorSiblingsPromise;
+  }
+
+  /* What the room is told: plain values only, never the variant ids. The colour the room
+     is showing right now is left out (it is not "another colour"). */
+  function colorOptionsMessage(list) {
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i];
+      if (_activeSibling && s.handle === _activeSibling.handle) continue;
+      out.push({ handle: s.handle, hex: s.hex, title: s.title, image: s.image,
+                 sizes: s.sizes.slice(), soldOut: s.soldOut.slice() });
+    }
+    return { type: "PEAR_COLOR_OPTIONS", options: out };
+  }
+
   function normalizeSizeToken(s) {
     return String(s == null ? "" : s).trim().toLowerCase().replace(/\s+/g, " ");
   }
@@ -1851,6 +1962,7 @@
      the page's JSON-LD (the store's declared run, see productFactsFromLd) -> the DOM
      control scrape. extractSoldOutSizes() below MUST keep this exact order. */
   function extractHostSizes() {
+    if (_activeSibling) return _activeSibling.sizes.slice();   // OTHER COLOURS OF THIS GARMENT
     var fromVariants = sizesFromVariants(_shopifyVariants, _shopifySizeOptionIndex);
     if (fromVariants.length) return fromVariants;
     try {
@@ -2015,6 +2127,7 @@
      differently ("L" vs "Large") and would silently match nothing. Whichever tier
      answered for the sizes answers for their stock. */
   function extractSoldOutSizes() {
+    if (_activeSibling) return _activeSibling.soldOut.slice();   // OTHER COLOURS OF THIS GARMENT
     try {
       if (sizesFromVariants(_shopifyVariants, _shopifySizeOptionIndex).length) {
         return soldOutFromVariants(_shopifyVariants, _shopifySizeOptionIndex);
@@ -3177,6 +3290,10 @@
          embed; every other embed (main app, real merchants) omits it entirely.
          Independent of DEMO_GATE above - the two are separate, coexisting triggers. */
       (DEMO_MODE ? "&pear_demo=1" : "") +
+      /* The shopper's own height/weight, carried ONLY when the room itself asked to switch
+         to another colour (PEAR_TRY_COLOR) - so a visitor with no saved profile does not
+         type them again. The room only pre-fills its empty form with them. */
+      (garment.prefillHW ? "&pear_hw=" + encodeURIComponent(garment.prefillHW) : "") +
       THEME_PARAMS;
     var src = PEAR_BASE + "/fitting-room/?" + params;
     console.log("[PEAR widget] openModal() - iframe src:", src);
@@ -3209,6 +3326,9 @@
       // robust path, since it can't race its own message listener wiring up
       // by construction) - this push just covers the gap either way.
       pushCartSync(iframe.contentWindow);
+      if (iframe.__pearColors) {
+        try { iframe.contentWindow.postMessage(iframe.__pearColors, PEAR_BASE); } catch (e) { /* torn down */ }
+      }
     });
     iframe.addEventListener("error", function () {
       console.error("[PEAR widget] fitting-room iframe fired 'error' for:", src);
@@ -3237,6 +3357,17 @@
     activeOverlay = overlay;
     activeIframe = iframe;
     startCartWatch(iframe);   // live-mirror host cart changes for as long as this modal is open
+    /* OTHER COLOURS OF THIS GARMENT - only for the page's own product (or one of its
+       colours); a quick-shop card's product is not the page's. Posted when ready and
+       again on every "load" of the room, like the verdict. */
+    if (garment.colors) {
+      loadColorSiblings().then(function (list) {
+        if (activeIframe !== iframe) return;
+        var msg = colorOptionsMessage(list);
+        iframe.__pearColors = msg;
+        try { iframe.contentWindow.postMessage(msg, PEAR_BASE); } catch (e) { /* room not there yet - re-sent on load */ }
+      });
+    }
     return iframe;
   }
 
@@ -3503,6 +3634,217 @@
     return null;
   }
 
+  /* ONE TRY-ON LAUNCH - the PEAR button's click body, lifted out unchanged (2026-11-25) so
+     a colour the room offers (PEAR_TRY_COLOR, see OTHER COLOURS OF THIS GARMENT) opens
+     through exactly the same open -> classify -> correction pipeline as the button. */
+  function startTryOn(garment) {
+
+    /* Open the fitting room INSTANTLY on DOM order (no waiting on the server) -
+       the ~1-7s classify-images round trip used to block the modal from opening
+       at all, which felt like the button was broken. Classification now runs in
+       parallel and, if it disagrees with the DOM-order guess, silently corrects
+       the live garment via postMessage once it resolves (see fitting-room/app.js's
+       PEAR_UPDATE_GARMENT listener) - the shopper sees the room immediately and
+       the front/back swap (if any) lands a moment later without a reconnect. */
+    var imgs = (garment.images && garment.images.length) ? garment.images : [garment.url];
+    /* Merge the Shopify product JSON gallery (prefetched at boot) - full-resolution,
+       complete, and immune to every lazy-loading trick the DOM scrape has to work
+       around. Only for a page-scoped garment: on a grid, the page product is not
+       this card's product. De-duped canonically, so a photo already found in the
+       DOM is not added twice under a different URL spelling. */
+    if (garment.pageScoped && _shopifyGallery && _shopifyGallery.length) {
+      var merged = imgs.slice();
+      for (var si = 0; si < _shopifyGallery.length; si++) {
+        var cand = _shopifyGallery[si], dup = false;
+        for (var mi = 0; mi < merged.length; mi++) {
+          if (samePhoto(cand, merged[mi])) { dup = true; break; }
+        }
+        if (!dup) merged.push(cand);
+      }
+      if (merged.length !== imgs.length) {
+        console.log("[PEAR] merged Shopify JSON gallery:", imgs.length, "→", merged.length, "image(s)");
+      }
+      imgs = merged.slice(0, MAX_GALLERY_IMAGES);
+    }
+    /* The instant-open back. ONLY a DOM-identified rear photo (garment.back) is
+       handed over here - never imgs[1]. Opening on the second gallery photo was a
+       positional guess that, on a front-only gallery, labels a FRONT photo as the
+       back and reaches Lucy as "this is the BACK, do NOT render the front" - the
+       exact blank-back failure resolveFrontBack() below was written to stop. With
+       no DOM evidence the room opens front-only and the classifier's verdict (or a
+       generated rear) lands a moment later via PEAR_UPDATE_GARMENT. */
+    var openBack = (garment.back && !samePhoto(garment.back, imgs[0])) ? garment.back : undefined;
+    console.log("[PEAR widget] button click - " + imgs.length + " image(s) to classify:", imgs,
+      "| DOM-identified back:", openBack || "(none - server will resolve/synthesize)");
+    var openedIframe = openModal({
+      url: imgs[0], type: garment.category, name: garment.name,
+      back: openBack, images: imgs, variantId: garment.variantId,
+      /* A classify call runs immediately below, so the room must treat imgs[0] as a
+         GUESS and block try-on until the verdict lands. Mirrors the condition that
+         actually gates the call, rather than being hardcoded true: if this ever
+         stops matching, the room waits for a message nobody sends. */
+      classifyPending: imgs.length > 0,
+      colors: !!(garment.pageScoped || garment.colorSibling),
+      prefillHW: garment.prefillHW
+    });
+
+    /* ── COMBINED pipeline ────────────────────────────────────────────────────
+       The try-on engine receives ONE unified composite and nothing else. The
+       sequence is fixed by a real dependency, not by preference:
+
+         1. classify  - the gallery URLs go to /api/classify-images, which returns
+                        WHICH image is the front and which is the back. This step
+                        is unavoidable and cannot be replaced by the composite: you
+                        cannot stitch a front|back pair before knowing which photo
+                        is which. It exchanges URLs and a label - it is metadata,
+                        not a render, and no individual image is ever handed to the
+                        model as a try-on reference.
+         2. synthesize - single-view product? the server generates the rear from
+                        the front (synthesizeBackView) so step 3 always has a pair.
+         3. combine   - both views stitched into ONE labelled canvas here.
+         4. hand over - ONLY that composite goes to the fitting room / Decart.
+
+       Sent by postMessage rather than the iframe URL because a composite data URL
+       is far past any browser's URL length limit. */
+    classifyImages(imgs, { front: imgs[0], back: openBack }).then(function (res) {
+      var results = res.results;
+      console.log("[PEAR widget] classify-images results (" + results.length + "):", results);
+      var sorted = sortByFrontBack(imgs, results);
+      var local = resolveFrontBack(imgs, results);
+      /* Server-resolved pair wins when present: it folds in the DOM hints, the
+         classifier, the per-product cache AND the generated-rear fallback
+         (back_source tells which). Falls back to the local resolution for
+         older/failing server builds. */
+      var frontUrl = res.front || local.front;
+      var backUrl  = res.back  || local.back;
+      console.log("[PEAR widget] resolved front:", abbrevUrl(frontUrl));
+      console.log("[PEAR widget] resolved back :", abbrevUrl(backUrl), "| source:", res.backSource);
+
+      if (!backUrl) {
+        /* No back anywhere - not in the DOM, not from the classifier, not in the
+           per-product cache, and generation was declined or failed. There is
+           nothing to combine, so hand over front-only; the fitting room's own
+           inferred-rear clause covers the turn. */
+        console.warn("[PEAR widget] no back view available - handing over FRONT-ONLY (no composite possible)");
+      }
+
+      return createGarmentComposite(frontUrl, backUrl).then(function (built) {
+        var composite = built && built.url;
+        if (composite) {
+          /* WORDING CORRECTED - the old line read "handing the single composite to
+             the try-on engine", which is not what happens and cost real debugging
+             time: a reviewer read this log, opened the two-panel image it refers to,
+             and reasonably concluded Decart was being conditioned on it. It is not.
+             The room gates the composite behind compositeActiveFor(), which requires
+             COMPOSITE_MODE - and COMPOSITE_DEFAULT is false (see app.js: a split
+             FRONT|BACK reference with no panel contract renders fragments of both,
+             commit 23f5953). With the default in force this composite is used for
+             the "Now fitting" thumbnail and as a ?composite=1 opt-in only; the actual
+             reference is a SINGLE-VIEW asset the OrientationWatcher swaps. Say what
+             is true, so the next person reads the right file. */
+          console.log("[PEAR widget] composite built and sent (thumbnail + ?composite=1 opt-in; " +
+            "the live reference stays single-view unless COMPOSITE_MODE is on)");
+        }
+        /* Only push a correction if this actually changes what the room is showing,
+           and only into the SAME modal that triggered the call (the shopper may have
+           closed it, or opened a different product, in the meantime). */
+        if (activeIframe !== openedIframe) return;
+        /* ── THE VERDICT MUST ALWAYS BE ANNOUNCED, EVEN WHEN IT CHANGES NOTHING ──
+           This early-return exists so a verdict that AGREES with the DOM-order guess
+           does not churn the room's reference for no reason - re-anchoring
+           mid-session renders a generic garment, so the optimisation is correct and
+           stays. What it must NOT do any more is stay silent: the room now blocks
+           try-on until it hears a verdict (?classify_pending=1), and on a
+           well-marked-up store "the classifier agreed" is the COMMON path - so
+           returning here without a word left the gate to sit until its 30s timeout
+           on exactly the products that were never at risk.
+           A ready signal carries no garment_url, so the room releases the gate and
+           returns before touching activeItem's reference. Nothing is re-anchored.
+           It DOES carry the product signals (productSignals() - see there for the
+           kids/adult bug their absence caused); the room applies those above its
+           `!front` guard, so they land without any re-anchor. */
+        if (!composite && frontUrl === imgs[0] && backUrl === openBack) {
+          console.log("[PEAR widget] classifier agreed with the DOM-order guess - " +
+            "sending a ready signal with product signals only (no re-anchor)");
+          try {
+            /* The garment's facts ride along (2026-10-31): this signal was their only
+               delivery on the common path and carried none, so the prompt never named
+               the colour. Same omit-when-unknown rules as the correction below; the
+               room reads them in a TEST session only until they are measured. */
+            postVerdictToRoom(openedIframe, Object.assign(
+              { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true,
+                garment_color_hex: res.colorHex || undefined,
+                garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
+                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined },
+              productSignals(res)));
+          } catch (e) {
+            console.warn("[PEAR widget] ready signal failed to post:", e && e.message);
+          }
+          return;
+        }
+        try {
+          /* The product signals (sizes, stock, chart, kids/adult, run type, title)
+             come from productSignals() - the SAME builder the ready signal and the
+             failure path use, so the three messages cannot drift apart again. */
+          postVerdictToRoom(openedIframe, Object.assign({
+            type: "PEAR_UPDATE_GARMENT",
+            garment_url: frontUrl,
+            garment_back: backUrl || undefined,
+            garment_back_source: res.backSource,
+            /* The unified COMBINED reference. When present the fitting room uses
+               THIS as the model reference and skips its own stitching entirely -
+               the front/back URLs above remain only as provenance and as the
+               fallback if the composite is unusable. */
+            garment_composite: composite || undefined,
+            /* Panel geometry of that composite, so the fitting room can verify the
+               LEFT=FRONT / RIGHT=BACK contract it is about to assert to Decart rather
+               than trusting that two separately-bundled stitchers still agree. */
+            garment_composite_layout: (composite && built.layout) || undefined,
+            garment_images: sorted,
+            /* Sampled main-fabric colour for THIS product. Sent so the room can
+               name the colour in the prompt instead of relying on the anchor's
+               generic "preserve the original color" - the black/yellow
+               hallucination report. Omitted (not ""-ed) when unsampleable, so the
+               room's own `typeof === "string"` check distinguishes "no value" from
+               a value; a colour this pipeline guessed would be stated to Decart
+               with the same authority as a measured one. */
+            garment_color_hex: res.colorHex || undefined,
+            /* The garment's own lettering, transcribed from the FRONT photo. Sent as
+               "" when the garment is genuinely plain (a real answer), omitted only
+               when the server never answered - the room distinguishes the two. */
+            garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
+            /* Whether the rear is positively known blank. Omitted (not false-d) when
+               unknown, so the room can abstain rather than assume. */
+            garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined
+          }, productSignals(res)));
+        } catch (_) {}
+      });
+    }).catch(function (err) {
+      console.warn("[PEAR widget] combined pipeline failed, using DOM order as-is:", err && err.message);
+      /* ── TELL THE ROOM ANYWAY, OR THE GATE WAITS OUT ITS FULL TIMEOUT ──────────
+         The room blocks try-on until it hears a verdict (?classify_pending=1). A
+         failed classify is still an answer to "is one coming?" - it is just a
+         negative one - and staying silent here would make every classify failure
+         cost the shopper a 30s dead button before the backstop timer released it.
+         The room proceeds on the unvalidated DOM-order guess, which is exactly the
+         behaviour that shipped before the gate existed (CLAUDE.md 2.5: never block
+         on ambiguity; a wrong block stops a paying shopper).
+         Still guarded on the SAME modal - the shopper may have closed it or opened
+         a different product while the request was in flight. */
+      if (activeIframe !== openedIframe) return;
+      try {
+        /* No verdict to relay (productSignals(null) omits garment_age_group), but the
+           page re-reads still go out - a Shopify list or a JS-built picker that
+           landed after the click is just as real when the classifier is down. */
+        postVerdictToRoom(openedIframe, Object.assign(
+          { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true },
+          productSignals(null)));
+      } catch (e) {
+        console.warn("[PEAR widget] ready signal failed to post after error:", e && e.message);
+      }
+    });
+  }
+
   /* ── STEP 2b - inject a native-looking try-on button next to each Add-to-Cart ──
      A PEAR button is inserted as the next sibling AFTER each cart button (or after the
      whole quantity row - see findQtyRow), wired to that button's own product. Idempotent:
@@ -3537,209 +3879,10 @@
            mid-session (e.g. the postMessage lock arrived between two rapid
            clicks). Disabled styling is UI; this is the actual gate. */
         if (DEMO_GATE && isDemoGateLockedLocally()) return;
-
-        /* Open the fitting room INSTANTLY on DOM order (no waiting on the server) -
-           the ~1-7s classify-images round trip used to block the modal from opening
-           at all, which felt like the button was broken. Classification now runs in
-           parallel and, if it disagrees with the DOM-order guess, silently corrects
-           the live garment via postMessage once it resolves (see fitting-room/app.js's
-           PEAR_UPDATE_GARMENT listener) - the shopper sees the room immediately and
-           the front/back swap (if any) lands a moment later without a reconnect. */
-        var imgs = (garment.images && garment.images.length) ? garment.images : [garment.url];
-        /* Merge the Shopify product JSON gallery (prefetched at boot) - full-resolution,
-           complete, and immune to every lazy-loading trick the DOM scrape has to work
-           around. Only for a page-scoped garment: on a grid, the page product is not
-           this card's product. De-duped canonically, so a photo already found in the
-           DOM is not added twice under a different URL spelling. */
-        if (garment.pageScoped && _shopifyGallery && _shopifyGallery.length) {
-          var merged = imgs.slice();
-          for (var si = 0; si < _shopifyGallery.length; si++) {
-            var cand = _shopifyGallery[si], dup = false;
-            for (var mi = 0; mi < merged.length; mi++) {
-              if (samePhoto(cand, merged[mi])) { dup = true; break; }
-            }
-            if (!dup) merged.push(cand);
-          }
-          if (merged.length !== imgs.length) {
-            console.log("[PEAR] merged Shopify JSON gallery:", imgs.length, "→", merged.length, "image(s)");
-          }
-          imgs = merged.slice(0, MAX_GALLERY_IMAGES);
-        }
-        /* The instant-open back. ONLY a DOM-identified rear photo (garment.back) is
-           handed over here - never imgs[1]. Opening on the second gallery photo was a
-           positional guess that, on a front-only gallery, labels a FRONT photo as the
-           back and reaches Lucy as "this is the BACK, do NOT render the front" - the
-           exact blank-back failure resolveFrontBack() below was written to stop. With
-           no DOM evidence the room opens front-only and the classifier's verdict (or a
-           generated rear) lands a moment later via PEAR_UPDATE_GARMENT. */
-        var openBack = (garment.back && !samePhoto(garment.back, imgs[0])) ? garment.back : undefined;
-        console.log("[PEAR widget] button click - " + imgs.length + " image(s) to classify:", imgs,
-          "| DOM-identified back:", openBack || "(none - server will resolve/synthesize)");
-        var openedIframe = openModal({
-          url: imgs[0], type: garment.category, name: garment.name,
-          back: openBack, images: imgs, variantId: garment.variantId,
-          /* A classify call runs immediately below, so the room must treat imgs[0] as a
-             GUESS and block try-on until the verdict lands. Mirrors the condition that
-             actually gates the call, rather than being hardcoded true: if this ever
-             stops matching, the room waits for a message nobody sends. */
-          classifyPending: imgs.length > 0
-        });
-
-        /* ── COMBINED pipeline ────────────────────────────────────────────────────
-           The try-on engine receives ONE unified composite and nothing else. The
-           sequence is fixed by a real dependency, not by preference:
-
-             1. classify  - the gallery URLs go to /api/classify-images, which returns
-                            WHICH image is the front and which is the back. This step
-                            is unavoidable and cannot be replaced by the composite: you
-                            cannot stitch a front|back pair before knowing which photo
-                            is which. It exchanges URLs and a label - it is metadata,
-                            not a render, and no individual image is ever handed to the
-                            model as a try-on reference.
-             2. synthesize - single-view product? the server generates the rear from
-                            the front (synthesizeBackView) so step 3 always has a pair.
-             3. combine   - both views stitched into ONE labelled canvas here.
-             4. hand over - ONLY that composite goes to the fitting room / Decart.
-
-           Sent by postMessage rather than the iframe URL because a composite data URL
-           is far past any browser's URL length limit. */
-        classifyImages(imgs, { front: imgs[0], back: openBack }).then(function (res) {
-          var results = res.results;
-          console.log("[PEAR widget] classify-images results (" + results.length + "):", results);
-          var sorted = sortByFrontBack(imgs, results);
-          var local = resolveFrontBack(imgs, results);
-          /* Server-resolved pair wins when present: it folds in the DOM hints, the
-             classifier, the per-product cache AND the generated-rear fallback
-             (back_source tells which). Falls back to the local resolution for
-             older/failing server builds. */
-          var frontUrl = res.front || local.front;
-          var backUrl  = res.back  || local.back;
-          console.log("[PEAR widget] resolved front:", abbrevUrl(frontUrl));
-          console.log("[PEAR widget] resolved back :", abbrevUrl(backUrl), "| source:", res.backSource);
-
-          if (!backUrl) {
-            /* No back anywhere - not in the DOM, not from the classifier, not in the
-               per-product cache, and generation was declined or failed. There is
-               nothing to combine, so hand over front-only; the fitting room's own
-               inferred-rear clause covers the turn. */
-            console.warn("[PEAR widget] no back view available - handing over FRONT-ONLY (no composite possible)");
-          }
-
-          return createGarmentComposite(frontUrl, backUrl).then(function (built) {
-            var composite = built && built.url;
-            if (composite) {
-              /* WORDING CORRECTED - the old line read "handing the single composite to
-                 the try-on engine", which is not what happens and cost real debugging
-                 time: a reviewer read this log, opened the two-panel image it refers to,
-                 and reasonably concluded Decart was being conditioned on it. It is not.
-                 The room gates the composite behind compositeActiveFor(), which requires
-                 COMPOSITE_MODE - and COMPOSITE_DEFAULT is false (see app.js: a split
-                 FRONT|BACK reference with no panel contract renders fragments of both,
-                 commit 23f5953). With the default in force this composite is used for
-                 the "Now fitting" thumbnail and as a ?composite=1 opt-in only; the actual
-                 reference is a SINGLE-VIEW asset the OrientationWatcher swaps. Say what
-                 is true, so the next person reads the right file. */
-              console.log("[PEAR widget] composite built and sent (thumbnail + ?composite=1 opt-in; " +
-                "the live reference stays single-view unless COMPOSITE_MODE is on)");
-            }
-            /* Only push a correction if this actually changes what the room is showing,
-               and only into the SAME modal that triggered the call (the shopper may have
-               closed it, or opened a different product, in the meantime). */
-            if (activeIframe !== openedIframe) return;
-            /* ── THE VERDICT MUST ALWAYS BE ANNOUNCED, EVEN WHEN IT CHANGES NOTHING ──
-               This early-return exists so a verdict that AGREES with the DOM-order guess
-               does not churn the room's reference for no reason - re-anchoring
-               mid-session renders a generic garment, so the optimisation is correct and
-               stays. What it must NOT do any more is stay silent: the room now blocks
-               try-on until it hears a verdict (?classify_pending=1), and on a
-               well-marked-up store "the classifier agreed" is the COMMON path - so
-               returning here without a word left the gate to sit until its 30s timeout
-               on exactly the products that were never at risk.
-               A ready signal carries no garment_url, so the room releases the gate and
-               returns before touching activeItem's reference. Nothing is re-anchored.
-               It DOES carry the product signals (productSignals() - see there for the
-               kids/adult bug their absence caused); the room applies those above its
-               `!front` guard, so they land without any re-anchor. */
-            if (!composite && frontUrl === imgs[0] && backUrl === openBack) {
-              console.log("[PEAR widget] classifier agreed with the DOM-order guess - " +
-                "sending a ready signal with product signals only (no re-anchor)");
-              try {
-                /* The garment's facts ride along (2026-10-31): this signal was their only
-                   delivery on the common path and carried none, so the prompt never named
-                   the colour. Same omit-when-unknown rules as the correction below; the
-                   room reads them in a TEST session only until they are measured. */
-                postVerdictToRoom(openedIframe, Object.assign(
-                  { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true,
-                    garment_color_hex: res.colorHex || undefined,
-                    garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
-                    garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined },
-                  productSignals(res)));
-              } catch (e) {
-                console.warn("[PEAR widget] ready signal failed to post:", e && e.message);
-              }
-              return;
-            }
-            try {
-              /* The product signals (sizes, stock, chart, kids/adult, run type, title)
-                 come from productSignals() - the SAME builder the ready signal and the
-                 failure path use, so the three messages cannot drift apart again. */
-              postVerdictToRoom(openedIframe, Object.assign({
-                type: "PEAR_UPDATE_GARMENT",
-                garment_url: frontUrl,
-                garment_back: backUrl || undefined,
-                garment_back_source: res.backSource,
-                /* The unified COMBINED reference. When present the fitting room uses
-                   THIS as the model reference and skips its own stitching entirely -
-                   the front/back URLs above remain only as provenance and as the
-                   fallback if the composite is unusable. */
-                garment_composite: composite || undefined,
-                /* Panel geometry of that composite, so the fitting room can verify the
-                   LEFT=FRONT / RIGHT=BACK contract it is about to assert to Decart rather
-                   than trusting that two separately-bundled stitchers still agree. */
-                garment_composite_layout: (composite && built.layout) || undefined,
-                garment_images: sorted,
-                /* Sampled main-fabric colour for THIS product. Sent so the room can
-                   name the colour in the prompt instead of relying on the anchor's
-                   generic "preserve the original color" - the black/yellow
-                   hallucination report. Omitted (not ""-ed) when unsampleable, so the
-                   room's own `typeof === "string"` check distinguishes "no value" from
-                   a value; a colour this pipeline guessed would be stated to Decart
-                   with the same authority as a measured one. */
-                garment_color_hex: res.colorHex || undefined,
-                /* The garment's own lettering, transcribed from the FRONT photo. Sent as
-                   "" when the garment is genuinely plain (a real answer), omitted only
-                   when the server never answered - the room distinguishes the two. */
-                garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
-                /* Whether the rear is positively known blank. Omitted (not false-d) when
-                   unknown, so the room can abstain rather than assume. */
-                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined
-              }, productSignals(res)));
-            } catch (_) {}
-          });
-        }).catch(function (err) {
-          console.warn("[PEAR widget] combined pipeline failed, using DOM order as-is:", err && err.message);
-          /* ── TELL THE ROOM ANYWAY, OR THE GATE WAITS OUT ITS FULL TIMEOUT ──────────
-             The room blocks try-on until it hears a verdict (?classify_pending=1). A
-             failed classify is still an answer to "is one coming?" - it is just a
-             negative one - and staying silent here would make every classify failure
-             cost the shopper a 30s dead button before the backstop timer released it.
-             The room proceeds on the unvalidated DOM-order guess, which is exactly the
-             behaviour that shipped before the gate existed (CLAUDE.md 2.5: never block
-             on ambiguity; a wrong block stops a paying shopper).
-             Still guarded on the SAME modal - the shopper may have closed it or opened
-             a different product while the request was in flight. */
-          if (activeIframe !== openedIframe) return;
-          try {
-            /* No verdict to relay (productSignals(null) omits garment_age_group), but the
-               page re-reads still go out - a Shopify list or a JS-built picker that
-               landed after the click is just as real when the classifier is down. */
-            postVerdictToRoom(openedIframe, Object.assign(
-              { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true },
-              productSignals(null)));
-          } catch (e) {
-            console.warn("[PEAR widget] ready signal failed to post after error:", e && e.message);
-          }
-        });
+        /* The shopper's own click opens THIS page's product - never a colour the room
+           switched to earlier (see OTHER COLOURS OF THIS GARMENT). */
+        _activeSibling = null;
+        startTryOn(garment);
       });
     }
     injectedButtons.push(btn);
@@ -4190,6 +4333,34 @@
     });
   });
 
+  /* OTHER COLOURS OF THIS GARMENT - the room asks to try one of them. Only from the open
+     room, only a handle this page's own swatches listed, and through the same launch as
+     the PEAR button (startTryOn), so classification, the back view and the cart are the
+     ones every product gets. */
+  w.addEventListener("message", function (e) {
+    if (e.origin !== PEAR_BASE) return;
+    if (!e.data || e.data.type !== "PEAR_TRY_COLOR") return;
+    if (!activeIframe || e.source !== activeIframe.contentWindow || !_colorSiblingsPromise) return;
+    var handle = String(e.data.handle || "");
+    var hw = String(e.data.hw || "");
+    if (!/^\d{2,3}(?:\.\d)?x\d{2,3}(?:\.\d)?$/.test(hw)) hw = "";
+    _colorSiblingsPromise.then(function (list) {
+      var sib = null;
+      for (var i = 0; i < list.length; i++) if (list[i].handle === handle) { sib = list[i]; break; }
+      if (!sib) { console.warn("[PEAR widget] PEAR_TRY_COLOR for an unknown colour - ignored:", handle); return; }
+      if (!activeIframe) return;   // the shopper closed the room meanwhile - never re-open it unasked
+      if (DEMO_GATE && isDemoGateLockedLocally()) return;
+      console.log("[PEAR widget] trying another colour of this garment:", sib.handle, sib.hex);
+      _activeSibling = sib;
+      startTryOn({
+        url: sib.image, images: sib.images, name: sib.title || getGarmentName(),
+        category: detectCategory(sib.title || getGarmentName()),
+        variantId: sib.variantId, pageScoped: false, colorSibling: true,
+        prefillHW: hw || undefined
+      });
+    });
+  });
+
   w.addEventListener("message", function (e) {
     if (e.origin !== PEAR_BASE) return;
     if (!e.data || e.data.type !== "PEAR_ADD_TO_CART") return;
@@ -4215,7 +4386,10 @@
     // option, product JSON not loaded yet, no matching size): payload.variantId
     // stays exactly what it already was.
     if (platform === "shopify" && payload.size) {
-      var sizedVariant = findVariantForSize(_shopifyVariants, _shopifySizeOptionIndex, payload.size, payload.variantId);
+      /* The colour the room is showing (OTHER COLOURS OF THIS GARMENT), else the page's. */
+      var sizedVariant = _activeSibling
+        ? findVariantForSize(_activeSibling.variants, _activeSibling.sizeOptionIndex, payload.size, payload.variantId)
+        : findVariantForSize(_shopifyVariants, _shopifySizeOptionIndex, payload.size, payload.variantId);
       if (sizedVariant) {
         payload = Object.assign({}, payload, {
           variantId: sizedVariant.id,
