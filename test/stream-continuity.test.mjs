@@ -303,5 +303,36 @@ console.log("\n── §6 A SECOND TRY-ON INHERITS NOTHING - the window that sim
     firstLike._poseHeadOut === false && firstLike._poseFocus === null && firstLike._poseFullMisses === 0, JSON.stringify(firstLike));
 }
 
+console.log("\n── EVERY MEASUREMENT STARTS WITH A POSE MODEL AS NEW AS THE FIRST (2026-11-25) ──");
+{
+  const src = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const span = src.slice(src.indexOf("let _poseRanLive = false;"), src.indexOf("function startPresenceWatcher() {"));
+  const make = () => {
+    const log = { closed: 0, loads: 0 };
+    const api = new Function("setTimeout", "log", `let _poseAspect = 1.7;
+      let _poseLandmarkerPromise = Promise.resolve({ close: () => { log.closed++; } });
+      function preloadPoseDetector() { log.loads++; _poseLandmarkerPromise = Promise.resolve({}); }
+      ${span}
+      return { renew: renewPoseDetectorAfterSession, ran: () => { _poseRanLive = true; }, aspect: () => _poseAspect, promise: () => _poseLandmarkerPromise };`)((f) => f(), log);
+    return { api, log };
+  };
+  const a = make();
+  const first = a.api.promise();
+  a.api.renew(); await new Promise((r) => setImmediate(r));
+  check("a page's FIRST measurement is untouched: nothing is closed or reloaded before a session ran the pose loop",
+    a.log.closed === 0 && a.log.loads === 0 && a.api.promise() === first);
+  a.api.ran(); a.api.renew(); await new Promise((r) => setImmediate(r));
+  check("after a session the old model is closed and a new one loaded, the aspect starts afresh",
+    a.log.closed === 1 && a.log.loads === 1 && a.api.promise() !== first && a.api.aspect() === null);
+  a.api.renew(); await new Promise((r) => setImmediate(r));
+  check("...once per session: a second teardown without a new live loop does nothing", a.log.closed === 1 && a.log.loads === 1);
+  const td = src.slice(src.indexOf("function teardown() {"), src.indexOf("function fullTeardown"));
+  check("teardown renews it right after the live pose loop is stopped, typeof-guarded",
+    td.indexOf("stopPresenceWatcher();") !== -1 && td.indexOf("renewPoseDetectorAfterSession()") > td.indexOf("stopPresenceWatcher();") &&
+    /typeof renewPoseDetectorAfterSession === "function"/.test(td));
+  const pw = src.slice(src.indexOf("function startPresenceWatcher() {"), src.indexOf("function startPresenceWatcher() {") + 400);
+  check("only a session that started the live loop marks it", /if \(!video\) return;\n\s*_poseRanLive = true;/.test(pw));
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

@@ -7527,6 +7527,8 @@ function teardown() {
 
   // Feature 2 - flush the recorder while the edited tracks are still live, so the
   // download clip is finalized before disconnect ends the stream.
+  /* The next measurement gets a pose model that has seen nothing, as the first one did. typeof: suites slice this. */
+  if (typeof renewPoseDetectorAfterSession === "function") renewPoseDetectorAfterSession();
   stopRecording();
 
   if (rtClient) {
@@ -19972,10 +19974,35 @@ let bodyTopology = null;
  * topology half still runs, because "cannot judge presence" and "cannot measure shape"
  * are different failures with different bars.
  */
+/* ── EVERY MEASUREMENT STARTS WITH A POSE MODEL AS NEW AS THE FIRST (2026-11-25) ─────────────────────────────────────
+   "The first measurement is always perfect, measuring again does strange things - make every repeat look like the first,
+   and change neither the first nor any of the interface's logic" (two sessions, 09:19-09:21, one page). The record of the
+   second: at the gate the shoulder order reads -0.93 (a back) while the shopper stands to the lens, then a skeleton no body
+   can make (shoulder separation -9.3 torso heights, voting "back") through the turn, the baseline re-learned three times and
+   the order stale - the FRONT went out at 4.9s instead of 2.7s and the engine drew the rear photo on a chest facing the lens
+   (a button-up shirt). The first run, a minute before, read clean. resetTryOnSession() already starts the twist state and
+   the focus window fresh; the one thing that outlives a session is the PoseLandmarker itself, memoized for the page and in
+   VIDEO mode - it keeps its tracking region and landmark smoothing from the last frame it saw (here, a shopper right at the
+   lens). A LIKELY CAUSE, NOT PROVEN. So after a session that ran the live pose loop, that instance is retired and a new one
+   loaded in the background (the model and runtime are cached): the next press finds a model that has seen nothing, as the
+   first did. A page's first measurement is untouched; nothing else changes. */
+let _poseRanLive = false;
+function renewPoseDetectorAfterSession() {
+  if (!_poseRanLive) return;
+  _poseRanLive = false;
+  const old = _poseLandmarkerPromise;
+  _poseLandmarkerPromise = null;
+  if (typeof _poseAspect !== "undefined") _poseAspect = null;
+  /* Closed a beat later, so an inference already in flight on it finishes first. The test and mock detectors have no close. */
+  if (old) old.then((d) => { setTimeout(() => { try { if (d && typeof d.close === "function") d.close(); } catch (_) {} }, 1500); }, () => {});
+  if (typeof preloadPoseDetector === "function") preloadPoseDetector();
+}
+
 function startPresenceWatcher() {
   if ((!POSE_GATE_ENABLED && !BODY_TOPOLOGY_ENABLED) || presenceWatcherTimer) return;
   const video = $("webcam");
   if (!video) return;
+  _poseRanLive = true;   // this session feeds the pose model: renew it afterwards (see renewPoseDetectorAfterSession)
   const category = isBottomsGarment(activeItem) ? "bottom" : "top";
   const gate = makePresenceGate();
   const loss = makePresenceLoss();   // absence needs a run of misses too - see PRESENCE_LOSS_FRAMES

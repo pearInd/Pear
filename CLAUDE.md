@@ -2380,6 +2380,20 @@ the arms away from the body - so the engine's cold state is a likely part of it,
   turn's code (a stale order must stop blocking; the re-learn must not take a turned reading) and the turn is the part the owner
   approved - it needs his yes and its own measurement.
 
+### 7.31 Every repeat measurement starts like the first (2026-11-25, two sessions 09:19-09:21, one page) - NOT YET MEASURED ON THE ENGINE
+"The first measurement always works perfectly; measuring again does strange things - make it consistent, change nothing in the first
+or in the interface's logic." The records: run 1 clean (BACK 1.73s, FRONT 2.74s, order fresh). Run 2: the order read -0.93 at the gate
+while the shopper faced the lens, a degenerate skeleton (separation -9.3 torso heights, voting back) through the turn, the baseline
+re-learned at 0.75/2.91/4.59s, the order stale - FRONT only at 4.88s, and the render drew the rear photo on a chest facing the lens (a
+button-up shirt, 4.0-5.6s). The same failure as 10:35's second session (mwvvc378). The room already restarts the twist state and
+the focus window (§7.13); what survives a session is the memoized PoseLandmarker in VIDEO mode, which carries its tracking region and
+smoothing from the last frame. **A likely cause, not proven** (the same symptoms could come from the shopper's own movement - run 2's
+came closer to the lens). `renewPoseDetectorAfterSession()` (app.js, from `teardown()`): after a session that ran the live pose loop,
+the model is closed (1.5s later) and a new one preloaded; the first measurement of a page is untouched; the orientation engine, the
+reference, the prompt and the UI are unchanged (no Worker deploy). `stream-continuity` (its last section). **The check:** two or three
+measurements in one page - each record's order should be fresh through the turn, no `baseline-relearn` after the reveal beyond the first,
+FRONT ~2.7s; `?` no switch: revert if the first run changes.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:
