@@ -4327,6 +4327,7 @@
       var sib = null;
       for (var i = 0; i < list.length; i++) if (list[i].handle === handle) { sib = list[i]; break; }
       if (!sib) { console.warn("[PEAR widget] PEAR_TRY_COLOR for an unknown colour - ignored:", handle); return; }
+      if (!activeIframe) return;   // the shopper closed the room meanwhile - never re-open it unasked
       if (DEMO_GATE && isDemoGateLockedLocally()) return;
       console.log("[PEAR widget] trying another colour of this garment:", sib.handle, sib.hex);
       _activeSibling = sib;
