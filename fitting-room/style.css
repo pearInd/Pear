@@ -14,10 +14,10 @@
   /* ── pear-green accent (the only colour) ── */
   --pear:        #1a1a1c;   /* signature pear green - fills / borders / glow */
   --pear-deep:   #0a0a0b;   /* darker pear - text on light glass */
-  --pear-soft:   rgba(141, 182, 0, .12);
-  --pear-tint:   rgba(141, 182, 0, .16);
-  --pear-ring:   rgba(141, 182, 0, .22);
-  --pear-glow:   rgba(141, 182, 0, .50);
+  --pear-soft:   rgba(var(--accent-rgb, 141, 182, 0), .12);
+  --pear-tint:   rgba(var(--accent-rgb, 141, 182, 0), .16);
+  --pear-ring:   rgba(var(--accent-rgb, 141, 182, 0), .22);
+  --pear-glow:   rgba(var(--accent-rgb, 141, 182, 0), .50);
 
   /* ── monochrome ink scale ── */
   --ink:        #0a0a0b;   /* headings / strong ink */
@@ -48,7 +48,7 @@
   --shadow:      0 8px 32px rgba(0, 0, 0, .08);
   --shadow-soft: 0 4px 18px rgba(0, 0, 0, .06);
   --shadow-lift: 0 22px 60px rgba(0, 0, 0, .16), 0 6px 18px rgba(0, 0, 0, .08);
-  --shadow-pear: 0 12px 36px rgba(141, 182, 0, .26);
+  --shadow-pear: 0 12px 36px rgba(var(--accent-rgb, 141, 182, 0), .26);
 
   /* signature fluid easing */
   --ease:       cubic-bezier(.16, 1, .3, 1);
@@ -76,9 +76,9 @@ body {
   position: relative;
   min-height: 100vh;
   background:
-    radial-gradient(1200px 800px at 82% -8%,  rgba(141, 182, 0, .14), transparent 60%),
+    radial-gradient(1200px 800px at 82% -8%,  rgba(var(--accent-rgb, 141, 182, 0), .14), transparent 60%),
     radial-gradient(1000px 720px at -6% 12%,  rgba(0, 0, 0, .05),     transparent 58%),
-    radial-gradient(900px 900px  at 50% 118%, rgba(141, 182, 0, .08), transparent 60%),
+    radial-gradient(900px 900px  at 50% 118%, rgba(var(--accent-rgb, 141, 182, 0), .08), transparent 60%),
     linear-gradient(180deg, #f7f7f6 0%, #eeeeec 48%, #f3f3f2 100%);
   background-attachment: fixed;
   overflow-x: hidden;
@@ -97,7 +97,7 @@ body::after {
 body::before {
   width: 46vmax; height: 46vmax;
   top: -14vmax; inset-inline-end: -12vmax;
-  background: radial-gradient(circle at 30% 30%, rgba(141, 182, 0, .42), transparent 65%);
+  background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb, 141, 182, 0), .42), transparent 65%);
   animation: orbDrift 22s var(--ease) infinite alternate;
 }
 body::after {
@@ -254,7 +254,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: radial-gradient(
     720px circle at var(--mx, 50%) var(--my, 0%),
     rgba(255, 255, 255, .9) 0%,
-    rgba(141, 182, 0, .22) 30%,
+    rgba(var(--accent-rgb, 141, 182, 0), .22) 30%,
     transparent 60%
   );
   transition: opacity .5s var(--ease);
@@ -323,7 +323,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   transition: border-color .3s var(--ease), box-shadow .3s var(--ease),
               background .3s var(--ease), transform .3s var(--ease);
 }
-.form-group input:hover { border-color: rgba(141, 182, 0, .35); background: rgba(255, 255, 255, .5); }
+.form-group input:hover { border-color: rgba(var(--accent-rgb, 141, 182, 0), .35); background: rgba(255, 255, 255, .5); }
 .form-group input:focus {
   outline: none; border-color: var(--pear);
   background: rgba(255, 255, 255, .72);
@@ -345,7 +345,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   transition: border-color .3s var(--ease), background .3s var(--ease), transform .3s var(--ease);
 }
 .btn-photo-estimate svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
-.btn-photo-estimate:hover { border-color: rgba(141, 182, 0, .55); background: rgba(255, 255, 255, .55); }
+.btn-photo-estimate:hover { border-color: rgba(var(--accent-rgb, 141, 182, 0), .55); background: rgba(255, 255, 255, .55); }
 .btn-photo-estimate:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--pear-ring); }
 .btn-photo-estimate.is-busy { cursor: progress; opacity: .75; }
 .btn-photo-estimate.is-busy svg { animation: photo-estimate-pulse 1.1s ease-in-out infinite; }
@@ -427,7 +427,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .photo-cam__corners i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; border-bottom-right-radius: 12px; }
 @keyframes pc-breathe { 50% { opacity: .45; } }
 .photo-cam.is-holding .photo-cam__corners, .photo-cam.is-shot .photo-cam__corners { inset: 4%; }
-.photo-cam.is-holding .photo-cam__corners i, .photo-cam.is-shot .photo-cam__corners i { border-color: #8db600; animation: none; }
+.photo-cam.is-holding .photo-cam__corners i, .photo-cam.is-shot .photo-cam__corners i { border-color: rgb(var(--accent-rgb, 141, 182, 0)); animation: none; }
 
 .photo-cam__hold {
   position: absolute; left: 50%; bottom: 18px; z-index: 3; width: 58px; height: 58px;
@@ -437,7 +437,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .photo-cam__hold svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .photo-cam__hold circle { fill: none; stroke-width: 4; }
 .photo-cam__hold-track { stroke: rgba(255, 255, 255, .3); }
-.photo-cam__hold-fill { stroke: #8db600; stroke-linecap: round; stroke-dasharray: 119.4; stroke-dashoffset: 119.4; }
+.photo-cam__hold-fill { stroke: rgb(var(--accent-rgb, 141, 182, 0)); stroke-linecap: round; stroke-dasharray: 119.4; stroke-dashoffset: 119.4; }
 .photo-cam__hold b {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: #fff; font-size: 1.4rem; transform: scale(0); transition: transform .3s cubic-bezier(.2, .9, .3, 1.5);
@@ -575,7 +575,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 
 .result-box {
   margin-top: 26px; padding: 18px 20px; border-radius: var(--radius);
-  background: linear-gradient(135deg, rgba(141,182,0,.14), rgba(141,182,0,.05));
+  background: linear-gradient(135deg, rgba(var(--accent-rgb, 141, 182, 0),.14), rgba(var(--accent-rgb, 141, 182, 0),.05));
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   border: 1px solid var(--glass-border);
   box-shadow: var(--shadow-soft);
@@ -654,7 +654,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* primary action - translucent pear-green glass */
 .btn-primary {
   width: 100%; margin-top: 20px; padding: 15px 24px;
-  border: 1px solid rgba(141, 182, 0, .35); border-radius: var(--pill);
+  border: 1px solid rgba(var(--accent-rgb, 141, 182, 0), .35); border-radius: var(--pill);
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep);
@@ -665,8 +665,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .btn-primary:hover:not(:disabled) {
   transform: translateY(-2px);
-  background: rgba(141, 182, 0, .26); border-color: rgba(141, 182, 0, .55);
-  box-shadow: 0 12px 32px rgba(141, 182, 0, .22), inset 0 1px 0 rgba(255, 255, 255, .6);
+  background: rgba(var(--accent-rgb, 141, 182, 0), .26); border-color: rgba(var(--accent-rgb, 141, 182, 0), .55);
+  box-shadow: 0 12px 32px rgba(var(--accent-rgb, 141, 182, 0), .22), inset 0 1px 0 rgba(255, 255, 255, .6);
 }
 .btn-primary:active:not(:disabled) { transform: scale(.96); }
 .btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--pear-ring), var(--shadow); }
@@ -698,7 +698,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .btn-update-measure {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   margin: 16px auto 4px; padding: 11px 22px;
-  border: 1px solid rgba(141, 182, 0, .40); border-radius: var(--pill);
+  border: 1px solid rgba(var(--accent-rgb, 141, 182, 0), .40); border-radius: var(--pill);
   background: var(--pear-soft);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep); font-family: var(--font-ui); font-weight: 800;
@@ -709,8 +709,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .btn-update-measure svg { flex: none; }
 .btn-update-measure:hover {
   transform: translateY(-2px);
-  background: rgba(141, 182, 0, .20); border-color: rgba(141, 182, 0, .55);
-  box-shadow: 0 10px 26px rgba(141, 182, 0, .20), inset 0 1px 0 rgba(255, 255, 255, .55);
+  background: rgba(var(--accent-rgb, 141, 182, 0), .20); border-color: rgba(var(--accent-rgb, 141, 182, 0), .55);
+  box-shadow: 0 10px 26px rgba(var(--accent-rgb, 141, 182, 0), .20), inset 0 1px 0 rgba(255, 255, 255, .55);
 }
 .btn-update-measure:active { transform: scale(.96); }
 .btn-update-measure:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--pear-ring), var(--shadow-soft); }
@@ -724,14 +724,14 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   display: flex; align-items: center; justify-content: center;
   border-radius: var(--pill);
   color: var(--pear-deep);
-  background: var(--pear-tint); border: 1px solid rgba(141, 182, 0, .35);
+  background: var(--pear-tint); border: 1px solid rgba(var(--accent-rgb, 141, 182, 0), .35);
   box-shadow: var(--shadow-pear);
 }
 
 /* ── monthly measurements-refresh nudge (Screen 1, forced form) ─────────── */
 .measurements-refresh-notice {
   margin: 0 0 16px; padding: 10px 14px;
-  border: 1px solid rgba(141, 182, 0, .35); border-radius: 12px;
+  border: 1px solid rgba(var(--accent-rgb, 141, 182, 0), .35); border-radius: 12px;
   background: var(--pear-tint); color: var(--pear-deep);
   font-family: var(--font-ui); font-size: .88rem; font-weight: 600; text-align: center;
 }
@@ -767,7 +767,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* ── focus-mode calculator hint ────────────────────────────────────────── */
 .focus-calc-hint {
   margin-bottom: 22px; padding: 15px 17px; border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, rgba(141,182,0,.14), rgba(141,182,0,.05));
+  background: linear-gradient(135deg, rgba(var(--accent-rgb, 141, 182, 0),.14), rgba(var(--accent-rgb, 141, 182, 0),.05));
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   border: 1px solid var(--glass-border); color: var(--pear-deep);
   font-size: .9rem; font-weight: 600; box-shadow: var(--shadow-soft);
@@ -792,7 +792,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
               background .3s var(--ease), transform .3s var(--ease);
 }
 #otpInput::placeholder { letter-spacing: normal; font-size: .95rem; font-weight: 500; color: var(--muted-2); }
-#otpInput:hover { border-color: rgba(141, 182, 0, .35); background: rgba(255, 255, 255, .5); }
+#otpInput:hover { border-color: rgba(var(--accent-rgb, 141, 182, 0), .35); background: rgba(255, 255, 255, .5); }
 #otpInput:focus {
   outline: none; border-color: var(--pear);
   background: rgba(255, 255, 255, .72);
@@ -947,8 +947,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* soft pear-green ambient bloom instead of the old dark vignette */
 #screen-calculator .calc-editorial__aura {
   background:
-    radial-gradient(52% 44% at 50% 42%, rgba(141, 182, 0, .20), transparent 72%),
-    radial-gradient(58% 48% at 84% 88%, rgba(141, 182, 0, .12), transparent 68%),
+    radial-gradient(52% 44% at 50% 42%, rgba(var(--accent-rgb, 141, 182, 0), .20), transparent 72%),
+    radial-gradient(58% 48% at 84% 88%, rgba(var(--accent-rgb, 141, 182, 0), .12), transparent 68%),
     radial-gradient(46% 42% at 10% 96%, rgba(255, 255, 255, .55), transparent 62%);
 }
 /* dot grid flips to dark-on-light so it stays legible on the cream panel */
@@ -957,7 +957,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   opacity: .5;
 }
 #screen-calculator .calc-editorial__scrim {
-  background: radial-gradient(120% 70% at 82% 0%, rgba(141, 182, 0, .10) 0%, transparent 58%);
+  background: radial-gradient(120% 70% at 82% 0%, rgba(var(--accent-rgb, 141, 182, 0), .10) 0%, transparent 58%);
 }
 /* ambient aura/grid - true background, absolute across the WHOLE panel */
 .calc-editorial__aura, .calc-editorial__grid { position: absolute; inset: 0; z-index: 0; }
@@ -992,8 +992,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .calc-editorial__aura {
   position: absolute; inset: -10%;
   background:
-    radial-gradient(46% 40% at 50% 38%, rgba(141, 182, 0, .32), transparent 70%),
-    radial-gradient(60% 50% at 85% 90%, rgba(141, 182, 0, .14), transparent 65%),
+    radial-gradient(46% 40% at 50% 38%, rgba(var(--accent-rgb, 141, 182, 0), .32), transparent 70%),
+    radial-gradient(60% 50% at 85% 90%, rgba(var(--accent-rgb, 141, 182, 0), .14), transparent 65%),
     radial-gradient(50% 45% at 8% 100%, rgba(255, 255, 255, .06), transparent 60%);
   animation: auraDrift 16s var(--ease) infinite alternate;
 }
@@ -1015,7 +1015,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    not a photo, so the old heavy black legibility gradients are gone. */
 .calc-editorial__scrim {
   position: absolute; inset: 0; z-index: 0; pointer-events: none;
-  background: radial-gradient(120% 70% at 82% 0%, rgba(141, 182, 0, .16) 0%, transparent 55%);
+  background: radial-gradient(120% 70% at 82% 0%, rgba(var(--accent-rgb, 141, 182, 0), .16) 0%, transparent 55%);
 }
 .calc-editorial__content {
   position: relative; z-index: 2;
@@ -1231,9 +1231,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   transform: scale(1);
 }
 @keyframes pulseDot {
-  0% { box-shadow: 0 0 0 0 rgba(141,182,0,.5); }
-  70% { box-shadow: 0 0 0 10px rgba(141,182,0,0); }
-  100% { box-shadow: 0 0 0 0 rgba(141,182,0,0); }
+  0% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb, 141, 182, 0),.5); }
+  70% { box-shadow: 0 0 0 10px rgba(var(--accent-rgb, 141, 182, 0),0); }
+  100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb, 141, 182, 0),0); }
 }
 /* Arrival flourish - a quick overshoot pop the instant the dot lands in its
    flush position, layered on top of (not replacing) the constant ambient
@@ -1249,7 +1249,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .focus-bar__text strong { font-family: var(--font-ui); font-weight: 800; }
 .focus-bar__badge {
   margin-inline-start: auto; font-size: .76rem; font-weight: 800; color: var(--pear-deep);
-  background: var(--pear-tint); border: 1px solid rgba(141,182,0,.4);
+  background: var(--pear-tint); border: 1px solid rgba(var(--accent-rgb, 141, 182, 0),.4);
   padding: 5px 13px; border-radius: var(--pill); white-space: nowrap;
 }
 .focus-bar__badge:empty { display: none; }
@@ -1390,7 +1390,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   border-radius: var(--pill);
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
-  border: 1px solid rgba(141, 182, 0, .35);
+  border: 1px solid rgba(var(--accent-rgb, 141, 182, 0), .35);
   /* LEGIBILITY FIX: var(--pear-deep) (#5f7d00) on var(--pear-tint) over the page's
      cream backdrop computes to only ~4.08:1 contrast - under the 4.5:1 WCAG AA
      minimum for text this size/weight. #4a6300 on the same background is ~5.9:1.
@@ -1403,8 +1403,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .btn-edit-measurements:hover {
   transform: translateY(-1px);
-  background: rgba(141, 182, 0, .24); border-color: rgba(141, 182, 0, .55);
-  box-shadow: 0 8px 22px rgba(141, 182, 0, .2);
+  background: rgba(var(--accent-rgb, 141, 182, 0), .24); border-color: rgba(var(--accent-rgb, 141, 182, 0), .55);
+  box-shadow: 0 8px 22px rgba(var(--accent-rgb, 141, 182, 0), .2);
 }
 .btn-edit-measurements:active { transform: scale(.96); }
 .btn-edit-measurements svg  { flex: none; }   /* icon is fixed-size - only the label may shrink */
@@ -2062,10 +2062,10 @@ html.pear-returning-check #screen-calculator { display: none !important; }
               border-color .2s var(--ease, ease);
 }
 .pg-swatch:hover { transform: translateY(-1px) scale(1.06); }
-.pg-swatch:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--pear-glow, rgba(141, 182, 0, .5)); }
+.pg-swatch:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--pear-glow, rgba(var(--accent-rgb, 141, 182, 0), .5)); }
 .pg-swatch.is-active {
-  border-color: #8db600;
-  box-shadow: 0 0 0 2px #8db600, 0 2px 8px rgba(0, 0, 0, .4);
+  border-color: rgb(var(--accent-rgb, 141, 182, 0));
+  box-shadow: 0 0 0 2px rgb(var(--accent-rgb, 141, 182, 0)), 0 2px 8px rgba(0, 0, 0, .4);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2095,12 +2095,12 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* breathing pear-green edge glow while live */
 .camera-card.live,
 .camera-card.show-live {
-  border-color: rgba(141,182,0,.7);
+  border-color: rgba(var(--accent-rgb, 141, 182, 0),.7);
   animation: liveBreath 2.4s var(--ease) infinite;
 }
 @keyframes liveBreath {
-  0%, 100% { box-shadow: 0 0 0 1px rgba(141,182,0,.5), 0 0 22px rgba(141,182,0,.30), var(--shadow); }
-  50%      { box-shadow: 0 0 0 2px rgba(141,182,0,.85), 0 0 46px rgba(141,182,0,.52), var(--shadow); }
+  0%, 100% { box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 141, 182, 0),.5), 0 0 22px rgba(var(--accent-rgb, 141, 182, 0),.30), var(--shadow); }
+  50%      { box-shadow: 0 0 0 2px rgba(var(--accent-rgb, 141, 182, 0),.85), 0 0 46px rgba(var(--accent-rgb, 141, 182, 0),.52), var(--shadow); }
 }
 
 .camera-card__live {
@@ -2245,7 +2245,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .scan-overlay__lines::after {
   content: ""; position: absolute; left: 0; right: 0; height: 16%;
-  background: linear-gradient(180deg, rgba(141,182,0,0), rgba(141,182,0,.7), rgba(141,182,0,0));
+  background: linear-gradient(180deg, rgba(var(--accent-rgb, 141, 182, 0),0), rgba(var(--accent-rgb, 141, 182, 0),.7), rgba(var(--accent-rgb, 141, 182, 0),0));
   filter: blur(2px);
   animation: scanSweep 2.1s cubic-bezier(.5,0,.5,1) infinite;
 }
@@ -2396,7 +2396,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* "Go Live" - inviting translucent pear-green glass capsule */
 .btn-capture {
   width: 100%; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 16px 24px; border: 1px solid rgba(141, 182, 0, .35); border-radius: var(--pill);
+  padding: 16px 24px; border: 1px solid rgba(var(--accent-rgb, 141, 182, 0), .35); border-radius: var(--pill);
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep); cursor: pointer;
@@ -2405,8 +2405,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .btn-capture:hover:not(:disabled) {
   transform: translateY(-2px);
-  background: rgba(141, 182, 0, .26); border-color: rgba(141, 182, 0, .55);
-  box-shadow: 0 12px 32px rgba(141, 182, 0, .22), inset 0 1px 0 rgba(255, 255, 255, .6);
+  background: rgba(var(--accent-rgb, 141, 182, 0), .26); border-color: rgba(var(--accent-rgb, 141, 182, 0), .55);
+  box-shadow: 0 12px 32px rgba(var(--accent-rgb, 141, 182, 0), .22), inset 0 1px 0 rgba(255, 255, 255, .6);
 }
 .btn-capture:active:not(:disabled) { transform: scale(.96); }
 .btn-capture:disabled {
@@ -2524,7 +2524,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   cursor: pointer;
   transition: border-color .3s var(--ease), box-shadow .4s var(--ease), transform .4s var(--ease);
 }
-.cat-item:hover { border-color: rgba(141,182,0,.5); box-shadow: var(--shadow-lift); transform: translateY(-4px) scale(1.02); }
+.cat-item:hover { border-color: rgba(var(--accent-rgb, 141, 182, 0),.5); box-shadow: var(--shadow-lift); transform: translateY(-4px) scale(1.02); }
 .cat-item:active { transform: scale(.96); }
 .cat-item.is-active {
   border-color: var(--pear);
@@ -2532,8 +2532,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   animation: tilePulse 2s var(--ease) infinite;
 }
 @keyframes tilePulse {
-  0%,100% { box-shadow: 0 0 0 2px rgba(141,182,0,.18), var(--shadow); }
-  50%     { box-shadow: 0 0 0 4px rgba(141,182,0,.30), 0 0 24px rgba(141,182,0,.30); }
+  0%,100% { box-shadow: 0 0 0 2px rgba(var(--accent-rgb, 141, 182, 0),.18), var(--shadow); }
+  50%     { box-shadow: 0 0 0 4px rgba(var(--accent-rgb, 141, 182, 0),.30), 0 0 24px rgba(var(--accent-rgb, 141, 182, 0),.30); }
 }
 .cat-item__media { position: relative; aspect-ratio: 3 / 4; background: rgba(255,255,255,.32); overflow: hidden; }
 .cat-item__body { padding: 10px 12px 12px; }
@@ -2595,7 +2595,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   z-index: 2;
   width: 44px; height: 44px; border-radius: 50%;
   align-items: center; justify-content: center;
-  border: 1px solid rgba(141, 182, 0, .35);
+  border: 1px solid rgba(var(--accent-rgb, 141, 182, 0), .35);
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep);
@@ -2606,8 +2606,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .cl-arrow:hover {
   transform: translateY(-50%) scale(1.05);
-  background: rgba(141, 182, 0, .26); border-color: rgba(141, 182, 0, .55);
-  box-shadow: 0 8px 22px rgba(141, 182, 0, .2);
+  background: rgba(var(--accent-rgb, 141, 182, 0), .26); border-color: rgba(var(--accent-rgb, 141, 182, 0), .55);
+  box-shadow: 0 8px 22px rgba(var(--accent-rgb, 141, 182, 0), .2);
 }
 .cl-arrow:active { transform: translateY(-50%) scale(.94); }
 .cl-arrow svg { flex: none; }
@@ -2639,7 +2639,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   transition: border-color .3s var(--ease), box-shadow .4s var(--ease), transform .4s var(--ease);
   animation: fade .5s both; animation-delay: calc(var(--i,0) * .06s);
 }
-.cl-card:hover { border-color: rgba(141,182,0,.5); box-shadow: var(--shadow-lift); transform: translateY(-5px) scale(1.02); }
+.cl-card:hover { border-color: rgba(var(--accent-rgb, 141, 182, 0),.5); box-shadow: var(--shadow-lift); transform: translateY(-5px) scale(1.02); }
 .cl-card:active { transform: scale(.97); }
 .cl-card__media { aspect-ratio: 3/4; background: rgba(255,255,255,.32); }
 .cl-card__body { padding: 12px 14px 4px; flex: 1; }
@@ -2648,7 +2648,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .cl-card__price { font-size: .84rem; color: var(--ink); font-weight: 600; }
 /* "Complete the Look" CTA - translucent pear-green glass capsule */
 .cl-card__look {
-  margin: 10px; padding: 11px 14px; border: 1px solid rgba(141, 182, 0, .35); border-radius: var(--pill);
+  margin: 10px; padding: 11px 14px; border: 1px solid rgba(var(--accent-rgb, 141, 182, 0), .35); border-radius: var(--pill);
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep);
@@ -2656,7 +2656,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   cursor: pointer; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5);
   transition: all .4s var(--ease);
 }
-.cl-card__look:hover { transform: translateY(-2px); background: rgba(141, 182, 0, .26); border-color: rgba(141, 182, 0, .55); box-shadow: 0 10px 24px rgba(141, 182, 0, .2); }
+.cl-card__look:hover { transform: translateY(-2px); background: rgba(var(--accent-rgb, 141, 182, 0), .26); border-color: rgba(var(--accent-rgb, 141, 182, 0), .55); box-shadow: 0 10px 24px rgba(var(--accent-rgb, 141, 182, 0), .2); }
 .cl-card__look:active { transform: scale(.96); }
 
 /* full-look confirmation cue */
@@ -2666,7 +2666,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   letter-spacing: .04em; text-transform: uppercase; color: #fff;
   background: linear-gradient(135deg, var(--pear-deep), var(--pear));
   padding: 3px 11px; border-radius: var(--pill); vertical-align: middle;
-  box-shadow: 0 4px 14px rgba(141,182,0,.3);
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb, 141, 182, 0),.3);
 }
 
 /* ── toast ─────────────────────────────────────────────────────────────── */
@@ -2700,7 +2700,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* "Watch Again" - translucent pear-green glass capsule (primary replay) */
 .btn-watch {
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 14px 24px; border: 1px solid rgba(141, 182, 0, .35); border-radius: var(--pill);
+  padding: 14px 24px; border: 1px solid rgba(var(--accent-rgb, 141, 182, 0), .35); border-radius: var(--pill);
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep); cursor: pointer;
@@ -2708,7 +2708,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .55);
   transition: all .4s var(--ease);
 }
-.btn-watch:hover { transform: translateY(-2px); background: rgba(141, 182, 0, .26); border-color: rgba(141, 182, 0, .55); box-shadow: 0 12px 32px rgba(141, 182, 0, .22); }
+.btn-watch:hover { transform: translateY(-2px); background: rgba(var(--accent-rgb, 141, 182, 0), .26); border-color: rgba(var(--accent-rgb, 141, 182, 0), .55); box-shadow: 0 12px 32px rgba(var(--accent-rgb, 141, 182, 0), .22); }
 .btn-watch:active { transform: scale(.96); }
 .btn-watch__icon { font-size: 1.15rem; }
 .btn-watch__en { font-size: .74rem; opacity: .8; letter-spacing: .06em; }
@@ -2819,7 +2819,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 #btn-next-screen:focus-visible:not(:disabled) { animation: none; }
 @keyframes continueInvite {
   0%, 100% { box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.55); }
-  50%      { box-shadow: 0 12px 30px rgba(141,182,0,.30), 0 0 0 4px rgba(141,182,0,.12), inset 0 1px 0 rgba(255,255,255,.6); }
+  50%      { box-shadow: 0 12px 30px rgba(var(--accent-rgb, 141, 182, 0),.30), 0 0 0 4px rgba(var(--accent-rgb, 141, 182, 0),.12), inset 0 1px 0 rgba(255,255,255,.6); }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -2906,7 +2906,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   cursor: pointer; box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,.6);
   transition: all .5s cubic-bezier(.16, 1, .3, 1);
 }
-.pip-retake:hover { transform: translateY(-2px); background: rgba(255,255,255,.55); border-color: rgba(141,182,0,.45); box-shadow: var(--shadow); }
+.pip-retake:hover { transform: translateY(-2px); background: rgba(255,255,255,.55); border-color: rgba(var(--accent-rgb, 141, 182, 0),.45); box-shadow: var(--shadow); }
 .pip-retake:active { transform: scale(.95); }     /* fluid finger-press resistance */
 .pip-retake__icon { font-size: 1.05rem; line-height: 1; color: var(--pear-deep); transition: transform .6s cubic-bezier(.16,1,.3,1); }
 .pip-retake:hover .pip-retake__icon { transform: rotate(-180deg); }
@@ -2947,13 +2947,13 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   animation: galleryItemIn .5s cubic-bezier(.25, 1, .5, 1) both;
   animation-delay: calc(var(--gi, 0) * .05s);
 }
-.live-gallery-item:hover { transform: scale(1.06) translateY(-4px); box-shadow: var(--shadow-lift); border-color: rgba(141,182,0,.55); }
+.live-gallery-item:hover { transform: scale(1.06) translateY(-4px); box-shadow: var(--shadow-lift); border-color: rgba(var(--accent-rgb, 141, 182, 0),.55); }
 .live-gallery-item:active { transform: scale(.95); }   /* organic fluid press */
 /* a tiny "LIVE" dot marks tiles that hold a playable clip */
 .live-gallery-item.has-clip::before {
   content: ""; position: absolute; top: 9px; inset-inline-start: 9px; z-index: 3;
   width: 7px; height: 7px; border-radius: 50%; background: var(--pear);
-  box-shadow: 0 0 0 3px rgba(141,182,0,.25), 0 0 10px var(--pear-glow);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 141, 182, 0),.25), 0 0 10px var(--pear-glow);
   animation: blink 1.6s infinite;
 }
 @keyframes galleryItemIn { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
@@ -3055,7 +3055,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* ── active replay glow - the tile currently playing in #aiVideo ── */
 .live-gallery-item.is-playing {
   border-color: var(--pear);
-  box-shadow: 0 0 0 2px var(--pear-ring), 0 10px 28px rgba(141,182,0,.3), var(--shadow-lift);
+  box-shadow: 0 0 0 2px var(--pear-ring), 0 10px 28px rgba(var(--accent-rgb, 141, 182, 0),.3), var(--shadow-lift);
   animation: tilePulse 2s var(--ease) infinite;
 }
 
@@ -3071,21 +3071,21 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .lgi-select:hover { transform: scale(1.12); background: rgba(16,16,18,.6); }
 .lgi-select:active { transform: scale(.9); }
-.live-gallery-item.is-selected { border-color: var(--pear); box-shadow: 0 0 0 2px rgba(141,182,0,.4), var(--shadow); }
+.live-gallery-item.is-selected { border-color: var(--pear); box-shadow: 0 0 0 2px rgba(var(--accent-rgb, 141, 182, 0),.4), var(--shadow); }
 .live-gallery-item.is-selected .lgi-select {
   background: var(--pear); border-color: #fff; color: #fff;
-  box-shadow: 0 0 0 3px rgba(141,182,0,.3), 0 0 12px var(--pear-glow);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 141, 182, 0),.3), 0 0 12px var(--pear-glow);
 }
 
 /* ── floating "Compare Looks" pill (appears when exactly 2 are selected) ── */
 .pear-compare-bar {
   display: flex; align-items: center; gap: 9px; width: fit-content; margin: 16px auto 2px;
   padding: 12px 22px; border-radius: 50px;
-  background: linear-gradient(135deg, var(--pear-tint), rgba(141,182,0,.08));
+  background: linear-gradient(135deg, var(--pear-tint), rgba(var(--accent-rgb, 141, 182, 0),.08));
   -webkit-backdrop-filter: blur(25px) saturate(200%); backdrop-filter: blur(25px) saturate(200%);
-  border: 1px solid rgba(141,182,0,.45);
+  border: 1px solid rgba(var(--accent-rgb, 141, 182, 0),.45);
   color: var(--pear-deep); font-family: var(--font-ui); font-weight: 800; font-size: .92rem;
-  cursor: pointer; box-shadow: 0 10px 30px rgba(141,182,0,.22), inset 0 1px 0 rgba(255,255,255,.55);
+  cursor: pointer; box-shadow: 0 10px 30px rgba(var(--accent-rgb, 141, 182, 0),.22), inset 0 1px 0 rgba(255,255,255,.55);
   transition: all .5s cubic-bezier(.16, 1, .3, 1);
   animation: compareBarIn .5s cubic-bezier(.16, 1, .3, 1) both;
 }
@@ -3105,7 +3105,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   .pear-compare-bar { margin-inline-start: var(--help-fab-gutter); margin-inline-end: auto; }
 }
 .pear-compare-bar[hidden] { display: none; }
-.pear-compare-bar:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 16px 38px rgba(141,182,0,.3); }
+.pear-compare-bar:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 16px 38px rgba(var(--accent-rgb, 141, 182, 0),.3); }
 .pear-compare-bar:active { transform: scale(.96); }
 .pear-compare-bar__icon { font-size: 1.05rem; }
 .pear-compare-bar__en { font-size: .7rem; font-weight: 600; opacity: .6; letter-spacing: .04em; }
@@ -3397,7 +3397,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .pip-retake > *, .plb-btn > *, .pear-compare-bar > * { position: relative; z-index: 1; }
 .pear-ripple {
   position: absolute; z-index: 0; border-radius: 50%; pointer-events: none;
-  background: radial-gradient(circle, rgba(141,182,0,.55) 0%, rgba(255,255,255,.38) 42%, transparent 70%);
+  background: radial-gradient(circle, rgba(var(--accent-rgb, 141, 182, 0),.55) 0%, rgba(255,255,255,.38) 42%, transparent 70%);
   transform: scale(0); opacity: .85; mix-blend-mode: screen;
   animation: pearRipple .62s var(--ease) forwards;
 }
@@ -3477,8 +3477,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   }
   @keyframes stageIdle {
     0%, 100% { box-shadow: 0 20px 54px rgba(0,0,0,.18), inset 0 0 0 1px rgba(255,255,255,.08); }
-    50%      { box-shadow: 0 24px 64px rgba(0,0,0,.20), 0 0 30px rgba(141,182,0,.16),
-                           inset 0 0 0 1px rgba(141,182,0,.20); }
+    50%      { box-shadow: 0 24px 64px rgba(0,0,0,.20), 0 0 30px rgba(var(--accent-rgb, 141, 182, 0),.16),
+                           inset 0 0 0 1px rgba(var(--accent-rgb, 141, 182, 0),.20); }
   }
   .camera-card__placeholder p { font-size: .96rem; }
   .camera-card__icon { font-size: 3rem; }
@@ -3501,7 +3501,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   .btn-capture:not(:disabled):not(.is-live) { animation: capInvite 2.4s ease-in-out infinite; }
   @keyframes capInvite {
     0%, 100% { box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.55); }
-    50%      { box-shadow: 0 14px 34px rgba(141,182,0,.30), 0 0 0 5px rgba(141,182,0,.10),
+    50%      { box-shadow: 0 14px 34px rgba(var(--accent-rgb, 141, 182, 0),.30), 0 0 0 5px rgba(var(--accent-rgb, 141, 182, 0),.10),
                            inset 0 1px 0 rgba(255,255,255,.6); }
   }
 
@@ -3581,7 +3581,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: linear-gradient(135deg, var(--pear), var(--pear-deep));
   color: #fff; font-family: var(--font-ui); font-weight: 900; font-size: .68rem;
   line-height: 1; border: 1.5px solid rgba(255,255,255,.9);
-  box-shadow: 0 3px 10px rgba(141,182,0,.4);
+  box-shadow: 0 3px 10px rgba(var(--accent-rgb, 141, 182, 0),.4);
   transition: transform .5s var(--spring), opacity .35s var(--ease);
 }
 .cart-btn__count.is-empty { transform: scale(0); opacity: 0; }
@@ -3893,8 +3893,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    so the button visibly reads as engaged rather than relying on the popover
    alone to communicate it. */
 .pear-help-widget__btn[aria-expanded="true"] {
-  background: linear-gradient(135deg, rgba(141, 182, 0, .26) 0%, rgba(141, 182, 0, .14) 100%);
-  border-color: rgba(141, 182, 0, .4);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb, 141, 182, 0), .26) 0%, rgba(var(--accent-rgb, 141, 182, 0), .14) 100%);
+  border-color: rgba(var(--accent-rgb, 141, 182, 0), .4);
 }
 .pear-help-widget[hidden] { display: none; }
 
@@ -4062,8 +4062,8 @@ body.focus-mode.is-scrolled .profile-btn {
   position: relative; overflow: hidden;
   width: 100%; min-height: 56px; padding: 16px 24px;
   display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid rgba(141,182,0,.4); border-radius: var(--pill);
-  background: linear-gradient(135deg, rgba(141,182,0,.22), rgba(141,182,0,.10));
+  border: 1px solid rgba(var(--accent-rgb, 141, 182, 0),.4); border-radius: var(--pill);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb, 141, 182, 0),.22), rgba(var(--accent-rgb, 141, 182, 0),.10));
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep); cursor: pointer;
   font-family: var(--font-ui); font-weight: 800; font-size: 1.04rem; letter-spacing: .01em;
@@ -4071,7 +4071,7 @@ body.focus-mode.is-scrolled .profile-btn {
   transition: transform .45s var(--power), background .4s var(--ease),
               border-color .4s var(--ease), box-shadow .4s var(--ease), color .3s var(--ease);
 }
-.btn-add-cart:hover  { transform: translateY(-2px); background: linear-gradient(135deg, rgba(141,182,0,.30), rgba(141,182,0,.14)); border-color: rgba(141,182,0,.6); box-shadow: 0 14px 34px rgba(141,182,0,.24), inset 0 1px 0 rgba(255,255,255,.6); }
+.btn-add-cart:hover  { transform: translateY(-2px); background: linear-gradient(135deg, rgba(var(--accent-rgb, 141, 182, 0),.30), rgba(var(--accent-rgb, 141, 182, 0),.14)); border-color: rgba(var(--accent-rgb, 141, 182, 0),.6); box-shadow: 0 14px 34px rgba(var(--accent-rgb, 141, 182, 0),.24), inset 0 1px 0 rgba(255,255,255,.6); }
 .btn-add-cart:active { transform: scale(.96); }
 .btn-add-cart:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--pear-ring), var(--shadow); }
 .bac__en   { font-weight: 600; font-size: .76rem; opacity: .68; letter-spacing: .04em; }
@@ -4090,7 +4090,7 @@ body.focus-mode.is-scrolled .profile-btn {
 }
 .bac__spinner {
   width: 22px; height: 22px; margin: -11px 0 0 -11px;
-  border: 2.5px solid rgba(141,182,0,.28);
+  border: 2.5px solid rgba(var(--accent-rgb, 141, 182, 0),.28);
   border-top-color: var(--pear-deep); border-radius: 50%;
   transform: scale(.5);
 }
@@ -4157,7 +4157,7 @@ body.focus-mode.is-scrolled .profile-btn {
   width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
   background: linear-gradient(135deg, var(--pear), var(--pear-deep));
   color: #fff; font-size: .8rem; font-weight: 900;
-  box-shadow: 0 3px 10px rgba(141,182,0,.4);
+  box-shadow: 0 3px 10px rgba(var(--accent-rgb, 141, 182, 0),.4);
 }
 
 /* ── 2 · "LIQUID BRAND APERTURE" transition - GPU-ONLY (transform + opacity) ──
@@ -4191,7 +4191,7 @@ body.focus-mode.is-scrolled .profile-btn {
   width: clamp(190px, 30vmin, 320px); height: auto;
   transform-origin: 50% 52%;
   transform: translate3d(0, 0, 0) scale(.15); opacity: 0;
-  filter: drop-shadow(0 24px 60px rgba(141,182,0,.4));
+  filter: drop-shadow(0 24px 60px rgba(var(--accent-rgb, 141, 182, 0),.4));
   will-change: transform, opacity;
   backface-visibility: hidden; -webkit-backface-visibility: hidden;
 }
@@ -4298,13 +4298,13 @@ body.focus-mode.is-scrolled .profile-btn {
   --muted-2:#a89f8d;
 
   /* PEAR-GREEN accent family - the one sanctioned accent */
-  --pear:      #8DB600;
+  --pear:      rgb(var(--accent-rgb, 141, 182, 0));
   --pear-deep: #5f7d00;
-  --pear-soft: rgba(141, 182, 0, .10);
-  --pear-tint: rgba(141, 182, 0, .14);
-  --pear-ring: rgba(141, 182, 0, .22);
-  --pear-glow: rgba(141, 182, 0, .50);
-  --shadow-pear: 0 12px 36px rgba(141, 182, 0, .26);
+  --pear-soft: rgba(var(--accent-rgb, 141, 182, 0), .10);
+  --pear-tint: rgba(var(--accent-rgb, 141, 182, 0), .14);
+  --pear-ring: rgba(var(--accent-rgb, 141, 182, 0), .22);
+  --pear-glow: rgba(var(--accent-rgb, 141, 182, 0), .50);
+  --shadow-pear: 0 12px 36px rgba(var(--accent-rgb, 141, 182, 0), .26);
 
   /* warm frosted ivory "Liquid Glass" (blur + saturation already in --blur) */
   --glass:        rgba(255, 252, 244, .55);
@@ -4317,14 +4317,14 @@ body.focus-mode.is-scrolled .profile-btn {
 /* ivory canvas + soft warm light with a faint pear-green brand wash */
 body {
   background:
-    radial-gradient(1100px 760px at 84% -10%, rgba(141, 182, 0, .10), transparent 60%),
+    radial-gradient(1100px 760px at 84% -10%, rgba(var(--accent-rgb, 141, 182, 0), .10), transparent 60%),
     radial-gradient(900px 700px  at -8% 14%,  rgba(22, 19, 12, .05),  transparent 58%),
-    radial-gradient(900px 900px  at 50% 118%, rgba(141, 182, 0, .06), transparent 60%),
+    radial-gradient(900px 900px  at 50% 118%, rgba(var(--accent-rgb, 141, 182, 0), .06), transparent 60%),
     linear-gradient(180deg, #f4eee1 0%, #ece4d2 52%, #f1ebdd 100%);
   background-attachment: fixed;
 }
 /* ambient orbs: one warm sand, one faint pear-green - subtle, never an accent */
-body::before { background: radial-gradient(circle at 30% 30%, rgba(141, 182, 0, .26), transparent 65%); }
+body::before { background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb, 141, 182, 0), .26), transparent 65%); }
 body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92, .22), transparent 65%); }
 
 /* the brand mark stays crisp black line-art, exactly like the logo */
@@ -4335,17 +4335,17 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
 
 /* ── ADD-TO-CART CTA - pear-green physical-glass feedback ────────────────── */
 .btn-add-cart {
-  border-color: rgba(141, 182, 0, .40);
-  background: linear-gradient(135deg, rgba(141, 182, 0, .20), rgba(141, 182, 0, .08));
+  border-color: rgba(var(--accent-rgb, 141, 182, 0), .40);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb, 141, 182, 0), .20), rgba(var(--accent-rgb, 141, 182, 0), .08));
   color: var(--pear-deep);
 }
 .btn-add-cart:hover {
-  background: linear-gradient(135deg, rgba(141, 182, 0, .30), rgba(141, 182, 0, .13));
-  border-color: rgba(141, 182, 0, .60);
-  box-shadow: 0 14px 34px rgba(141, 182, 0, .26), inset 0 1px 0 rgba(255, 255, 255, .6);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb, 141, 182, 0), .30), rgba(var(--accent-rgb, 141, 182, 0), .13));
+  border-color: rgba(var(--accent-rgb, 141, 182, 0), .60);
+  box-shadow: 0 14px 34px rgba(var(--accent-rgb, 141, 182, 0), .26), inset 0 1px 0 rgba(255, 255, 255, .6);
 }
 .btn-add-cart:focus-visible { box-shadow: 0 0 0 4px var(--pear-ring), var(--shadow); }
-.bac__spinner { border-color: rgba(141, 182, 0, .28); border-top-color: var(--pear-deep); }
+.bac__spinner { border-color: rgba(var(--accent-rgb, 141, 182, 0), .28); border-top-color: var(--pear-deep); }
 .bac__check   { color: var(--pear-deep); }
 .btn-add-cart.is-done {                      /* satisfying success fill */
   background: linear-gradient(135deg, var(--pear), var(--pear-deep));
@@ -4359,7 +4359,7 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
      text at ~2.4:1 contrast - well under the 4.5:1 AA minimum. A flat
      --pear-deep keeps the same brand color family at a safe ~4.75:1. */
   background: var(--pear-deep);
-  box-shadow: 0 3px 10px rgba(141, 182, 0, .45);
+  box-shadow: 0 3px 10px rgba(var(--accent-rgb, 141, 182, 0), .45);
 }
 .cart-fly--dot {
   background: radial-gradient(circle at 34% 30%, #b6e000, var(--pear) 55%, var(--pear-deep));
@@ -4367,7 +4367,7 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
 }
 .lux-cart-toast__icon {
   background: linear-gradient(135deg, var(--pear), var(--pear-deep));
-  box-shadow: 0 3px 10px rgba(141, 182, 0, .40);
+  box-shadow: 0 3px 10px rgba(var(--accent-rgb, 141, 182, 0), .40);
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -4430,9 +4430,9 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
 .liquid-mesh {
   position: fixed; inset: -14%; z-index: 0; pointer-events: none;
   background:
-    radial-gradient(38% 38% at 22% 26%, rgba(141, 182, 0, .16), transparent 70%),
+    radial-gradient(38% 38% at 22% 26%, rgba(var(--accent-rgb, 141, 182, 0), .16), transparent 70%),
     radial-gradient(42% 42% at 82% 20%, rgba(150, 132, 92, .18), transparent 72%),
-    radial-gradient(48% 48% at 70% 84%, rgba(141, 182, 0, .10), transparent 72%),
+    radial-gradient(48% 48% at 70% 84%, rgba(var(--accent-rgb, 141, 182, 0), .10), transparent 72%),
     radial-gradient(40% 40% at 14% 80%, rgba(22, 19, 12, .06),  transparent 72%);
   /* Was blur(64px) with `will-change: transform`. This element is fixed at
      inset:-14% (≈128% of the viewport on both axes, ~3.4Mpx at 1080p), so a
@@ -4456,8 +4456,8 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
 /* ── Tactile Add-to-Cart: soft pear-green "fluid glow" pulse while working ── */
 .btn-add-cart.is-loading { animation: bacGlow 1.5s var(--ease) infinite; }
 @keyframes bacGlow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(141, 182, 0, 0), var(--shadow); }
-  50%      { box-shadow: 0 0 0 6px rgba(141, 182, 0, .12), 0 10px 30px rgba(141, 182, 0, .30); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb, 141, 182, 0), 0), var(--shadow); }
+  50%      { box-shadow: 0 0 0 6px rgba(var(--accent-rgb, 141, 182, 0), .12), 0 10px 30px rgba(var(--accent-rgb, 141, 182, 0), .30); }
 }
 
 /* ── Micro-inertia floating label - glides magnetically toward the cursor ── */
@@ -6177,7 +6177,7 @@ body.has-cookie-banner .pear-help-widget {
    own backdrop colour instead of over the scrolling text. */
 .cam-guide__go.btn-primary { background: linear-gradient(var(--pear-tint), var(--pear-tint)), #ecece8; }
 /* ...hovered too: a phone keeps :hover after a tap, and the tap that opens the camera lands where this button appears. */
-.cam-guide__go.btn-primary:hover:not(:disabled) { background: linear-gradient(rgba(141, 182, 0, .26), rgba(141, 182, 0, .26)), #ecece8; }
+.cam-guide__go.btn-primary:hover:not(:disabled) { background: linear-gradient(rgba(var(--accent-rgb, 141, 182, 0), .26), rgba(var(--accent-rgb, 141, 182, 0), .26)), #ecece8; }
 .cam-guide__go::after {
   content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
   background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .55) 50%, transparent 70%);
@@ -6491,8 +6491,8 @@ body.has-cookie-banner .pear-help-widget {
   --lg2-blur:   blur(18px) saturate(190%);
   --lg2-clear:  linear-gradient(180deg, rgba(255, 255, 255, .62) 0%, rgba(255, 255, 255, .30) 100%);
   --lg2-clear-hover: linear-gradient(180deg, rgba(255, 255, 255, .74) 0%, rgba(255, 255, 255, .40) 100%);
-  --lg2-tint:   linear-gradient(180deg, rgba(178, 214, 52, .50) 0%, rgba(141, 182, 0, .30) 100%);
-  --lg2-tint-hover: linear-gradient(180deg, rgba(186, 220, 64, .60) 0%, rgba(141, 182, 0, .38) 100%);
+  --lg2-tint:   linear-gradient(180deg, rgba(178, 214, 52, .50) 0%, rgba(var(--accent-rgb, 141, 182, 0), .30) 100%);
+  --lg2-tint-hover: linear-gradient(180deg, rgba(186, 220, 64, .60) 0%, rgba(var(--accent-rgb, 141, 182, 0), .38) 100%);
   --lg2-dark:   linear-gradient(180deg, rgba(255, 255, 255, .22) 0%, rgba(255, 255, 255, .08) 100%);
   /* the glass itself: a bright top lip, a faint bottom catch-light, a hairline rim, inner thickness */
   --lg2-rim:    inset 0 1px 0 rgba(255, 255, 255, .95),
@@ -6550,7 +6550,7 @@ body #pearReplayZone .pear-rz-btn--dl {
   background: linear-gradient(180deg, rgb(201, 233, 82) 0%, rgb(152, 194, 10) 100%);
   color: #142000;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), inset 0 0 0 .5px rgba(255, 255, 255, .55),
-              inset 0 -8px 16px -12px rgba(255, 255, 255, .55), 0 10px 26px -12px rgba(141, 182, 0, .6);
+              inset 0 -8px 16px -12px rgba(255, 255, 255, .55), 0 10px 26px -12px rgba(var(--accent-rgb, 141, 182, 0), .6);
 }
 body #pearReplayZone .pear-rz-btn--dl .pear-rz-btn__en { opacity: .72; }
 /* Add to Cart's success moment (the white check) - the same solid pear glass, so the check reads; the tint rule above
@@ -6562,7 +6562,7 @@ body .btn-add-cart.is-done:not(#_) {
               inset 0 -8px 16px -12px rgba(255, 255, 255, .45), 0 10px 26px -12px rgba(120, 160, 0, .6);
 }
 /* the selected size reads as chosen, the rest as glass keys */
-body .pear-sz-btn.is-active { box-shadow: var(--lg2-rim), var(--lg2-depth), 0 0 0 1px rgba(141, 182, 0, .55), var(--lg2-drop); }
+body .pear-sz-btn.is-active { box-shadow: var(--lg2-rim), var(--lg2-depth), 0 0 0 1px rgba(var(--accent-rgb, 141, 182, 0), .55), var(--lg2-drop); }
 /* disabled: the glass stays, the action does not - muted ink, no drop shadow, no press */
 body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-update-measure, .cookie-btn, .pear-sz-btn,
          .pear-rz-btn, .cl-card__look):is(:disabled, [aria-disabled="true"]) {
@@ -6594,7 +6594,7 @@ body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn
    frame). The status signals stay - the presence lock ring and the garment-detect scan say something; these did not. */
 body .camera-card.live, body .camera-card.show-live {
   animation: none;
-  box-shadow: 0 0 0 1.5px rgba(141, 182, 0, .72), 0 18px 44px -20px rgba(15, 23, 42, .35);
+  box-shadow: 0 0 0 1.5px rgba(var(--accent-rgb, 141, 182, 0), .72), 0 18px 44px -20px rgba(15, 23, 42, .35);
 }
 body .cam-guide__step--key { animation: camGuideStep .62s var(--ease-spring) both; animation-delay: .16s; }
 body .cat-item.is-active { animation: none; }
@@ -6625,7 +6625,7 @@ body .cat-item.is-active { animation: none; }
   body #pearReplayZone .pear-rz-btn--dl:hover:not(#_) {
     background: linear-gradient(180deg, rgb(212, 240, 98) 0%, rgb(160, 202, 14) 100%); color: #142000;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85), inset 0 0 0 .5px rgba(255, 255, 255, .6),
-                inset 0 -8px 16px -12px rgba(255, 255, 255, .6), 0 16px 32px -14px rgba(141, 182, 0, .7);
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .6), 0 16px 32px -14px rgba(var(--accent-rgb, 141, 182, 0), .7);
   }
   body .cl-arrow:hover:not(#_) { transform: translateY(-50%); background: var(--lg2-clear-hover); }
   body .pip-retake:hover .pip-retake__icon { transform: none; }
@@ -6649,7 +6649,7 @@ body .cat-item.is-active { animation: none; }
   body #pearReplayZone .pear-rz-btn--dl:hover:not(#_) {
     background: linear-gradient(180deg, rgb(201, 233, 82) 0%, rgb(152, 194, 10) 100%); color: #142000;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), inset 0 0 0 .5px rgba(255, 255, 255, .55),
-                inset 0 -8px 16px -12px rgba(255, 255, 255, .55), 0 10px 26px -12px rgba(141, 182, 0, .6);
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .55), 0 10px 26px -12px rgba(var(--accent-rgb, 141, 182, 0), .6);
   }
   body .pear-sz-btn.is-oos:hover:not(#_) { background: linear-gradient(180deg, rgba(255, 255, 255, .42), rgba(255, 255, 255, .2)); color: #9a9aa0; }
   body .cl-arrow:hover:not(#_) { transform: translateY(-50%); }
@@ -6697,7 +6697,7 @@ body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn
 
 body #pearReplayZone .pear-rz-btn--dl.lg-press:not(#_):not(#__) {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), inset 0 0 0 .5px rgba(255, 255, 255, .45),
-              inset 0 4px 14px rgba(40, 60, 0, .35), 0 4px 12px -8px rgba(141, 182, 0, .5);
+              inset 0 4px 14px rgba(40, 60, 0, .35), 0 4px 12px -8px rgba(var(--accent-rgb, 141, 182, 0), .5);
 }
 
 /* ── 5 · one glass track, one lens thumb ── */
@@ -6776,3 +6776,242 @@ body .complete-look.is-complete .cl-title::after { display: inline-block; white-
 /* the two buttons this layer added to the list: a box for ::before and a stacking context for its z-index:-1 */
 body .cl-card__look { position: relative; isolation: isolate; }
 body .camera-card__timer { position: relative; isolation: isolate; }
+
+/* ============================================================================
+   STORE THEME - the room in the store's own colours, flat (2026-11-25)
+   ----------------------------------------------------------------------------
+   Active ONLY on html.pear-store-theme, which fitting-room/store-theme.js sets when the
+   store's embed names a theme (data-pear-theme / data-pear-color-*). Without it this
+   layer matches nothing and the room is PEAR's Liquid Glass look exactly.
+
+   Asked: "not look AI, the store's colours, not everything centred - text in the middle
+   or right-to-left depending". So, under a store theme: one flat surface in the store's
+   background colour, solid buttons in its primary colour, its accent for highlights,
+   hairline borders, its corner radius and typeface, no frosted glass, no glow, no
+   gradient wash - and headings, labels and notes aligned to the reading direction
+   (start: right in Hebrew, left in English); only the buttons' own labels and the big
+   size answer stay centred.
+
+   The colours are variables (--store-*, --accent-rgb) - never a store's name in here.
+   The `:not(#_)` suffixes give a rule an id's weight: the glass layers above use it too.
+   ============================================================================ */
+html.pear-store-theme {
+  --bg: var(--store-bg);
+  --bg-soft: var(--store-bg);
+  --ink: var(--store-text);
+  --text: var(--store-text);
+  --muted: var(--store-muted);
+  --muted-2: var(--store-muted);
+  --pear: var(--store-accent);
+  --pear-deep: var(--store-text);
+  --glass: var(--store-bg);
+  --glass-strong: var(--store-bg);
+  --glass-soft: var(--store-bg);
+  --glass-border: var(--store-line);
+  --glass-line: var(--store-line);
+  --blur: none;
+  --blur-lg: none;
+  --shadow: none;
+  --shadow-soft: none;
+  --shadow-lift: none;
+  --shadow-pear: none;
+  --radius: var(--store-radius-lg);
+  --radius-sm: var(--store-radius);
+  --radius-lg: var(--store-radius-lg);
+  --pill: var(--store-radius);
+  --primary-rgb: var(--accent-rgb);
+  --primary-solid: var(--store-primary);
+  --focus-rgb: var(--store-text-rgb);
+  --help-accent: var(--store-text);
+  --ink-input: var(--store-text);
+  --ink-label: var(--store-text);
+  --ink-secondary: var(--store-muted);
+  --lg-blur: none;
+  --lg-fill: var(--store-bg);
+  --lg-border: 1px solid var(--store-line);
+  --lg-edge: none;
+  --lg-edge-dark: none;
+  --lg-shadow: none;
+  --lgb-blur: none;
+  --lgb-blur-modal: none;
+  --lgb-glass: var(--store-bg);
+  --lgb-border: var(--store-line);
+  --lgb-shadow: none;
+  --lgb-sheen: none;
+  --lg2-blur: none;
+  --lg2-clear: var(--store-bg);
+  --lg2-clear-hover: var(--store-soft);
+  --lg2-tint: var(--store-primary);
+  --lg2-tint-hover: var(--store-primary);
+  --lg2-dark: rgba(0, 0, 0, .55);
+  --lg2-rim: 0 0 0 0 transparent;
+  --lg2-depth: 0 0 0 0 transparent;
+  --lg2-drop: 0 0 0 0 transparent;
+  --lg2-press: inset 0 0 0 999px rgba(0, 0, 0, .08);
+  --font-ui: var(--store-font, -apple-system), -apple-system, BlinkMacSystemFont, "Heebo", "Segoe UI", Roboto, system-ui, sans-serif;
+}
+
+/* ── 1 · one flat page: no ambient wash, no mesh, no frosted glass ── */
+html.pear-store-theme,
+html.pear-store-theme body { background: var(--store-bg) !important; color: var(--store-text); }
+html.pear-store-theme body::before,
+html.pear-store-theme body::after,
+html.pear-store-theme .liquid-mesh,
+html.pear-store-theme .calc-editorial__aura,
+html.pear-store-theme .calc-editorial__grid { display: none !important; }
+html.pear-store-theme body * {
+  -webkit-backdrop-filter: none !important;
+          backdrop-filter: none !important;
+  text-shadow: none !important;
+}
+/* every glass sheen / specular rim drawn on a pseudo-element goes */
+html.pear-store-theme body :is(button, .calc-card, .result-box, .form-group input)::before { background-image: none; }
+
+/* ── 2 · surfaces: the store's background, a hairline, its radius ── */
+html.pear-store-theme body :is(.calc-card, .calc-editorial, .result-box, .garment-banner, .selected-item-banner,
+  .camera-card, .fit-card, .cookie-banner, .otp-card, .profile-dropdown, .terms-modal__panel, .cam-guide__step,
+  .cart-drawer, .pear-help-widget__panel):not(#_) {
+  background: var(--store-bg) !important;
+  background-image: none !important;
+  border: 1px solid var(--store-line) !important;
+  box-shadow: none !important;
+  border-radius: var(--store-radius-lg) !important;
+}
+
+/* ── 3 · buttons: solid primary, outlined secondary, the store's radius ── */
+html.pear-store-theme body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+  .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar, .plb-btn, .pear-sz-btn,
+  .pear-rz-btn, .cl-arrow, .pip-retake, .pip-clear, .profile-dropdown__logout, .cl-card__look, .photo-estimate__btn,
+  .gender-switch, .lang-switch, .fs-switch):not(#_) {
+  background: var(--store-bg) !important;
+  background-image: none !important;
+  color: var(--store-text) !important;
+  border: 1px solid var(--store-text) !important;
+  box-shadow: none !important;
+  border-radius: var(--store-radius) !important;
+}
+html.pear-store-theme body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look,
+  .pear-rz-btn--dl, .btn-update-measure, .pear-compare-bar, .pear-sz-btn.is-active):not(#_) {
+  background: var(--store-primary) !important;
+  color: var(--store-on-primary) !important;
+  border-color: var(--store-primary) !important;
+}
+html.pear-store-theme body :is(.btn-primary, .btn-add-cart):is(:disabled, [aria-disabled="true"]):not(#_) {
+  background: var(--store-soft) !important;
+  color: var(--store-muted) !important;
+  border-color: var(--store-line) !important;
+}
+/* buttons over the camera keep a dark scrim so they read on video */
+html.pear-store-theme body :is(.camera-card__flip, .camera-card__timer, .pear-rz-btn--replay, .plb-btn, .pear-lightbox__close):not(#_) {
+  background: rgba(0, 0, 0, .55) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+html.pear-store-theme body :is(button, a)::after { box-shadow: none; }
+@media (hover: hover) {
+  html.pear-store-theme body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary):not(:disabled):hover:not(#_) {
+    filter: brightness(1.25);
+  }
+}
+
+/* ── 4 · inputs: flat fields, the store's line, its text colour on focus ── */
+html.pear-store-theme body :is(input[type="number"], input[type="text"], input[type="email"], input[type="tel"], select, textarea):not(#_) {
+  background: var(--store-bg) !important;
+  background-image: none !important;
+  border: 1px solid var(--store-line) !important;
+  border-radius: var(--store-radius) !important;
+  box-shadow: none !important;
+  color: var(--store-text) !important;
+}
+html.pear-store-theme body :is(input, select, textarea):focus:not(#_) {
+  border-color: var(--store-text) !important;
+  box-shadow: 0 0 0 1px var(--store-text) !important;
+  outline: none;
+}
+
+/* ── 5 · the accent: what is chosen, done or required ── */
+html.pear-store-theme body :is(.required, .size-display, .estimate-tag):not(#_) { color: var(--store-accent) !important; }
+html.pear-store-theme body :is(.size-display) { background: none !important; -webkit-text-fill-color: currentColor !important; }
+
+
+/* ── 6 · reading direction: text starts where the language starts ──
+   Hebrew reads from the right, English from the left; `start` follows the document's dir,
+   which i18n.js sets with the language. Buttons keep their labels centred. */
+html.pear-store-theme body :is(.calc-form h1, .calc-form h2, .calc-form p, .calc-form label, .form-group,
+  .gender-label, .photo-estimate__note, .result-box, .result-label, .stock-notice, .consent-check__text,
+  .consent-panel__hint, .cam-guide, .cam-guide h2, .cam-guide p, .fitting-title, .otp-card, .otp-card p,
+  .cookie-banner__text, .section-divider, .fine-tune-title):not(#_) {
+  text-align: start !important;
+}
+html.pear-store-theme body :is(.gender-group, .gender-field, .form-group--gender):not(#_) { align-items: flex-start !important; }
+html.pear-store-theme body .size-display:not(#_) { text-align: start !important; }
+
+/* ── 7 · the details the rules above miss ── */
+/* the glass layer clips buttons to a pill; under a store theme the clip follows its radius */
+html.pear-store-theme body :is(button, .btn-primary, .btn-ghost):not(#_) { clip-path: none !important; }
+/* the selected-item note: a plain hairline box, no tinted wash */
+html.pear-store-theme body .focus-calc-hint:not(#_) {
+  background: var(--store-soft) !important;
+  border: 1px solid var(--store-line) !important;
+  border-radius: var(--store-radius) !important;
+  box-shadow: none !important;
+  color: var(--store-text) !important;
+}
+/* segmented controls (language, fullscreen, gender, timer): a flat track, the chosen
+   segment outlined in the store's text colour */
+html.pear-store-theme body :is(.lang-switch, .fs-switch, .gender-toggle.liquid-glass-track, .cam-timer__track):not(#_) {
+  background: var(--store-soft) !important;
+  border: 1px solid var(--store-line) !important;
+  box-shadow: none !important;
+  border-radius: var(--store-radius) !important;
+}
+html.pear-store-theme body :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill):not(#_) {
+  background: transparent !important;
+  border-radius: calc(var(--store-radius) - 1px) !important;
+}
+html.pear-store-theme body :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill)::before {
+  background: var(--store-bg) !important;
+  box-shadow: inset 0 0 0 1px var(--store-text) !important;
+  border-radius: inherit !important;
+  scale: 1 !important;
+}
+/* labels that sat centred over a centred control now start where the language starts */
+html.pear-store-theme body .gender-group:not(#_) { justify-items: stretch !important; text-align: start !important; }
+html.pear-store-theme body .gender-group > .form-group__label:not(#_) { justify-self: start !important; }
+html.pear-store-theme body .gender-group .gender-switch-wrapper:not(#_) { justify-content: flex-start !important; }
+/* green ink left in the base layers */
+html.pear-store-theme body :is(.step-progress-label span, .terms-link-btn, .pear-sz-label, #progressPercent, .fine-tune-title, .calc-kicker):not(#_) {
+  color: var(--store-text) !important;
+}
+html.pear-store-theme body .terms-link-btn:not(#_) { text-decoration-color: var(--store-muted) !important; }
+html.pear-store-theme body .step-progress-fill:not(#_) { background: var(--store-accent) !important; box-shadow: none !important; }
+html.pear-store-theme body .step-progress-track:not(#_) { background: var(--store-line) !important; box-shadow: none !important; border: 0 !important; }
+html.pear-store-theme body .consent-check input:checked + .consent-check__box:not(#_) {
+  background: var(--store-primary) !important;
+  border-color: var(--store-primary) !important;
+  box-shadow: none !important;
+}
+html.pear-store-theme body .consent-check__box:not(#_) { border-radius: calc(var(--store-radius) / 2) !important; }
+/* the form's own panel, the size picker, the focus bar's size chip and the cookie icon */
+html.pear-store-theme body #screen-calculator .container:not(#_) {
+  border-radius: var(--store-radius-lg) !important;
+  box-shadow: none !important;
+  background: var(--store-bg) !important;
+  border: 1px solid var(--store-line) !important;
+}
+html.pear-store-theme body #pearSizeSelector:not(#_) {
+  background: var(--store-bg) !important;
+  border: 1px solid var(--store-line) !important;
+  border-radius: var(--store-radius-lg) !important;
+  box-shadow: none !important;
+}
+html.pear-store-theme body :is(.focus-bar__badge, .cookie-banner__icon):not(#_) {
+  background: var(--store-soft) !important;
+  border: 1px solid var(--store-line) !important;
+  box-shadow: none !important;
+  color: var(--store-text) !important;
+}
+html.pear-store-theme body .focus-bar__badge:not(#_) { border-radius: var(--store-radius) !important; }
+/* the screen-change flood: one solid colour (the store's primary), no green-to-accent glow */
+html.pear-store-theme body .pear-transition__flood:not(#_) { background: var(--store-primary) !important; }
+html.pear-store-theme body .pear-transition__bg:not(#_) { background: var(--store-bg) !important; }

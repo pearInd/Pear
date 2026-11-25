@@ -2451,7 +2451,10 @@ function drawBodyGuide(result, video, canvas, chip) {
   const ok = !!(verdict && verdict.ok);
   if (Array.isArray(lms)) {
     ctx.lineCap = "round";
-    ctx.strokeStyle = ok ? "rgba(141, 182, 0, .95)" : "rgba(255, 255, 255, .9)";
+    /* The store's accent when a store theme set one (store-theme.js), else PEAR green. */
+    const accentRgb = (typeof document !== "undefined" && document.documentElement &&
+      getComputedStyle(document.documentElement).getPropertyValue("--accent-rgb").trim()) || "141, 182, 0";
+    ctx.strokeStyle = ok ? "rgba(" + accentRgb + ", .95)" : "rgba(255, 255, 255, .9)";
     ctx.shadowColor = "rgba(0, 0, 0, .35)"; ctx.shadowBlur = 6;
     ctx.lineWidth = ok ? 5 : 4;
     for (const [a, b] of BODY_GUIDE_BONES) {
@@ -15038,22 +15041,22 @@ function injectSizeSelector() {
       .pear-sz-btn:hover {
         transform: translateY(-2px);
         background: rgba(255,255,255,0.7);
-        border-color: rgba(141,182,0,0.45);
+        border-color: rgba(var(--accent-rgb, 141, 182, 0),0.45);
         color: #0a0a0b;
         box-shadow: 0 8px 22px rgba(0,0,0,0.12);
       }
       .pear-sz-btn:active { transform: scale(0.94); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
       .pear-sz-btn.is-active {
-        background: rgba(141,182,0,0.16);
-        border-color: rgba(141,182,0,0.55);
+        background: rgba(var(--accent-rgb, 141, 182, 0),0.16);
+        border-color: rgba(var(--accent-rgb, 141, 182, 0),0.55);
         color: #5f7d00;
-        box-shadow: 0 0 0 1px rgba(141,182,0,0.25), 0 6px 20px rgba(141,182,0,0.25),
-                    inset 0 0 12px rgba(141,182,0,0.18);
+        box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 141, 182, 0),0.25), 0 6px 20px rgba(var(--accent-rgb, 141, 182, 0),0.25),
+                    inset 0 0 12px rgba(var(--accent-rgb, 141, 182, 0),0.18);
         animation: pearSzPulse 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
       }
       @keyframes pearSzPulse {
-        0%, 100% { box-shadow: 0 0 0 1px rgba(141,182,0,0.22), 0 6px 20px rgba(141,182,0,0.22), inset 0 0 12px rgba(141,182,0,0.16); }
-        50%      { box-shadow: 0 0 0 3px rgba(141,182,0,0.30), 0 10px 28px rgba(141,182,0,0.34), inset 0 0 18px rgba(141,182,0,0.28); }
+        0%, 100% { box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 141, 182, 0),0.22), 0 6px 20px rgba(var(--accent-rgb, 141, 182, 0),0.22), inset 0 0 12px rgba(var(--accent-rgb, 141, 182, 0),0.16); }
+        50%      { box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 141, 182, 0),0.30), 0 10px 28px rgba(var(--accent-rgb, 141, 182, 0),0.34), inset 0 0 18px rgba(var(--accent-rgb, 141, 182, 0),0.28); }
       }
       .pear-sz-hint {
         /* margin-left:auto removed - .pear-sz-head's own justify-content:space-between
@@ -15089,8 +15092,8 @@ function injectSizeSelector() {
       }
       .pear-sz-btn.is-oos.is-active {
         color: #5f7d00;
-        background: rgba(141,182,0,0.12);
-        border-color: rgba(141,182,0,0.45);
+        background: rgba(var(--accent-rgb, 141, 182, 0),0.12);
+        border-color: rgba(var(--accent-rgb, 141, 182, 0),0.45);
       }
       /* The legend - a third child of #pearSizeSelector, which is a COLUMN flex
          container, so it already gets its own full-width row from align-items:stretch
@@ -20904,10 +20907,10 @@ function injectReplayStyles() {
       background: linear-gradient(180deg, rgba(24,24,28,.93), rgba(11,11,13,.95));
       -webkit-backdrop-filter: blur(22px) saturate(150%);
       backdrop-filter: blur(22px) saturate(150%);
-      border: 1px solid rgba(141,182,0,.30);
+      border: 1px solid rgba(var(--accent-rgb, 141, 182, 0),.30);
       box-shadow:
         inset 0 1px 0 rgba(255,255,255,.06),
-        inset 0 0 0 1px rgba(141,182,0,.06),
+        inset 0 0 0 1px rgba(var(--accent-rgb, 141, 182, 0),.06),
         0 26px 64px rgba(0,0,0,.52);
       padding: 16px 16px 15px;
       opacity: 0;
@@ -20950,8 +20953,8 @@ function injectReplayStyles() {
       letter-spacing: .12em;
       text-transform: uppercase;
       color: #9cca00;
-      background: rgba(141,182,0,.13);
-      border: 1px solid rgba(141,182,0,.36);
+      background: rgba(var(--accent-rgb, 141, 182, 0),.13);
+      border: 1px solid rgba(var(--accent-rgb, 141, 182, 0),.36);
       border-radius: 9999px;
       padding: 5px 12px;
       white-space: nowrap;
@@ -20959,8 +20962,8 @@ function injectReplayStyles() {
     .pear-rz-badge::before {
       content: '';
       width: 7px; height: 7px; border-radius: 50%;
-      background: #8DB600;
-      box-shadow: 0 0 9px rgba(141,182,0,.7);
+      background: rgb(var(--accent-rgb, 141, 182, 0));
+      box-shadow: 0 0 9px rgba(var(--accent-rgb, 141, 182, 0),.7);
       animation: pearRzPulse 1.8s ease-in-out infinite;
     }
     @keyframes pearRzPulse { 0%,100% { opacity:1; } 50% { opacity:.25; } }
@@ -21020,13 +21023,13 @@ function injectReplayStyles() {
       box-shadow: 0 8px 22px rgba(0,0,0,.3);
     }
     .pear-rz-btn--dl {
-      background: #8DB600;
+      background: rgb(var(--accent-rgb, 141, 182, 0));
       color: #0a0a0b;
-      box-shadow: 0 12px 36px rgba(141,182,0,.26);
+      box-shadow: 0 12px 36px rgba(var(--accent-rgb, 141, 182, 0),.26);
     }
     .pear-rz-btn--dl:hover {
       background: #9cca00;
-      box-shadow: 0 12px 30px rgba(141,182,0,.42);
+      box-shadow: 0 12px 30px rgba(var(--accent-rgb, 141, 182, 0),.42);
     }
     .pear-rz-btn--dl .pear-rz-btn__en { opacity: .55; }
   `;

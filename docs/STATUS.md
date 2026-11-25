@@ -54,6 +54,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Black-screen on reopen | done | main `3a533d6`, `af5f4d4` |
 | Visual QA gate | done, known flaky (§8.5) | main |
 | Liquid Glass UI + consent gate | done | main `0827e51`, `89a5848` |
+| Store colour themes (FOX: red/white/black, flat, text by reading direction) | done on the branch, PR open - **review + merge waiting on you**; FOX's embed then adds `data-pear-theme="fox"` | `claude/project-thread-p2evpi` |
 
 ## Waiting on you (manual steps)
 
@@ -536,6 +537,16 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
   a tap; a quick tap plays the whole bubble).
 - **To check by hand:** the feel on a real iPhone and a mid-range Android (the press timing, the thumb stretch, scrolling
   smoothness with the glass blur).
+
+## Store colour themes (2026-11-25)
+- **Stage:** done on the branch, PR open, not merged. A store's embed sets its colours by configuration:
+  `data-pear-theme="<preset>"` (presets in `fitting-room/store-theme.js`) and/or `data-pear-color-primary / -on-primary /
+  -accent / -bg / -text`, `data-pear-radius`, `data-pear-font`. Under a theme the room is flat (no glass, glow or gradient),
+  in the store's colours and font, with headings/labels/notes aligned to the reading direction. No theme = PEAR's look
+  exactly (qa:visual 40/40, screenshots identical to noise). Measurement, orientation and prompts untouched
+  (`trace:prompt` byte-identical). No Worker deploy.
+- **FOX preset:** black buttons / white text, accent #e21836 (FOX's own `--fox-red`), white page, 4px corners, Rubik.
+- **Waiting on you:** review, merge; then add `data-pear-theme="fox"` to FOX's script tag.
 
 ## Security hardening + client-code hiding
 - **Stage:** in progress.

@@ -171,6 +171,27 @@
   var _demoAttr = script ? script.getAttribute("data-pear-demo") : null;
   var DEMO_MODE = _demoAttr === "true" || _demoAttr === "1";
 
+  /* ── store theme - the room in the store's own colours (2026-11-25) ──────
+     data-pear-theme="<preset>" names a row of STORE_THEMES in fitting-room/store-theme.js;
+     data-pear-color-primary / -on-primary / -accent / -bg / -text, data-pear-radius and
+     data-pear-font override one value each. Forwarded verbatim as theme / theme_* params;
+     the room validates every value (store-theme.js). Absent -> nothing is sent and the
+     room is PEAR's default look. */
+  var THEME_PARAMS = (function () {
+    if (!script) return "";
+    var out = "";
+    var name = script.getAttribute("data-pear-theme");
+    if (name) out += "&theme=" + encodeURIComponent(name);
+    [["data-pear-color-primary", "primary"], ["data-pear-color-on-primary", "on_primary"],
+     ["data-pear-color-accent", "accent"], ["data-pear-color-bg", "bg"],
+     ["data-pear-color-text", "text"], ["data-pear-radius", "radius"],
+     ["data-pear-font", "font"]].forEach(function (p) {
+      var v = script.getAttribute(p[0]);
+      if (v) out += "&theme_" + p[1] + "=" + encodeURIComponent(v);
+    });
+    return out;
+  })();
+
   /* ── one-time public demo lock - active ONLY when DEMO_MODE is true ──────
      This host page and the fitting-room iframe (PEAR_BASE, a DIFFERENT origin)
      each have their OWN localStorage, so they can't share this flag directly.
@@ -3156,7 +3177,8 @@
          see the "demo mode" block above. Only ever set for the marketing-site
          embed; every other embed (main app, real merchants) omits it entirely.
          Independent of DEMO_GATE above - the two are separate, coexisting triggers. */
-      (DEMO_MODE ? "&pear_demo=1" : "");
+      (DEMO_MODE ? "&pear_demo=1" : "") +
+      THEME_PARAMS;
     var src = PEAR_BASE + "/fitting-room/?" + params;
     console.log("[PEAR widget] openModal() - iframe src:", src);
 

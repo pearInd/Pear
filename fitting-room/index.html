@@ -24,7 +24,10 @@
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=41">
+    <link rel="stylesheet" href="style.css?v=42">
+    <!-- STORE THEME: the store's own colours, read from the URL before the first paint
+         (store-theme.js; does nothing when the widget sent no theme). -->
+    <script src="store-theme.js?v=1"></script>
 </head>
 <body>
 
