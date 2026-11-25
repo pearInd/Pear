@@ -3296,6 +3296,7 @@ function sanitizeColorOptions(list) {
       sizes: strs(o.sizes),
       soldOut: strs(o.soldOut),
       kind: o.kind === "model" ? "model" : "color",
+      gender: o.gender === "men" || o.gender === "women" || o.gender === "unisex" ? o.gender : "",
     });
   }
   return out;
@@ -3308,8 +3309,21 @@ function colorAltsFor(size) {
   const token = parseSizeList([size])[0];
   if (!token) return [];
   return colorOptions.filter((o) =>
-    parseSizeList(o.sizes).includes(token) && !parseSizeList(o.soldOut).includes(token))
+    parseSizeList(o.sizes).includes(token) && !parseSizeList(o.soldOut).includes(token) &&
+    fitsShopperGender(o))
     .sort((a, b) => (a.kind === "model") - (b.kind === "model"));
+}
+
+/* THE SHOPPER'S GENDER (2026-11-25, Itai: "I set man - offer me men's items only, never
+   women's"). With a gender chosen on the switch: an item whose own product says the other
+   cut is never offered; a similar MODEL must say the shopper's cut (or unisex) - one that
+   says nothing is left out rather than guessed. A colour of this very model that says
+   nothing stays (it is the garment the shopper opened). No gender chosen -> no filter. */
+function fitsShopperGender(o) {
+  const g = typeof currentUserGender !== "undefined" ? currentUserGender : null;
+  if (g !== "men" && g !== "women") return true;
+  if (o.gender === g || o.gender === "unisex") return true;
+  return !o.gender && o.kind !== "model";
 }
 
 /* NO EXACT SIZE (2026-11-25, Itai: "when there is no size, write 'no size' and offer
@@ -3374,7 +3388,8 @@ async function tryColorOption(handle, card) {
     await persistMeasurementsIfLoggedIn($("height")?.value, $("weight")?.value);
     const hw = Number.isFinite(h) && Number.isFinite(w) && h > 0 && w > 0 ? `${h}x${w}` : "";
     console.log("[PEAR] trying another colour of this garment:", handle);
-    window.parent.postMessage({ type: "PEAR_TRY_COLOR", handle, hw }, "*");
+    const gender = currentUserGender === "men" || currentUserGender === "women" ? currentUserGender : "";
+    window.parent.postMessage({ type: "PEAR_TRY_COLOR", handle, hw, gender }, "*");
   } catch (e) {
     console.warn("[PEAR] could not switch colour:", e?.message || e);
   } finally {
@@ -15895,6 +15910,9 @@ function showSizeForm(opts) {
       const fill = (id, v) => { const el = $(id); if (el && !el.value) el.value = v; };
       fill("height", hw[1]); fill("weight", hw[2]);
     }
+    /* ...and the gender the shopper had chosen (?pear_gender=), when none is chosen here. */
+    const pg = new URLSearchParams(location.search).get("pear_gender");
+    if ((pg === "men" || pg === "women") && !currentUserGender) setGender(pg);
   } catch {}
   try { calculateSize(); } catch {}
   setupConsentPanel();   // terms & accuracy consent - see COMPLIANCE above

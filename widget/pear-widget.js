@@ -1536,8 +1536,14 @@
     for (var v = 0; v < p.variants.length; v++) {
       if (p.variants[v] && p.variants[v].available === true) { firstAvail = p.variants[v]; break; }
     }
+    /* WHOSE CUT (2026-11-25, Itai: "a man is offered men's items only"). Read off the
+       product's OWN tags, type and title (FOX tags a sector: "מגזר-גברים" / "מגזר-בנות"),
+       with the same whole-word reader as the page's gender signal - never guessed. "" when
+       the product says nothing (or says both). The room filters on it. */
+    var tagText = Array.isArray(p.tags) ? p.tags.join(" ") : String(p.tags || "");
+    var gender = genderFromText(tagText) || genderFromText(String(p.type || "") + " " + String(p.title || ""));
     return {
-      handle: sw.handle, hex: sw.hex, title: String(p.title || ""),
+      handle: sw.handle, hex: sw.hex, title: String(p.title || ""), gender: gender,
       image: images[0], images: images,
       sizes: sizes, soldOut: soldOutFromVariants(p.variants, idx),
       variants: p.variants, sizeOptionIndex: idx,
@@ -1628,9 +1634,15 @@
       if (_activeSibling && s.handle === _activeSibling.handle) continue;
       out.push({ handle: s.handle, hex: s.hex, title: s.title, image: s.image,
                  sizes: s.sizes.slice(), soldOut: s.soldOut.slice(),
-                 kind: s.kind === "model" ? "model" : "color" });
+                 kind: s.kind === "model" ? "model" : "color",
+                 gender: s.gender || (s.kind === "model" ? "" : pageGender()) });
     }
     return { type: "PEAR_COLOR_OPTIONS", options: out };
+  }
+  /* A colour of this very model is the page's own cut when its JSON names none. */
+  function pageGender() {
+    var g = garmentGenderSignal().gender;
+    return g === "men" || g === "women" || g === "unisex" ? g : "";
   }
 
   function normalizeSizeToken(s) {
@@ -3323,7 +3335,8 @@
       /* The shopper's own height/weight, carried ONLY when the room itself asked to switch
          to another colour (PEAR_TRY_COLOR) - so a visitor with no saved profile does not
          type them again. The room only pre-fills its empty form with them. */
-      (garment.prefillHW ? "&pear_hw=" + encodeURIComponent(garment.prefillHW) : "");
+      (garment.prefillHW ? "&pear_hw=" + encodeURIComponent(garment.prefillHW) : "") +
+      (garment.prefillGender ? "&pear_gender=" + encodeURIComponent(garment.prefillGender) : "");
     var src = PEAR_BASE + "/fitting-room/?" + params;
     console.log("[PEAR widget] openModal() - iframe src:", src);
 
@@ -3714,7 +3727,8 @@
          stops matching, the room waits for a message nobody sends. */
       classifyPending: imgs.length > 0,
       colors: !!(garment.pageScoped || garment.colorSibling),
-      prefillHW: garment.prefillHW
+      prefillHW: garment.prefillHW,
+      prefillGender: garment.prefillGender
     });
 
     /* ── COMBINED pipeline ────────────────────────────────────────────────────
@@ -4373,6 +4387,7 @@
     var handle = String(e.data.handle || "");
     var hw = String(e.data.hw || "");
     if (!/^\d{2,3}(?:\.\d)?x\d{2,3}(?:\.\d)?$/.test(hw)) hw = "";
+    var gender = e.data.gender === "men" || e.data.gender === "women" ? e.data.gender : "";
     _colorSiblingsPromise.then(function (list) {
       var sib = null;
       for (var i = 0; i < list.length; i++) if (list[i].handle === handle) { sib = list[i]; break; }
@@ -4385,7 +4400,8 @@
         url: sib.image, images: sib.images, name: sib.title || getGarmentName(),
         category: detectCategory(sib.title || getGarmentName()),
         variantId: sib.variantId, pageScoped: false, colorSibling: true,
-        prefillHW: hw || undefined
+        prefillHW: hw || undefined,
+        prefillGender: gender || undefined
       });
     });
   });
