@@ -651,6 +651,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    scrolls sideways; 3 to a row on a 320px phone. */
 .color-alts[hidden] { display: none; }
 .color-alts {
+  /* .result-box is pointer-events:none (it is a read-out); the cards inside are buttons,
+     so they take pointer events back - without this a tap on one landed on nothing. */
+  pointer-events: auto;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;

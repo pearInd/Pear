@@ -237,5 +237,47 @@ console.log("\n── §4 similar models and no exact size ──");
     /noteSizeApprox\(verdict\.approx\);\s*renderStockNotice\(bestSize, !!verdict\.approx\);/.test(APP));
 }
 
+/* ── §5: the shopper's gender, the tap, and the cut carried to the next room ─────────── */
+console.log("\n── §5 gender and the tap ──");
+{
+  const RECS_SAVED = RECS;
+  const rec = (handle, title, tags) => ({ ...product(title, ["S", "M", "L"], [], `https://cdn.shopify.com/s/files/${handle}.jpg`, 950), handle, type: "חולצות", tags });
+  PRODUCTS["/products/1000100100.js"] = { ...PRODUCTS["/products/1000100100.js"], id: 777, type: "חולצות" };
+  RECS = [rec("5000500100", "חולצה", ["מגזר-גברים"]), rec("5000500200", "חולצה", ["6-for-100", "מגזר-נשים"]), rec("5000500300", "חולצה", ["BF"])];
+  const { window } = await boot(PDP(SWATCHES), "https://fox.co.il/products/1000100100");
+  window.document.querySelector(".pear-widget-btn").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await tick(80);
+  const list = (frame(window) && frame(window).__pearColors || { options: [] }).options;
+  const gOf = (h) => (list.find((o) => o.handle === h) || {}).gender;
+  check("§5.1 a model's cut is read off its own tags (FOX's sector tag)",
+    gOf("5000500100") === "men" && gOf("5000500200") === "women" && gOf("5000500300") === "", JSON.stringify(list.map((o) => [o.handle, o.gender])));
+  RECS = RECS_SAVED;
+}
+{
+  // eslint-disable-next-line no-new-func
+  const mk = new Function(`let currentUserGender = null;\n${psl}\n${APP.slice(start, end)}\nreturn { sanitizeColorOptions, colorAltsFor, set: (l) => { colorOptions = l; }, g: (v) => { currentUserGender = v; } };`);
+  const r = mk();
+  const o = (handle, kind, gender) => ({ handle, kind, gender, image: "https://cdn.shopify.com/x.jpg", sizes: ["L"], soldOut: [] });
+  r.set(r.sanitizeColorOptions([o("c1", "color", ""), o("c2", "color", "women"), o("m1", "model", "men"), o("m2", "model", "women"), o("m3", "model", ""), o("m4", "model", "unisex")]));
+  const hs = () => r.colorAltsFor("L").map((x) => x.handle).join();
+  check("§5.2 no gender chosen: nothing filtered", hs() === "c1,c2,m1,m2,m3,m4", hs());
+  r.g("men");
+  check("§5.3 a man: men's and unisex models only; a colour of this model that says nothing stays", hs() === "c1,m1,m4", hs());
+  r.g("women");
+  check("§5.4 a woman: women's and unisex only", hs() === "c1,c2,m2,m4", hs());
+  r.set(r.sanitizeColorOptions([{ ...o("x1", "model", "men"), sizes: ["M"] }, { ...o("x2", "model", "women"), soldOut: ["L"] }]));
+  r.g(null);
+  check("§5.5 an item is offered only when its own list sells the size and has it in stock", r.colorAltsFor("L").length === 0);
+}
+{
+  const CSS = readFileSync(new URL("../fitting-room/style.css", import.meta.url), "utf8");
+  check("§5.6 the cards take taps back from the read-out box (.result-box is pointer-events:none)",
+    /\.result-box \{[^}]*pointer-events: none/.test(CSS) && /\.color-alts \{[^}]*pointer-events: auto/.test(CSS));
+  check("§5.7 the room sends the chosen gender with the switch, and a re-opened room applies it",
+    /postMessage\(\{ type: "PEAR_TRY_COLOR", handle, hw, gender \}/.test(APP) && /get\("pear_gender"\)[\s\S]{0,200}setGender\(pg\)/.test(APP));
+  check("§5.8 the widget forwards only men/women as ?pear_gender=",
+    /e\.data\.gender === "men" \|\| e\.data\.gender === "women"/.test(WIDGET) && /"&pear_gender=" \+ encodeURIComponent\(garment\.prefillGender\)/.test(WIDGET));
+}
+
 console.log(failures ? `\ncolor-alternatives: ${failures} FAILING` : "\ncolor-alternatives: all green");
 process.exit(failures ? 1 : 0);
