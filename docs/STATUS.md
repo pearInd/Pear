@@ -545,7 +545,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
   in the store's colours and font, with headings/labels/notes aligned to the reading direction. No theme = PEAR's look
   exactly (qa:visual 40/40, screenshots identical to noise). Measurement, orientation and prompts untouched
   (`trace:prompt` byte-identical). No Worker deploy.
-- **FOX preset:** black buttons / white text, accent #e21836 (FOX's own `--fox-red`), white page, 4px corners, Rubik.
+- **FOX preset (v2, the same day, on the owner's review):** red (#e21836, FOX's own `--fox-red`) buttons with white text, white page, shades of the red for lines and soft fills, round (pill) buttons, Rubik; the fitting title in one colour.
 - **Waiting on you:** review, merge; then add `data-pear-theme="fox"` to FOX's script tag.
 
 ## Security hardening + client-code hiding

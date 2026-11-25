@@ -14,7 +14,8 @@
             data-pear-color-accent="#e21836"    highlights (active, progress, required)
             data-pear-color-bg="#ffffff"        page / card background
             data-pear-color-text="#0b0b0b"      text
-            data-pear-radius="4px"              corner radius of controls (0-24px)
+            data-pear-radius="4px"              corner radius of controls (0-24px), or "pill"
+                                                (round buttons, soft cards - PEAR's own shape)
             data-pear-font="Rubik"              a Google Fonts family name
    The widget forwards these to the room as theme / theme_* query params; this file
    reads them before the first paint, sets CSS variables on <html> and the class
@@ -32,16 +33,18 @@
    ============================================================================= */
 (function () {
   var STORE_THEMES = {
-    /* FOX (fox.co.il): black buttons with white text, FOX red (--fox-red on their site)
-       as the accent, a white page, near-square corners, Rubik - read off fox.co.il's own
-       stylesheet 2026-11-25. */
+    /* FOX (fox.co.il): red and white lead - FOX red (--fox-red on their site, read off
+       fox.co.il's stylesheet 2026-11-25) fills the buttons, white text on it, a white
+       page, shades of that red for lines and soft fills, round (pill) buttons, Rubik.
+       The first cut was black buttons and square corners; the owner the same day:
+       "buttons stay round, red and white should dominate, maybe shades of red". */
     fox: {
-      primary: "#0b0b0b",
+      primary: "#e21836",
       onPrimary: "#ffffff",
       accent: "#e21836",
       bg: "#ffffff",
       text: "#0b0b0b",
-      radius: "4px",
+      radius: "pill",
       font: "Rubik",
     },
   };
@@ -67,6 +70,7 @@
     return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
   }
   function radius(v) {
+    if (typeof v === "string" && v.trim().toLowerCase() === "pill") return "pill";
     var m = typeof v === "string" && v.trim().match(/^(\d{1,2})(px)?$/);
     if (!m) return null;
     return Math.min(24, +m[1]) + "px";
@@ -109,10 +113,17 @@
   s.setProperty("--store-text", t.text);
   s.setProperty("--store-text-rgb", rgbOf(t.text).join(", "));
   s.setProperty("--store-muted", darkBg ? "rgba(255, 255, 255, .62)" : "rgba(" + rgbOf(t.text).join(", ") + ", .58)");
-  s.setProperty("--store-line", darkBg ? "rgba(255, 255, 255, .18)" : "rgba(" + rgbOf(t.text).join(", ") + ", .14)");
-  s.setProperty("--store-soft", darkBg ? "rgba(255, 255, 255, .06)" : "rgba(" + rgbOf(t.text).join(", ") + ", .04)");
-  s.setProperty("--store-radius", t.radius);
-  s.setProperty("--store-radius-lg", Math.min(16, parseInt(t.radius, 10) * 2) + "px");
+  /* Lines and soft fills are SHADES OF THE ACCENT (a hairline at 22%, a wash at 6%), so
+     the page reads in the store's colour and not in grey. */
+  var acc = rgbOf(t.accent).join(", ");
+  s.setProperty("--store-line", "rgba(" + acc + (darkBg ? ", .45)" : ", .22)"));
+  s.setProperty("--store-soft", "rgba(" + acc + (darkBg ? ", .16)" : ", .06)"));
+  /* A darker shade of the primary, for hover and press. */
+  s.setProperty("--store-primary-deep", "rgb(" + rgbOf(t.primary).map(function (x) { return Math.round(x * 0.82); }).join(", ") + ")");
+  var pill = t.radius === "pill";
+  s.setProperty("--store-btn-radius", pill ? "9999px" : t.radius);
+  s.setProperty("--store-radius", pill ? "14px" : t.radius);
+  s.setProperty("--store-radius-lg", pill ? "20px" : Math.min(16, parseInt(t.radius, 10) * 2) + "px");
   if (t.font) s.setProperty("--store-font", '"' + t.font + '"');
   root.classList.add("pear-store-theme");
   if (darkBg) root.classList.add("pear-store-theme--dark");

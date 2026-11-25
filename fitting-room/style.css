@@ -6885,10 +6885,10 @@ html.pear-store-theme body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-
   .gender-switch, .lang-switch, .fs-switch):not(#_) {
   background: var(--store-bg) !important;
   background-image: none !important;
-  color: var(--store-text) !important;
-  border: 1px solid var(--store-text) !important;
+  color: var(--store-primary-deep) !important;
+  border: 1px solid var(--store-accent) !important;
   box-shadow: none !important;
-  border-radius: var(--store-radius) !important;
+  border-radius: var(--store-btn-radius) !important;
 }
 html.pear-store-theme body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look,
   .pear-rz-btn--dl, .btn-update-measure, .pear-compare-bar, .pear-sz-btn.is-active):not(#_) {
@@ -6910,7 +6910,8 @@ html.pear-store-theme body :is(.camera-card__flip, .camera-card__timer, .pear-rz
 html.pear-store-theme body :is(button, a)::after { box-shadow: none; }
 @media (hover: hover) {
   html.pear-store-theme body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary):not(:disabled):hover:not(#_) {
-    filter: brightness(1.25);
+    background: var(--store-primary-deep) !important;
+    border-color: var(--store-primary-deep) !important;
   }
 }
 
@@ -6924,8 +6925,8 @@ html.pear-store-theme body :is(input[type="number"], input[type="text"], input[t
   color: var(--store-text) !important;
 }
 html.pear-store-theme body :is(input, select, textarea):focus:not(#_) {
-  border-color: var(--store-text) !important;
-  box-shadow: 0 0 0 1px var(--store-text) !important;
+  border-color: var(--store-accent) !important;
+  box-shadow: 0 0 0 1px var(--store-accent) !important;
   outline: none;
 }
 
@@ -6963,15 +6964,15 @@ html.pear-store-theme body :is(.lang-switch, .fs-switch, .gender-toggle.liquid-g
   background: var(--store-soft) !important;
   border: 1px solid var(--store-line) !important;
   box-shadow: none !important;
-  border-radius: var(--store-radius) !important;
+  border-radius: var(--store-btn-radius) !important;
 }
 html.pear-store-theme body :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill):not(#_) {
   background: transparent !important;
-  border-radius: calc(var(--store-radius) - 1px) !important;
+  border-radius: var(--store-btn-radius) !important;
 }
 html.pear-store-theme body :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill)::before {
   background: var(--store-bg) !important;
-  box-shadow: inset 0 0 0 1px var(--store-text) !important;
+  box-shadow: inset 0 0 0 1.5px var(--store-accent) !important;
   border-radius: inherit !important;
   scale: 1 !important;
 }
@@ -7011,7 +7012,16 @@ html.pear-store-theme body :is(.focus-bar__badge, .cookie-banner__icon):not(#_) 
   box-shadow: none !important;
   color: var(--store-text) !important;
 }
-html.pear-store-theme body .focus-bar__badge:not(#_) { border-radius: var(--store-radius) !important; }
+html.pear-store-theme body .focus-bar__badge:not(#_) { border-radius: var(--store-btn-radius) !important; }
+/* ONE COLOUR PER LINE OF TEXT ("the colour mix in the title looks broken - no colour
+   combinations in text"): the fitting title's words and its size are the text colour. */
+html.pear-store-theme body .personal-title:not(#_),
+html.pear-store-theme body .personal-title :is(span, strong, b):not(#_) {
+  color: var(--store-text) !important;
+  background: none !important;
+  -webkit-text-fill-color: currentColor !important;
+}
+html.pear-store-theme body .required:not(#_) + span { color: var(--store-text) !important; }
 /* the screen-change flood: one solid colour (the store's primary), no green-to-accent glow */
 html.pear-store-theme body .pear-transition__flood:not(#_) { background: var(--store-primary) !important; }
 html.pear-store-theme body .pear-transition__bg:not(#_) { background: var(--store-bg) !important; }
