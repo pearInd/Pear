@@ -6974,3 +6974,27 @@ html.pear-store-theme body .btn-edit-measurements :is(svg, span):not(#_) { color
    track and fill are not drawn (the step label and percent stay). */
 html.pear-store-theme .otp-success:not(#_) { display: none !important; }
 html.pear-store-theme body .step-progress-track:not(#_) { display: none !important; }
+
+/* ── 8 · NO HOVER in a themed room (the owner, 2026-11-25: "on hover it does something odd, like a
+   circle on what I stand on - remove it, no hover on plain screen and none in general").
+   The circle was the size card's pointer-following highlight (and its tilt); the page's lights
+   drifted with the mouse; glass buttons lifted and brightened. All gone here: a button under the
+   mouse looks as it does at rest (the press still sinks). The lift and the drift themselves are
+   switched off in lux-interactions.js for a themed room. ── */
+html.pear-store-theme #screen-calculator .container:not(#_)::after { display: none !important; }
+html.pear-store-theme #screen-calculator .container.is-tilting:not(#_) { transform: none !important; }
+html.pear-store-theme { --lg2-clear-hover: var(--lg2-clear); --lg2-tint-hover: var(--lg2-tint); }
+@media (hover: hover) {
+  html.pear-store-theme body :is(.btn-ghost, .btn-watch, .btn-download, .btn-edit-measurements, .cart-btn, .cookie-btn,
+           .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close,
+           .pear-help-widget__btn, .pear-help-widget__close, .pip-retake, .pip-clear, .profile-dropdown__logout,
+           .cart-line__remove, .cl-arrow):hover:not(.is-active):not(.cookie-btn--primary):not(.pear-rz-btn--dl):not(.pear-rz-btn--replay):not(.plb-btn):not(:disabled):not([aria-disabled="true"]):not(#_) {
+    box-shadow: var(--lg2-rim), var(--lg2-depth), var(--lg2-drop);
+  }
+  html.pear-store-theme body :is(.camera-card__flip, .camera-card__timer, .pear-rz-btn--replay, .plb-btn, .pear-lightbox__close):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    background: var(--lg2-dark); color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 0 0 .5px rgba(255, 255, 255, .28),
+                inset 0 -8px 16px -12px rgba(255, 255, 255, .35), 0 8px 22px -12px rgba(0, 0, 0, .5);
+  }
+}
+
