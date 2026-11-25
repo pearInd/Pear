@@ -353,8 +353,15 @@ const I18N = {
      rendered inside a size button's accessible name, not as visible text. */
   /* OTHER COLOURS OF THIS GARMENT (app.js) - said when other colours still have the size. */
   stockSoldOutColors: {
-    he: "אין מידה {size} בצבע הזה. המידה שלך זמינה בצבעים האלה:",
-    en: "No size {size} in this colour. Your size is available in these colours:",
+    he: "אין מידה {size} בצבע הזה. פריטים דומים שיש בהם את המידה שלך:",
+    en: "No size {size} in this colour. Similar items that have your size:",
+  },
+  /* NO EXACT SIZE (app.js renderStockNotice) - the body falls between the chart's rows and
+     similar items carry the nearest size. Shown INSTEAD of resultLabelApprox + the size. */
+  resultLabelNoSize: { he: "אין מידה עבורך בפריט הזה.", en: "No size for you in this item." },
+  noSizeSimilar: {
+    he: "פריטים דומים שאפשר למדוד במידה הקרובה אליך ({size}):",
+    en: "Similar items you can try in your nearest size ({size}):",
   },
   colorAltTry:     { he: "למדוד", en: "Try on" },
   colorAltTryAria: { he: "למדוד בצבע הזה", en: "Try on in this colour" },

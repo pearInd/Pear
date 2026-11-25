@@ -1553,7 +1553,7 @@
     for (var i = 0; i < swatches.length && others.length < COLOR_SIBLINGS_MAX; i++) {
       if (!swatches[i].current) others.push(swatches[i]);
     }
-    _colorSiblingsPromise = Promise.all(others.map(function (sw) {
+    var colorsP = Promise.all(others.map(function (sw) {
       return fetch("/products/" + encodeURIComponent(sw.handle) + ".js", { credentials: "same-origin" })
         .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
         .then(function (p) { return colorSiblingFromProduct(p, sw); })
@@ -1567,7 +1567,56 @@
         ok.length ? "(" + ok.map(function (s) { return s.handle; }).join(", ") + ")" : "");
       return ok;
     });
+    /* SIMILAR MODELS (2026-11-25, second ask: "similar items in the same style"). Learned
+       ONLY from the store's own Shopify product recommendations for this product
+       (/recommendations/products.json, intent=related) - never guessed - and kept only when
+       the store files it under the same product type as the page's product (or, when either
+       has no type, when its own title names the same garment category). Never a colour of
+       this model (those are the swatches above). Any failure -> no models, colours as before. */
+    var skip = {};
+    for (var k = 0; k < swatches.length; k++) skip[swatches[k].handle] = 1;
+    var pageHandle = path.indexOf("/products/") === -1 ? "" : decodeURIComponent(path.split("/products/")[1].split("/")[0] || "");
+    if (pageHandle) skip[pageHandle] = 1;
+    var modelsP = !pageHandle || !swatches.length ? Promise.resolve([]) :
+      fetch("/products/" + encodeURIComponent(pageHandle) + ".js", { credentials: "same-origin" })
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function (page) {
+          return fetch("/recommendations/products.json?product_id=" + encodeURIComponent(page.id) +
+            "&limit=10&intent=related", { credentials: "same-origin" })
+            .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+            .then(function (j) { return similarModelsFrom(page, (j && j.products) || [], skip); });
+        })
+        .catch(function (e) {
+          console.log("[PEAR widget] similar models unreadable - none offered:", e && e.message);
+          return [];
+        });
+    _colorSiblingsPromise = Promise.all([colorsP, modelsP]).then(function (both) {
+      return both[0].concat(both[1]);
+    });
     return _colorSiblingsPromise;
+  }
+
+  var SIMILAR_MODELS_MAX = 6;
+  function similarModelsFrom(page, recs, skip) {
+    var pageType = String((page && page.type) || "").trim().toLowerCase();
+    var pageCat = matchCategory(normApos(String((page && page.title) || "")));
+    var out = [];
+    for (var i = 0; i < recs.length && out.length < SIMILAR_MODELS_MAX; i++) {
+      var p = recs[i];
+      if (!p || !p.handle || skip[p.handle] || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(p.handle)) continue;
+      var type = String(p.type || "").trim().toLowerCase();
+      var same = pageType && type ? type === pageType
+        : !!pageCat && matchCategory(normApos(String(p.title || ""))) === pageCat;
+      if (!same) continue;
+      var rec = colorSiblingFromProduct(p, { handle: p.handle, hex: "" });
+      if (!rec) continue;
+      rec.kind = "model";
+      skip[p.handle] = 1;
+      out.push(rec);
+    }
+    console.log("[PEAR widget] similar models of this garment:", out.length,
+      out.length ? "(" + out.map(function (s) { return s.handle; }).join(", ") + ")" : "");
+    return out;
   }
 
   /* What the room is told: plain values only, never the variant ids. The colour the room
@@ -1578,7 +1627,8 @@
       var s = list[i];
       if (_activeSibling && s.handle === _activeSibling.handle) continue;
       out.push({ handle: s.handle, hex: s.hex, title: s.title, image: s.image,
-                 sizes: s.sizes.slice(), soldOut: s.soldOut.slice() });
+                 sizes: s.sizes.slice(), soldOut: s.soldOut.slice(),
+                 kind: s.kind === "model" ? "model" : "color" });
     }
     return { type: "PEAR_COLOR_OPTIONS", options: out };
   }

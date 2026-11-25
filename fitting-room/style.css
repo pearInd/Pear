@@ -701,6 +701,20 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   border-radius: 50%;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18);
 }
+/* A similar model (not a colour of this one): its name under the photo, two lines at most. */
+.color-alt-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 5px;
+  font-size: .68rem;
+  line-height: 1.25;
+  text-align: center;
+  unicode-bidi: plaintext;
+}
+/* NO EXACT SIZE: the suggested size gives way to "no size" + similar items (app.js renderStockNotice). */
+#sizeResult.is-alt-hidden { display: none; }
 /* No dark-mode rule here on purpose: this stylesheet has no prefers-color-scheme
    handling anywhere, the room is a fixed light glass theme, and a lone dark override
    on this one element would be the only thing in the file that ever changed. */
