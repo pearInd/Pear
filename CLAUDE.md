@@ -2402,7 +2402,16 @@ posts them as PEAR_COLOR_OPTIONS. The room (same name, after `onMeasurementKeydo
 when the recommended size is sold out and a colour sells it; none -> the old sentence. A card asks PEAR_TRY_COLOR; the widget
 re-opens the room on that product through `startTryOn()` (the PEAR button's click body, lifted out unchanged), with
 `_activeSibling` making the size/stock lists and the cart that product's, and `?pear_hw=` pre-filling an empty form.
-`calculateSize()`/`lib/sizing.js` untouched; `trace:prompt` identical. `color-alternatives` (24 checks).
+`calculateSize()`/`lib/sizing.js` untouched; `trace:prompt` identical. `color-alternatives` 
+**Second ask, the same day (Itai: "no size" means the suggested-size case too, and "similar items in the same style"):**
+- **NO EXACT SIZE:** a verdict with `approx` (the body between two rows) gets the same offer. The room writes
+  `resultLabelNoSize` and hides the suggested size (`#sizeResult.is-alt-hidden`), and lists the similar items that sell
+  that nearest size. `currentUserSize` stays the nearest size, so Continue still measures this garment in it. With
+  nothing similar, the suggested size is shown as before.
+- **SIMILAR MODELS:** taken only from the store's own Shopify recommendations for the page's product
+  (`/recommendations/products.json?intent=related`), kept only with the same product type (or the same title category
+  when either has no type), never a colour of this model. They are sent as `kind: "model"`, after the colours.
+- `color-alternatives` §4. NOT yet verified on fox.co.il itself: no access from here.
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 

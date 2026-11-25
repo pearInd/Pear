@@ -1821,7 +1821,7 @@ function stockFallbacksFor(size) {
  *
  * @param {string|null} size - the recommended size, or null to clear the notice
  */
-function renderStockNotice(size) {
+function renderStockNotice(size, approx) {
   const el = $("stockNotice");
   if (!el) return;                       // Screen 1 markup absent (embed/test harness)
 
@@ -1846,25 +1846,45 @@ function renderStockNotice(size) {
 
   const altsEl = $("colorAlts");
   if (altsEl) { altsEl.hidden = true; altsEl.replaceChildren(); }
+  /* NO EXACT SIZE: the approx case below hides the suggested size and says "no size";
+     every other path shows it again (the verdict painted it). */
+  const sizeEl = $("sizeResult"), labelEl = $("resultLabel");
+  if (sizeEl) sizeEl.classList.remove("is-alt-hidden");
 
-  if (!size || !isSizeSoldOut(size)) return clear();
+  const soldOut = !!size && isSizeSoldOut(size);
+  if (!size || (!soldOut && !approx)) return clear();
 
-  /* OTHER COLOURS OF THIS GARMENT (2026-11-25) - colours that still sell this size are
-     offered INSTEAD of the size-up/down sentence; none -> that sentence, as before.
+  /* OTHER COLOURS OF THIS GARMENT (2026-11-25) - colours (and similar models) that still
+     sell this size are offered INSTEAD of the size-up/down sentence; none -> that
+     sentence, as before. NO EXACT SIZE: the same offer when the body falls between the
+     chart's rows (the "suggested size" case) - "no size" and the items instead of the
+     suggested size; none -> the suggested size, as before. Presentation only:
+     currentUserSize stays the nearest size, so Continue still measures this garment in it.
      typeof-guarded: this region runs as a standalone slice in several suites. */
   const alts = typeof colorAltsFor === "function" ? colorAltsFor(size) : [];
   if (alts.length && typeof renderColorAlts === "function") {
-    const ctext = tf("stockSoldOutColors", { size: formatSizeLabel(size) });
+    const ctext = soldOut
+      ? tf("stockSoldOutColors", { size: formatSizeLabel(size) })
+      : tf("noSizeSimilar", { size: formatSizeLabel(size) });
     if (ctext) {
+      if (!soldOut) {
+        if (labelEl) labelEl.innerText = t("resultLabelNoSize");
+        if (sizeEl) sizeEl.classList.add("is-alt-hidden");
+      }
       el.textContent = ctext;
       el.hidden = false;
       if (box) box.classList.add("has-stock-notice");
       if (tray) tray.classList.add("has-stock-notice");
       renderColorAlts(alts);
-      console.log("[PEAR] recommended size", formatSizeLabel(size), "is out of stock in this colour - offering",
-        alts.length, "other colour(s)");
+      console.log("[PEAR] recommended size", formatSizeLabel(size),
+        soldOut ? "is out of stock in this colour" : "is only the nearest size", "- offering",
+        alts.length, "similar item(s)");
       return;
     }
+  }
+  if (!soldOut) {                        // no exact size, nothing similar: the suggested size, as before
+    if (labelEl) labelEl.innerText = t("resultLabelApprox");
+    return clear();
   }
 
   const { down, up } = stockFallbacksFor(size);
@@ -2356,7 +2376,8 @@ function applySizeVerdict(verdict) {
      shopper their size is M, which is false and outlives the visit - the honest answer
      is "L is your size, L is gone, here is what else would work". Case A/B of the
      requirement is a difference in what is SAID, not in what was computed. */
-  renderStockNotice(bestSize);
+  if (typeof noteSizeApprox === "function") noteSizeApprox(verdict.approx);
+  renderStockNotice(bestSize, !!verdict.approx);
   currentUserSize = bestSize;
   nextBtn.disabled = false;
   updateProgress();
@@ -3262,7 +3283,7 @@ let colorTryPending = false;
 function sanitizeColorOptions(list) {
   const out = [];
   if (!Array.isArray(list)) return out;
-  for (const o of list.slice(0, 8)) {
+  for (const o of list.slice(0, 14)) {
     if (!o || typeof o !== "object") continue;
     const handle = typeof o.handle === "string" ? o.handle : "";
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(handle)) continue;
@@ -3277,19 +3298,28 @@ function sanitizeColorOptions(list) {
       image,
       sizes: strs(o.sizes),
       soldOut: strs(o.soldOut),
+      kind: o.kind === "model" ? "model" : "color",
     });
   }
   return out;
 }
 
-/* The colours that sell `size` right now. */
+/* The colours (and similar models - kind "model", after the colours) that sell `size`
+   right now. */
 function colorAltsFor(size) {
   if (!size || !colorOptions.length) return [];
   const token = parseSizeList([size])[0];
   if (!token) return [];
   return colorOptions.filter((o) =>
-    parseSizeList(o.sizes).includes(token) && !parseSizeList(o.soldOut).includes(token));
+    parseSizeList(o.sizes).includes(token) && !parseSizeList(o.soldOut).includes(token))
+    .sort((a, b) => (a.kind === "model") - (b.kind === "model"));
 }
+
+/* NO EXACT SIZE (2026-11-25, Itai: "when there is no size, write 'no size' and offer
+   similar items instead of a size up/down"). The verdict's approx flag, as last painted -
+   so a late PEAR_COLOR_OPTIONS repaints the same case. Presentation state only. */
+let sizeResultApprox = false;
+function noteSizeApprox(v) { sizeResultApprox = !!v; }
 
 function renderColorAlts(alts) {
   const wrap = $("colorAlts");
@@ -3311,6 +3341,7 @@ function renderColorAlts(alts) {
     img.referrerPolicy = "no-referrer";
     const row = document.createElement("span");
     row.className = "color-alt-row";
+    if (o.kind === "model") card.classList.add("is-model");
     if (o.hex) {
       const dot = document.createElement("span");
       dot.className = "color-alt-dot";
@@ -3321,7 +3352,14 @@ function renderColorAlts(alts) {
     label.className = "color-alt-label";
     label.textContent = t("colorAltTry");
     row.appendChild(label);
-    card.append(img, row);
+    card.append(img);
+    if (o.kind === "model" && o.title) {
+      const name = document.createElement("span");
+      name.className = "color-alt-name";
+      name.textContent = o.title;
+      card.append(name);
+    }
+    card.append(row);
     card.addEventListener("click", () => tryColorOption(o.handle, card));
     wrap.appendChild(card);
   }
@@ -3355,7 +3393,7 @@ window.addEventListener("message", (e) => {
   console.log("[PEAR] other colours of this garment:", colorOptions.length);
   /* Repaint only what is already showing - never a recompute of the size. */
   try {
-    if (currentUserSize && $("resultBox")?.classList.contains("show")) renderStockNotice(currentUserSize);
+    if (currentUserSize && $("resultBox")?.classList.contains("show")) renderStockNotice(currentUserSize, sizeResultApprox);
   } catch {}
 });
 

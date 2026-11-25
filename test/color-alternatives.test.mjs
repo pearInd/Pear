@@ -9,7 +9,10 @@
       height/weight), refuses an unknown handle or a foreign window, and the cart then
       adds THAT product's variant.
    §3 the room: which colours are offered for a size, the sanitiser, and that
-      renderStockNotice() keeps the old sentence when no colour has the size. */
+      renderStockNotice() keeps the old sentence when no colour has the size.
+   §4 similar models (the store's own Shopify recommendations, same product type, never a
+      colour of this model) and NO EXACT SIZE: between two rows the room says "no size" and
+      offers the similar items instead of the suggested size; none -> the suggested size. */
 import { JSDOM, VirtualConsole } from "jsdom";
 import { readFileSync } from "node:fs";
 
@@ -35,6 +38,7 @@ const PRODUCTS = {
   "/products/1000100300.js": product("חולצת טי", ["S", "M", "L", "XL"], ["M", "L"], "https://cdn.shopify.com/s/files/white.jpg", 300),
 };
 
+let RECS = [];
 const SWATCHES = `
   <div class="custom-color-swatch"><div class="swatch-colors-wrapper">
     <button type="button" data-product-handle="1000100200" class="product-color" style="--product-current-color:#6A4D4D;"></button>
@@ -62,6 +66,7 @@ async function boot(html, url) {
     fetched.push(path);
     if (/\/cart\/add/.test(path)) { cartBodies.push(String(opts && opts.body || "")); return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); }
     if (/\/cart\.js$/.test(path)) return Promise.resolve({ ok: true, json: () => Promise.resolve({ items: [], item_count: 0 }) });
+    if (path === "/recommendations/products.json") return Promise.resolve({ ok: true, json: () => Promise.resolve({ products: RECS }) });
     if (PRODUCTS[path]) return Promise.resolve({ ok: true, json: () => Promise.resolve(PRODUCTS[path]) });
     if (/\/products\/.*\.js$/.test(path)) return Promise.resolve({ ok: false, status: 404, json: () => Promise.reject(new Error("404")) });
     if (path.includes("/api/classify-images")) {
@@ -165,7 +170,71 @@ check("§3.6 renderStockNotice() falls back to the old sentence when no colour h
   const ls = APP.indexOf('e.data.type !== "PEAR_COLOR_OPTIONS"');
   const listener = APP.slice(ls, APP.indexOf("\n});", ls));
   check("§3.7 the size is never recomputed when the colours land (repaint only)",
-    ls > 0 && /renderStockNotice\(currentUserSize\)/.test(listener) && !/calculateSize\(/.test(listener));
+    ls > 0 && /renderStockNotice\(currentUserSize, sizeResultApprox\)/.test(listener) && !/calculateSize\(/.test(listener));
+}
+
+/* ── §4: similar models + NO EXACT SIZE ──────────────────────────────────────── */
+console.log("\n── §4 similar models and no exact size ──");
+{
+  PRODUCTS["/products/1000100100.js"] = { ...PRODUCTS["/products/1000100100.js"], id: 777, type: "חולצות" };
+  const rec = (handle, type, title) => ({ ...product(title, ["S", "M", "L"], [], `https://cdn.shopify.com/s/files/${handle}.jpg`, 900), handle, type });
+  RECS = [
+    rec("2000200100", "חולצות", "חולצת פולו"),
+    rec("3000300100", "מכנסיים", "מכנסי ג'ינס"),
+    rec("1000100200", "חולצות", "חולצת טי"),           // a colour of this model - never twice
+    { ...rec("4000400100", "חולצות", "חולצה"), variants: [] },   // nothing to sell - left out
+  ];
+  const { window } = await boot(PDP(SWATCHES), "https://fox.co.il/products/1000100100");
+  window.document.querySelector(".pear-widget-btn").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await tick(80);
+  const msg = frame(window) && frame(window).__pearColors;
+  const list = msg ? msg.options : [];
+  const models = list.filter((o) => o.kind === "model").map((o) => o.handle);
+  check("§4.1 a recommendation of the same product type is offered as a similar model", models.join() === "2000200100", models.join());
+  check("§4.2 the colours stay colours, listed first", list.slice(0, 2).every((o) => o.kind === "color"), JSON.stringify(list.map((o) => o.kind)));
+  RECS = [];
+}
+{
+  const dom = new JSDOM(`<div id="resultBox" class="show"><span id="resultLabel">L0</span><div id="sizeResult">M</div>
+    <div id="resultActions"></div><p id="stockNotice" hidden></p><div id="colorAlts" hidden></div></div>`);
+  const g = dom.window;
+  const rsStart = APP.indexOf("function renderStockNotice(size, approx) {");
+  const rsEnd = APP.indexOf("\n}\n", rsStart) + 3;
+  const DICT = { resultLabelApprox: "APPROX", resultLabelNoSize: "NOSIZE", colorAltTry: "TRY", colorAltTryAria: "TRY" };
+  // eslint-disable-next-line no-new-func
+  const r = new Function("document", "DICT", `
+    const $ = (id) => document.getElementById(id);
+    const t = (k) => DICT[k] || k;
+    const tf = (k, v) => k + ":" + (v && v.size);
+    const formatSizeLabel = (s) => s;
+    let SOLD = [];
+    const isSizeSoldOut = (s) => SOLD.includes(s);
+    const stockFallbacksFor = () => ({ down: null, up: null });
+    ${psl}
+    ${APP.slice(start, end)}
+    ${APP.slice(rsStart, rsEnd)}
+    return { renderStockNotice, set: (l) => { colorOptions = l; }, sold: (l) => { SOLD = l; } };`)(g.document, DICT);
+  const el = (id) => g.document.getElementById(id);
+  r.set([]);
+  el("resultLabel").innerText = "APPROX";
+  r.renderStockNotice("M", true);
+  check("§4.3 no exact size, nothing similar: the suggested size stays, label untouched",
+    el("resultLabel").innerText === "APPROX" && !el("sizeResult").classList.contains("is-alt-hidden") && el("stockNotice").hidden);
+  r.set([{ handle: "m1", hex: "", title: "חולצת פולו", image: "https://cdn.shopify.com/m.jpg", sizes: ["M"], soldOut: [], kind: "model" }]);
+  r.renderStockNotice("M", true);
+  check("§4.4 no exact size + a similar item: 'no size', the size hidden, the item offered",
+    el("resultLabel").innerText === "NOSIZE" && el("sizeResult").classList.contains("is-alt-hidden")
+    && /^noSizeSimilar:M$/.test(el("stockNotice").textContent) && g.document.querySelectorAll(".color-alt.is-model").length === 1,
+    el("resultLabel").innerText + " | " + el("stockNotice").textContent);
+  check("§4.5 a model card carries its name", g.document.querySelector(".color-alt-name")?.textContent === "חולצת פולו");
+  r.renderStockNotice("M", false);
+  check("§4.6 an exact size in stock: nothing offered, the size shown again",
+    !el("sizeResult").classList.contains("is-alt-hidden") && el("stockNotice").hidden && el("colorAlts").hidden);
+  r.set([]);
+  r.renderStockNotice("M", true);
+  check("§4.7 the offer gone on a repaint: back to the suggested-size label", el("resultLabel").innerText === "APPROX");
+  check("§4.8 the verdict tells the notice whether the size is only the nearest",
+    /noteSizeApprox\(verdict\.approx\);\s*renderStockNotice\(bestSize, !!verdict\.approx\);/.test(APP));
 }
 
 console.log(failures ? `\ncolor-alternatives: ${failures} FAILING` : "\ncolor-alternatives: all green");

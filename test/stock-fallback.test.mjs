@@ -399,7 +399,7 @@ console.log("\n── §7 stock is presentation - it never rewrites the recommen
     /currentUserSize = bestSize;/.test(calc),
     "silently re-recommending M because L is gone tells the shopper their size is M");
   check("renderStockNotice() is called with bestSize - it reports, it does not decide",
-    /renderStockNotice\(bestSize\);/.test(calc));
+    /renderStockNotice\(bestSize(?:, !!verdict\.approx)?\);/.test(calc));   // + whether bestSize is only the nearest (color-alternatives §4)
   check("nothing in the stock path reassigns bestSize",
     !/bestSize\s*=\s*[^;]*(?:soldOut|stockFallbacks|purchasable)/i.test(APP));
   check("the notice is cleared BEFORE calculateSize()'s early returns, not after",
