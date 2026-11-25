@@ -2437,6 +2437,20 @@ re-opens the room on that product through `startTryOn()` (the PEAR button's clic
 - **That the engine follows the reference's tone this closely is not proven.** The check: a TEST turn on a white tee,
   `ctx.ref` {did: "toned"}, the same patch measured. No better, or worse on any frame: remove.
 
+### 7.35 The side triangles - the back names the front's garment (2026-11-25, TEST sessions only) - NOT YET MEASURED ON THE ENGINE
+The owner: length consistent, and no triangle cuts at the sides ("like in the V-neck clip"); turns and the buffer untouched.
+- **Measured on that clip (record mwwd2vnf):** the slit stands at the side of the hem 2.8-3.7s, only while the BACK reference is
+  on (sent 1.82, rendered 2.22; front 2.92 / 3.31; output ~0.9s behind). The product (fox 1919140100) has a straight hem in all
+  four photos. HEM_EDGE_LOCK (§7.30) was on the wire and did not stop it.
+- **Change:** the front anchors say "t-shirt" / "top", the back anchors said "shirt" (cut with side vents). `backNamedAsFront()`
+  swaps that noun after the resolver, behind `hemEdge` (TEST sessions); a shopper's wire is byte-identical (`trace:prompt`).
+  §2.17 records the same word being tried 2026-09-28 and reverted only with a batch. The cause is not proven.
+- **Length, not changed:** the same clip, (hem - shoulder)/(hip - shoulder) by the lite pose model: front 1.13-1.16 before the
+  turn, back 1.02-1.08, front after it 1.08-1.10 (the shopper also walked closer: torso 197 -> 258px, so part is perspective).
+  The garment boxes make the two references agree within about 1% (read off the store photos), so no reference change was made.
+  The rear mask used the box's edge there (`hem: "box"`, white on light), ~1% of the model's striped shorts left under the hem.
+- **The check:** a TEST session on the V-neck with a turn - the side slit, and the length front/back. Worse: revert.
+
 ---
 
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL

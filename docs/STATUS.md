@@ -6,7 +6,9 @@ done · blocked*.
 
 _Last updated: 2026-11-25 (evening) · the picture's receive buffer is **150ms instead of 80** on main, for the jumps during a turn (CLAUDE.md §7.32); a local browser check confirms it applies (frames held 60 -> 129ms), unit + visual 40/40 green. **Not measured on the engine** - your next session is the check; 0.08 is the way back. §7.31 (fresh pose model per measurement) is on main (6954b3e)._
 
-_Update 2026-11-26 (evening) · the shirt colour jumping through the turn: the rear photo of a light top goes a shade lower, TEST sessions only (CLAUDE.md §7.34). On main; unit, build, qa:visual 40/40 green, prompt unchanged; no Worker deploy. **Not yet measured on the engine.** The back-noun change (`4618448`, would be §7.33) is shelved by the owner: it is on the local main of the owner's Mac only - never push it without a Worker deploy and the owner's yes._
+_Update 2026-11-26 (night) · side triangle cuts (V-neck): the back-view wording names the garment as the front does (CLAUDE.md §7.35), TEST sessions only. The owner asked to ship it after shelving it earlier. Needs the Worker deployed BEFORE the push. Not yet measured on the engine. Length: no change made._
+
+_Update 2026-11-26 (evening) · the shirt colour jumping through the turn: the rear photo of a light top goes a shade lower, TEST sessions only (CLAUDE.md §7.34). On main; unit, build, qa:visual 40/40 green, prompt unchanged; no Worker deploy. **Not yet measured on the engine.**_
 
 _Earlier: 2026-11-25 (noon) · **committed, not pushed:** a repeat measurement gets a fresh pose model, as the first one has (CLAUDE.md §7.31) - the likely cause of the strange 2nd run (stale shoulder order, FRONT 2s late, rear photo on the chest); first run, turn engine and prompts unchanged, no Worker deploy. Unit + visual 40/40 green; not measured on the engine._
 

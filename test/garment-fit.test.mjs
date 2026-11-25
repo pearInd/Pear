@@ -119,6 +119,14 @@ console.log("\n── THE HEM AS ONE EDGE - its own request flag (CLAUDE.md §7.
     ["front", "back"].every((angle) => { const p = w({ angle, test: true, hemEdge: true }); return p.includes("continuous edge") && p.length <= 650; }) &&
     !E.promptForRequest(E.sanitizePromptRequest({ item: { name: "מכנסיים", type: "bottoms", __bottoms: true }, angle: "front", delta: 0, hemEdge: true })).includes("continuous edge"));
   check("it names the hem as what it IS - no hole, slit, notch or hand", !/hole|slit|notch|gap|hand/i.test("The hem is one straight continuous edge all around."));
+  console.log("\n── THE BACK NAMES THE FRONT'S GARMENT - the same flag (CLAUDE.md §7.35) ──");
+  const tee = { name: "טישרט בייסיק צווארון V", type: "shirt", colorHex: "#ffffff", backIsPlain: true, fitCut: "regular", fitHem: "hip", __bottoms: false };
+  const printed = { name: "חולצה עם הדפס", type: "shirt", colorHex: "#1a1d23", fitCut: "regular", fitHem: "hip", __bottoms: false };
+  const q = (it, o) => E.promptForRequest(E.sanitizePromptRequest({ item: it, angle: "back", delta: 0, test: true, ...o }));
+  check("a plain tee's back says t-shirt, as its front does", q(tee, { hemEdge: true }).includes("static t-shirt's REAR") && q(tee, { hemEdge: true }).includes("original t-shirt texture") && !/\bshirt('s)? (REAR|texture)/.test(q(tee, { hemEdge: true }).replace(/t-shirt/g, "")));
+  check("another top's back says top, as its front does", q(printed, { hemEdge: true }).includes("static top's REAR") && q(printed, { hemEdge: true }).includes("original top texture"));
+  check("without hemEdge the back keeps its old words (a shopper's wire)", q(printed, {}).includes("static shirt's REAR") && q(printed, { test: false }).includes("original shirt texture"));
+  check("every size step stays within the budget and keeps a size", [tee, printed].every((it) => [-2, -1, 0, 1, 2].every((delta) => { const p = q(it, { hemEdge: true, delta }); return p.length <= 650 && /Fit:/.test(p); })));
 }
 
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");
