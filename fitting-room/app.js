@@ -4360,8 +4360,9 @@ function enterRoom() {
   } else {
     focusMode = false;
     $("focusBar").hidden = true;
-    renderCatalogPanel();
-    $("catalogPanel").hidden = false;
+    /* The catalog panel ("choose a garment from the catalog") is not shown (Itai, 2026-11-25):
+       the room opens on the store's own garment, never on a picker of ours. */
+    $("catalogPanel").hidden = true;
     setActiveItem(toItem(PEAR_CATALOG[0]), { silent: true });
   }
 

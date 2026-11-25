@@ -353,8 +353,8 @@ const I18N = {
      rendered inside a size button's accessible name, not as visible text. */
   /* OTHER COLOURS OF THIS GARMENT (app.js) - said when other colours still have the size. */
   stockSoldOutColors: {
-    he: "המידה שלך, {size}, אזלה בצבע הזה. היא זמינה בצבעים האלה:",
-    en: "Your size, {size}, is out of stock in this colour. It's available in these colours:",
+    he: "אין מידה {size} בצבע הזה. המידה שלך זמינה בצבעים האלה:",
+    en: "No size {size} in this colour. Your size is available in these colours:",
   },
   colorAltTry:     { he: "למדוד", en: "Try on" },
   colorAltTryAria: { he: "למדוד בצבע הזה", en: "Try on in this colour" },
