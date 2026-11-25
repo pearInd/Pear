@@ -6821,21 +6821,28 @@ html.pear-store-theme {
   --font-ui: var(--store-font, -apple-system), -apple-system, BlinkMacSystemFont, "Heebo", "Segoe UI", Roboto, system-ui, sans-serif;
 }
 
-/* ── 1 · the page: the store's background, with two faint washes of its accent ── */
+/* ── 1 · the page: the store's background in SHADES, as PEAR's default page is - never one flat
+   fill (the owner, on the first glass cut: "the background on a computer is uniform, it tires the
+   eye - shades, as it was in green"). Same layers and strengths as the default page, the accent
+   where the green and the sand were, over the store's own background. ── */
 html.pear-store-theme body {
   background:
-    radial-gradient(1100px 760px at 84% -10%, rgba(var(--accent-rgb), .06), transparent 60%),
-    radial-gradient(900px 900px  at 50% 118%, rgba(var(--accent-rgb), .04), transparent 60%),
+    radial-gradient(1100px 760px at 84% -10%, rgba(var(--accent-rgb), .16), transparent 60%),
+    radial-gradient(900px 700px  at -8% 14%,  rgba(var(--accent-rgb), .09), transparent 58%),
+    radial-gradient(900px 900px  at 50% 118%, rgba(var(--accent-rgb), .12), transparent 60%),
+    linear-gradient(180deg, var(--store-bg) 0%, rgba(var(--accent-rgb), .07) 52%, var(--store-bg) 100%),
     var(--store-bg);
   background-attachment: fixed;
 }
-html.pear-store-theme body::before { background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb), .07), transparent 65%); }
-html.pear-store-theme body::after  { background: radial-gradient(circle at 60% 40%, rgba(var(--accent-rgb), .04), transparent 65%); }
-/* the drifting mesh behind the glass: mostly white, one breath of the accent */
+html.pear-store-theme body::before { background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb), .22), transparent 65%); }
+html.pear-store-theme body::after  { background: radial-gradient(circle at 60% 40%, rgba(var(--accent-rgb), .13), transparent 65%); }
+/* the drifting mesh behind the glass: four lights of the accent, as the default's four */
 html.pear-store-theme .liquid-mesh {
   background:
-    radial-gradient(38% 38% at 22% 26%, rgba(var(--accent-rgb), .07), transparent 70%),
-    radial-gradient(48% 48% at 70% 84%, rgba(var(--accent-rgb), .05), transparent 72%);
+    radial-gradient(38% 38% at 22% 26%, rgba(var(--accent-rgb), .16), transparent 70%),
+    radial-gradient(42% 42% at 82% 20%, rgba(var(--accent-rgb), .10), transparent 72%),
+    radial-gradient(48% 48% at 70% 84%, rgba(var(--accent-rgb), .13), transparent 72%),
+    radial-gradient(40% 40% at 14% 80%, rgba(var(--accent-rgb), .07), transparent 72%);
 }
 
 /* ── 2 · primary actions: a fade between two shades of the accent, the on-primary ink ── */
