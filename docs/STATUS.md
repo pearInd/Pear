@@ -541,11 +541,11 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 ## Store colour themes (2026-11-25)
 - **Stage:** done on the branch, PR open, not merged. A store's embed sets its colours by configuration:
   `data-pear-theme="<preset>"` (presets in `fitting-room/store-theme.js`) and/or `data-pear-color-primary / -on-primary /
-  -accent / -bg / -text`, `data-pear-radius`, `data-pear-font`. Under a theme the room is flat (no glass, glow or gradient),
-  in the store's colours and font, with headings/labels/notes aligned to the reading direction. No theme = PEAR's look
+  -accent / -bg / -text`, `data-pear-font`. Under a theme the room keeps PEAR's glass shapes and fades in the store's colours
+  and font, with headings/labels/notes aligned to the reading direction. No theme = PEAR's look
   exactly (qa:visual 40/40, screenshots identical to noise). Measurement, orientation and prompts untouched
   (`trace:prompt` byte-identical). No Worker deploy.
-- **FOX preset (v2, the same day, on the owner's review):** red (#e21836, FOX's own `--fox-red`) buttons with white text, white page, shades of the red for lines and soft fills, round (pill) buttons, Rubik; the fitting title in one colour.
+- **FOX preset (third cut, the same day, after two the owner turned down - flat black/square, flat solid red):** PEAR's glass look recoloured - white page, fades between shades of FOX red (#e21836) on the primary buttons and washes, black ink and black for the chosen size, Rubik; titles one colour.
 - **Waiting on you:** review, merge; then add `data-pear-theme="fox"` to FOX's script tag.
 
 ## Security hardening + client-code hiding

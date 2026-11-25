@@ -173,8 +173,8 @@
 
   /* ── store theme - the room in the store's own colours (2026-11-25) ──────
      data-pear-theme="<preset>" names a row of STORE_THEMES in fitting-room/store-theme.js;
-     data-pear-color-primary / -on-primary / -accent / -bg / -text, data-pear-radius and
-     data-pear-font override one value each. Forwarded verbatim as theme / theme_* params;
+     data-pear-color-primary / -on-primary / -accent / -bg / -text and data-pear-font
+     override one value each. Forwarded verbatim as theme / theme_* params;
      the room validates every value (store-theme.js). Absent -> nothing is sent and the
      room is PEAR's default look. */
   var THEME_PARAMS = (function () {
@@ -184,8 +184,7 @@
     if (name) out += "&theme=" + encodeURIComponent(name);
     [["data-pear-color-primary", "primary"], ["data-pear-color-on-primary", "on_primary"],
      ["data-pear-color-accent", "accent"], ["data-pear-color-bg", "bg"],
-     ["data-pear-color-text", "text"], ["data-pear-radius", "radius"],
-     ["data-pear-font", "font"]].forEach(function (p) {
+     ["data-pear-color-text", "text"], ["data-pear-font", "font"]].forEach(function (p) {
       var v = script.getAttribute(p[0]);
       if (v) out += "&theme_" + p[1] + "=" + encodeURIComponent(v);
     });

@@ -6778,250 +6778,127 @@ body .cl-card__look { position: relative; isolation: isolate; }
 body .camera-card__timer { position: relative; isolation: isolate; }
 
 /* ============================================================================
-   STORE THEME - the room in the store's own colours, flat (2026-11-25)
+   STORE THEME - PEAR's glass look in the store's own colours (2026-11-25)
    ----------------------------------------------------------------------------
    Active ONLY on html.pear-store-theme, which fitting-room/store-theme.js sets when the
    store's embed names a theme (data-pear-theme / data-pear-color-*). Without it this
-   layer matches nothing and the room is PEAR's Liquid Glass look exactly.
+   layer matches nothing and the room is PEAR's look exactly.
 
-   Asked: "not look AI, the store's colours, not everything centred - text in the middle
-   or right-to-left depending". So, under a store theme: one flat surface in the store's
-   background colour, solid buttons in its primary colour, its accent for highlights,
-   hairline borders, its corner radius and typeface, no frosted glass, no glow, no
-   gradient wash - and headings, labels and notes aligned to the reading direction
-   (start: right in Hebrew, left in English); only the buttons' own labels and the big
-   size answer stay centred.
+   THREE CUTS IN ONE DAY, kept so the first two are not re-tried:
+     1. flat, black square buttons - "I don't like the colours, buttons stay round, red
+        and white should lead";
+     2. flat, solid red pill buttons on white - "red should lead but not be the whole
+        thing; copy FOX's background; make the interface itself beautiful, fades between
+        shades like before, only in their colours - red, white, and use black somewhere";
+     3. THIS: the Liquid Glass layers above stay exactly as they are (round glass
+        buttons, soft fades) and only their COLOURS move - the page is the store's
+        background (white), every pear-green wash/tint/glow is the store's accent
+        (through --accent-rgb), the cream glass is white glass, primary buttons are a
+        fade between two shades of the accent with the on-primary text, and the store's
+        text colour (black) carries the headings, the chosen size and the ink.
+   Also: headings, labels and notes start where the language starts (right in Hebrew,
+   left in English), and a line of text is ONE colour (no gradient inside a title).
 
    The colours are variables (--store-*, --accent-rgb) - never a store's name in here.
    The `:not(#_)` suffixes give a rule an id's weight: the glass layers above use it too.
    ============================================================================ */
 html.pear-store-theme {
   --bg: var(--store-bg);
-  --bg-soft: var(--store-bg);
+  --bg-soft: rgba(255, 255, 255, .5);
   --ink: var(--store-text);
   --text: var(--store-text);
-  --muted: var(--store-muted);
-  --muted-2: var(--store-muted);
   --pear: var(--store-accent);
-  --pear-deep: var(--store-text);
-  --glass: var(--store-bg);
-  --glass-strong: var(--store-bg);
-  --glass-soft: var(--store-bg);
-  --glass-border: var(--store-line);
-  --glass-line: var(--store-line);
-  --blur: none;
-  --blur-lg: none;
-  --shadow: none;
-  --shadow-soft: none;
-  --shadow-lift: none;
-  --shadow-pear: none;
-  --radius: var(--store-radius-lg);
-  --radius-sm: var(--store-radius);
-  --radius-lg: var(--store-radius-lg);
-  --pill: var(--store-radius);
+  --pear-deep: var(--store-primary-deep);
+  --glass:        rgba(255, 255, 255, .58);
+  --glass-strong: rgba(255, 255, 255, .78);
+  --glass-soft:   rgba(255, 255, 255, .42);
   --primary-rgb: var(--accent-rgb);
   --primary-solid: var(--store-primary);
-  --focus-rgb: var(--store-text-rgb);
+  --focus-rgb: var(--accent-rgb);
   --help-accent: var(--store-text);
-  --ink-input: var(--store-text);
-  --ink-label: var(--store-text);
-  --ink-secondary: var(--store-muted);
-  --lg-blur: none;
-  --lg-fill: var(--store-bg);
-  --lg-border: 1px solid var(--store-line);
-  --lg-edge: none;
-  --lg-edge-dark: none;
-  --lg-shadow: none;
-  --lgb-blur: none;
-  --lgb-blur-modal: none;
-  --lgb-glass: var(--store-bg);
-  --lgb-border: var(--store-line);
-  --lgb-shadow: none;
-  --lgb-sheen: none;
-  --lg2-blur: none;
-  --lg2-clear: var(--store-bg);
-  --lg2-clear-hover: var(--store-soft);
-  --lg2-tint: var(--store-primary);
-  --lg2-tint-hover: var(--store-primary);
-  --lg2-dark: rgba(0, 0, 0, .55);
-  --lg2-rim: 0 0 0 0 transparent;
-  --lg2-depth: 0 0 0 0 transparent;
-  --lg2-drop: 0 0 0 0 transparent;
-  --lg2-press: inset 0 0 0 999px rgba(0, 0, 0, .08);
+  --lg2-tint: linear-gradient(180deg, var(--store-primary-light) 0%, var(--store-primary) 100%);
+  --lg2-tint-hover: linear-gradient(180deg, var(--store-primary) 0%, var(--store-primary-deep) 100%);
   --font-ui: var(--store-font, -apple-system), -apple-system, BlinkMacSystemFont, "Heebo", "Segoe UI", Roboto, system-ui, sans-serif;
 }
 
-/* ── 1 · one flat page: no ambient wash, no mesh, no frosted glass ── */
-html.pear-store-theme,
-html.pear-store-theme body { background: var(--store-bg) !important; color: var(--store-text); }
-html.pear-store-theme body::before,
-html.pear-store-theme body::after,
-html.pear-store-theme .liquid-mesh,
-html.pear-store-theme .calc-editorial__aura,
-html.pear-store-theme .calc-editorial__grid { display: none !important; }
-html.pear-store-theme body * {
-  -webkit-backdrop-filter: none !important;
-          backdrop-filter: none !important;
-  text-shadow: none !important;
+/* ── 1 · the page: the store's background, with two faint washes of its accent ── */
+html.pear-store-theme body {
+  background:
+    radial-gradient(1100px 760px at 84% -10%, rgba(var(--accent-rgb), .06), transparent 60%),
+    radial-gradient(900px 900px  at 50% 118%, rgba(var(--accent-rgb), .04), transparent 60%),
+    var(--store-bg);
+  background-attachment: fixed;
 }
-/* every glass sheen / specular rim drawn on a pseudo-element goes */
-html.pear-store-theme body :is(button, .calc-card, .result-box, .form-group input)::before { background-image: none; }
-
-/* ── 2 · surfaces: the store's background, a hairline, its radius ── */
-html.pear-store-theme body :is(.calc-card, .calc-editorial, .result-box, .garment-banner, .selected-item-banner,
-  .camera-card, .fit-card, .cookie-banner, .otp-card, .profile-dropdown, .terms-modal__panel, .cam-guide__step,
-  .cart-drawer, .pear-help-widget__panel):not(#_) {
-  background: var(--store-bg) !important;
-  background-image: none !important;
-  border: 1px solid var(--store-line) !important;
-  box-shadow: none !important;
-  border-radius: var(--store-radius-lg) !important;
+html.pear-store-theme body::before { background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb), .07), transparent 65%); }
+html.pear-store-theme body::after  { background: radial-gradient(circle at 60% 40%, rgba(var(--accent-rgb), .04), transparent 65%); }
+/* the drifting mesh behind the glass: mostly white, one breath of the accent */
+html.pear-store-theme .liquid-mesh {
+  background:
+    radial-gradient(38% 38% at 22% 26%, rgba(var(--accent-rgb), .07), transparent 70%),
+    radial-gradient(48% 48% at 70% 84%, rgba(var(--accent-rgb), .05), transparent 72%);
 }
 
-/* ── 3 · buttons: solid primary, outlined secondary, the store's radius ── */
-html.pear-store-theme body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
-  .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar, .plb-btn, .pear-sz-btn,
-  .pear-rz-btn, .cl-arrow, .pip-retake, .pip-clear, .profile-dropdown__logout, .cl-card__look, .photo-estimate__btn,
-  .gender-switch, .lang-switch, .fs-switch):not(#_) {
-  background: var(--store-bg) !important;
-  background-image: none !important;
-  color: var(--store-primary-deep) !important;
-  border: 1px solid var(--store-accent) !important;
-  box-shadow: none !important;
-  border-radius: var(--store-btn-radius) !important;
-}
+/* ── 2 · primary actions: a fade between two shades of the accent, the on-primary ink ── */
 html.pear-store-theme body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look,
-  .pear-rz-btn--dl, .btn-update-measure, .pear-compare-bar, .pear-sz-btn.is-active):not(#_) {
-  background: var(--store-primary) !important;
-  color: var(--store-on-primary) !important;
-  border-color: var(--store-primary) !important;
+  .pear-rz-btn--dl, .btn-update-measure, .pear-compare-bar):not(:disabled):not([aria-disabled="true"]):not(#_) {
+  background: var(--lg2-tint);
+  color: var(--store-on-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .38), inset 0 0 0 .5px rgba(255, 255, 255, .22),
+              0 10px 26px -12px rgba(var(--accent-rgb), .7);
 }
-html.pear-store-theme body :is(.btn-primary, .btn-add-cart):is(:disabled, [aria-disabled="true"]):not(#_) {
-  background: var(--store-soft) !important;
-  color: var(--store-muted) !important;
-  border-color: var(--store-line) !important;
-}
-/* buttons over the camera keep a dark scrim so they read on video */
-html.pear-store-theme body :is(.camera-card__flip, .camera-card__timer, .pear-rz-btn--replay, .plb-btn, .pear-lightbox__close):not(#_) {
-  background: rgba(0, 0, 0, .55) !important;
-  color: #fff !important;
-  border-color: transparent !important;
-}
-html.pear-store-theme body :is(button, a)::after { box-shadow: none; }
 @media (hover: hover) {
-  html.pear-store-theme body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary):not(:disabled):hover:not(#_) {
-    background: var(--store-primary-deep) !important;
-    border-color: var(--store-primary-deep) !important;
+  html.pear-store-theme body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look,
+    .btn-update-measure, .pear-compare-bar):hover:not(:disabled):not([aria-disabled="true"]):not(#_) {
+    background: var(--lg2-tint-hover);
+    color: var(--store-on-primary);
   }
 }
+html.pear-store-theme body :is(.btn-primary, .btn-add-cart):is(:disabled, [aria-disabled="true"]):not(#_) { color: var(--store-muted); }
 
-/* ── 4 · inputs: flat fields, the store's line, its text colour on focus ── */
-html.pear-store-theme body :is(input[type="number"], input[type="text"], input[type="email"], input[type="tel"], select, textarea):not(#_) {
-  background: var(--store-bg) !important;
-  background-image: none !important;
-  border: 1px solid var(--store-line) !important;
-  border-radius: var(--store-radius) !important;
-  box-shadow: none !important;
-  color: var(--store-text) !important;
+/* ── 3 · the store's text colour (black) where a choice is made ── */
+html.pear-store-theme body .pear-sz-btn.is-active:not(#_) {
+  background: linear-gradient(180deg, rgba(var(--store-text-rgb), .86) 0%, var(--store-text) 100%);
+  color: var(--store-bg);
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 8px 20px -12px rgba(var(--store-text-rgb), .7);
 }
-html.pear-store-theme body :is(input, select, textarea):focus:not(#_) {
-  border-color: var(--store-accent) !important;
-  box-shadow: 0 0 0 1px var(--store-accent) !important;
-  outline: none;
+html.pear-store-theme body .consent-check input:checked + .consent-check__box:not(#_) {
+  background: linear-gradient(180deg, rgba(var(--store-text-rgb), .82) 0%, var(--store-text) 100%);
+  border-color: var(--store-text);
+  box-shadow: 0 6px 14px -6px rgba(var(--store-text-rgb), .5);
+}
+html.pear-store-theme body :is(.step-progress-label span, .terms-link-btn, .pear-sz-label, #progressPercent, .focus-calc-hint, .focus-calc-hint strong):not(#_) {
+  color: var(--store-text);
+}
+html.pear-store-theme body .terms-link-btn:not(#_) { text-decoration-color: rgba(var(--accent-rgb), .55); }
+
+/* ── 4 · the accent as ink: the size answer and the required star ── */
+html.pear-store-theme body :is(.required, .size-display, .estimate-tag):not(#_) { color: var(--store-accent); }
+html.pear-store-theme body .size-display:not(#_) { background: none; -webkit-text-fill-color: currentColor; }
+/* the screen-change flood: a fade between two shades of the accent */
+html.pear-store-theme body .pear-transition__flood:not(#_) {
+  background: radial-gradient(circle at 50% 42%, var(--store-primary-light) 0%, var(--store-primary) 52%, var(--store-primary-deep) 100%);
 }
 
-/* ── 5 · the accent: what is chosen, done or required ── */
-html.pear-store-theme body :is(.required, .size-display, .estimate-tag):not(#_) { color: var(--store-accent) !important; }
-html.pear-store-theme body :is(.size-display) { background: none !important; -webkit-text-fill-color: currentColor !important; }
-
+/* ── 5 · ONE COLOUR PER LINE OF TEXT ("the colour mix in the title looks broken") ── */
+html.pear-store-theme body .personal-title:not(#_),
+html.pear-store-theme body .personal-title :is(span, strong, b):not(#_) {
+  color: var(--store-text);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
 
 /* ── 6 · reading direction: text starts where the language starts ──
    Hebrew reads from the right, English from the left; `start` follows the document's dir,
    which i18n.js sets with the language. Buttons keep their labels centred. */
 html.pear-store-theme body :is(.calc-form h1, .calc-form h2, .calc-form p, .calc-form label, .form-group,
-  .gender-label, .photo-estimate__note, .result-box, .result-label, .stock-notice, .consent-check__text,
-  .consent-panel__hint, .cam-guide, .cam-guide h2, .cam-guide p, .fitting-title, .otp-card, .otp-card p,
-  .cookie-banner__text, .section-divider, .fine-tune-title):not(#_) {
+  .photo-estimate__note, .result-box, .result-label, .stock-notice, .consent-check__text,
+  .consent-panel__hint, .cam-guide, .cam-guide h2, .cam-guide p, .otp-card, .otp-card p,
+  .cookie-banner__text, .size-display):not(#_) {
   text-align: start !important;
 }
-html.pear-store-theme body :is(.gender-group, .gender-field, .form-group--gender):not(#_) { align-items: flex-start !important; }
-html.pear-store-theme body .size-display:not(#_) { text-align: start !important; }
-
-/* ── 7 · the details the rules above miss ── */
-/* the glass layer clips buttons to a pill; under a store theme the clip follows its radius */
-html.pear-store-theme body :is(button, .btn-primary, .btn-ghost):not(#_) { clip-path: none !important; }
-/* the selected-item note: a plain hairline box, no tinted wash */
-html.pear-store-theme body .focus-calc-hint:not(#_) {
-  background: var(--store-soft) !important;
-  border: 1px solid var(--store-line) !important;
-  border-radius: var(--store-radius) !important;
-  box-shadow: none !important;
-  color: var(--store-text) !important;
-}
-/* segmented controls (language, fullscreen, gender, timer): a flat track, the chosen
-   segment outlined in the store's text colour */
-html.pear-store-theme body :is(.lang-switch, .fs-switch, .gender-toggle.liquid-glass-track, .cam-timer__track):not(#_) {
-  background: var(--store-soft) !important;
-  border: 1px solid var(--store-line) !important;
-  box-shadow: none !important;
-  border-radius: var(--store-btn-radius) !important;
-}
-html.pear-store-theme body :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill):not(#_) {
-  background: transparent !important;
-  border-radius: var(--store-btn-radius) !important;
-}
-html.pear-store-theme body :is(.lang-switch__thumb, .fs-switch__thumb, .liquid-glass-pill, .cam-timer__pill)::before {
-  background: var(--store-bg) !important;
-  box-shadow: inset 0 0 0 1.5px var(--store-accent) !important;
-  border-radius: inherit !important;
-  scale: 1 !important;
-}
-/* labels that sat centred over a centred control now start where the language starts */
 html.pear-store-theme body .gender-group:not(#_) { justify-items: stretch !important; text-align: start !important; }
 html.pear-store-theme body .gender-group > .form-group__label:not(#_) { justify-self: start !important; }
 html.pear-store-theme body .gender-group .gender-switch-wrapper:not(#_) { justify-content: flex-start !important; }
-/* green ink left in the base layers */
-html.pear-store-theme body :is(.step-progress-label span, .terms-link-btn, .pear-sz-label, #progressPercent, .fine-tune-title, .calc-kicker):not(#_) {
-  color: var(--store-text) !important;
-}
-html.pear-store-theme body .terms-link-btn:not(#_) { text-decoration-color: var(--store-muted) !important; }
-html.pear-store-theme body .step-progress-fill:not(#_) { background: var(--store-accent) !important; box-shadow: none !important; }
-html.pear-store-theme body .step-progress-track:not(#_) { background: var(--store-line) !important; box-shadow: none !important; border: 0 !important; }
-html.pear-store-theme body .consent-check input:checked + .consent-check__box:not(#_) {
-  background: var(--store-primary) !important;
-  border-color: var(--store-primary) !important;
-  box-shadow: none !important;
-}
-html.pear-store-theme body .consent-check__box:not(#_) { border-radius: calc(var(--store-radius) / 2) !important; }
-/* the form's own panel, the size picker, the focus bar's size chip and the cookie icon */
-html.pear-store-theme body #screen-calculator .container:not(#_) {
-  border-radius: var(--store-radius-lg) !important;
-  box-shadow: none !important;
-  background: var(--store-bg) !important;
-  border: 1px solid var(--store-line) !important;
-}
-html.pear-store-theme body #pearSizeSelector:not(#_) {
-  background: var(--store-bg) !important;
-  border: 1px solid var(--store-line) !important;
-  border-radius: var(--store-radius-lg) !important;
-  box-shadow: none !important;
-}
-html.pear-store-theme body :is(.focus-bar__badge, .cookie-banner__icon):not(#_) {
-  background: var(--store-soft) !important;
-  border: 1px solid var(--store-line) !important;
-  box-shadow: none !important;
-  color: var(--store-text) !important;
-}
-html.pear-store-theme body .focus-bar__badge:not(#_) { border-radius: var(--store-btn-radius) !important; }
-/* ONE COLOUR PER LINE OF TEXT ("the colour mix in the title looks broken - no colour
-   combinations in text"): the fitting title's words and its size are the text colour. */
-html.pear-store-theme body .personal-title:not(#_),
-html.pear-store-theme body .personal-title :is(span, strong, b):not(#_) {
-  color: var(--store-text) !important;
-  background: none !important;
-  -webkit-text-fill-color: currentColor !important;
-}
-html.pear-store-theme body .required:not(#_) + span { color: var(--store-text) !important; }
-/* the screen-change flood: one solid colour (the store's primary), no green-to-accent glow */
-html.pear-store-theme body .pear-transition__flood:not(#_) { background: var(--store-primary) !important; }
-html.pear-store-theme body .pear-transition__bg:not(#_) { background: var(--store-bg) !important; }
+html.pear-store-theme body .btn-edit-measurements:not(#_),
+html.pear-store-theme body .btn-edit-measurements :is(svg, span):not(#_) { color: var(--store-text); }
