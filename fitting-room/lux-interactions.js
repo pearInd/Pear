@@ -132,6 +132,15 @@
     }
 
     function landWithGarment(garment) {
+      // ADMIN COUNT (2026-11-25): one "cart_add" row per add the room actually sends (a click
+      // with no identifiable garment was blocked above and is not counted). The size is the
+      // one the shopper finally chose - the admin's hesitation view reads it as such.
+      // The garment id/name default to the room's active item (as size_pick's do). Fire-and-
+      // forget through app.js's window.pearLogRoomEvent; never blocks the add.
+      logCartEvent("cart_add", {
+        size: garment.size || "",
+        data: { variantId: garment.variantId, sku: garment.sku, embedded: inIframe() },
+      });
       if (inIframe()) {
         // Embedded in a store (e.g. fox.co.il) - hand the garment off to the host
         // page's own Host Cart Integration (see pear-widget.js's PEAR_ADD_TO_CART
@@ -200,6 +209,15 @@
         springToast(byLang("נשמר - ההוספה האוטומטית לסל החנות נכשלה, נא להוסיף ידנית · Saved - couldn't add to the store cart automatically, please add it manually", "Saved - couldn't add to the store cart automatically, please add it manually"));
       }
     });
+
+    // ADMIN COUNT (2026-11-25): a click on the room's cart icon is a "cart_open" row.
+    cart.addEventListener("click", () => logCartEvent("cart_open", {}));
+
+    function logCartEvent(type, fields) {
+      try {
+        if (typeof window.pearLogRoomEvent === "function") window.pearLogRoomEvent(type, fields);
+      } catch (_) { /* a lost count never breaks the cart */ }
+    }
 
     let busy = false;
     btn.addEventListener("click", () => {

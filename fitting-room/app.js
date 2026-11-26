@@ -15417,7 +15417,13 @@ function injectSizeSelector() {
  *                        ('8'-'18') for children
  */
 function setSizeOverride(size) {
+  const prevSize = activeTryOnSize || currentUserSize || "";
   activeTryOnSize = size;
+  // The admin's size-hesitation count (ROOM EVENTS, beside logSessionMeasurements). A tap
+  // on the size already shown is not a switch.
+  if (size && size !== prevSize && typeof logRoomEvent === "function") {
+    logRoomEvent("size_pick", { size, fromSize: prevSize });
+  }
 
   document.querySelectorAll(".pear-sz-btn").forEach((btn) => {
     const on = btn.dataset.sz === size;
@@ -16921,6 +16927,40 @@ function logSessionMeasurements(item, size) {
     keepalive: true,
   }).catch(err => console.warn("[session-log] fetch failed:", err));
 }
+
+/* ROOM EVENTS (2026-11-25) - one row per shopper action the admin counts, POST
+   /api/room-event (server.js; Supabase room_events, read by pear-admin). "size_pick":
+   the shopper switched size in the room's selector (setSizeOverride) - the admin reads a
+   session's picks as the sizes they hesitated between. "cart_add": the room's add-to-cart
+   button; "cart_open": the room's cart icon (both from lux-interactions.js, through
+   window.pearLogRoomEvent). Fire-and-forget, never awaited, never retried: a lost row costs a count, never
+   the shopper's time. No name, no email - the anonymous session id and size labels. */
+function logRoomEvent(type, fields) {
+  if (typeof fetch !== "function") return;
+  const f = fields || {};
+  const item = typeof activeItem !== "undefined" ? activeItem : null;
+  const payload = {
+    type,
+    sessionId:   typeof PEAR_SESSION_ID !== "undefined" ? PEAR_SESSION_ID : "",
+    userId:      typeof PEAR_USER_ID !== "undefined" ? PEAR_USER_ID : null,
+    storeHost:   typeof pendingStoreHost !== "undefined" && pendingStoreHost ? pendingStoreHost : "",
+    garmentId:   f.garmentId   != null ? f.garmentId   : (item && item.id)   || "",
+    garmentName: f.garmentName != null ? f.garmentName : (item && item.name) || "",
+    size:        f.size     || "",
+    fromSize:    f.fromSize || "",
+    recSize:     f.recSize != null ? f.recSize : (typeof currentUserSize !== "undefined" && currentUserSize) || "",
+    data:        f.data && typeof f.data === "object" ? f.data : undefined,
+  };
+  try {
+    fetch("/api/room-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch(() => {});
+  } catch { /* never let a count break the room */ }
+}
+if (typeof window !== "undefined") window.pearLogRoomEvent = logRoomEvent;
 
 /* =============================================================================
    CAMERA GUIDE + SELF-TIMER (2026-09-29)

@@ -153,14 +153,19 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 ---
 
 ## Other colours when the size is sold out (2026-11-25)
-- **Stage:** built and tested on the branch, PR open, not merged or deployed.
+- **Stage:** merged to main 2026-11-26 on your "מזג", inside PR #10 (the combined branch you tested).
 - When the recommended size is sold out in the colour on the page, the size result shows the same garment in the
   other colours that have that size (photo, colour dot, "try on"), instead of "try one size up/down". Tapping one
   re-opens the room on that colour through the widget's normal launch (classify, back view, cart = that colour).
   No colour with the size -> the old size-up/down sentence. The size calculation is untouched.
 - Data: FOX's own colour swatches on the product page + each colour's own product JSON (stock). FOX only.
 - Not done: similar items from other models (phase 2); a measurement on the real engine after switching colour.
-- **Waiting on you:** review the preview, then merge (Vercel only).
+- Vercel only, no Worker deploy.
+
+## Cart adds in the admin (2026-11-25) - in progress (PR open, not merged)
+- Room: `fitting-room/lux-interactions.js` logs `cart_add` (each add the room sends, with the chosen size) and `cart_open` (cart icon click) through `window.pearLogRoomEvent` (shared room_events plumbing of the size-hesitation work).
+- Admin (pear-admin `admin.js`): section "הוספות לסל מתוך הממשק" - adds, shoppers who added, cart-icon clicks, top products with sizes, recent adds; refreshes itself every 15s.
+- Waiting on you: run pear-admin `supabase_setup_v9.sql` on the app project, merge both PRs, deploy (Vercel only, no Worker deploy).
 
 ## Suggested size (2026-10-13)
 - **Stage:** merged to main (`d69562d`). Follow-up the same day: 152/77 was suggested XXL (the store chart decided

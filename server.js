@@ -945,6 +945,63 @@ app.post("/api/photo-tryon", photoTryOnLimiter, async (req, res) => {
 app.post("/api/sessions",    sessionLimiter, saveSession);
 app.post("/api/session-log", sessionLimiter, saveSession);
 
+/* ── ROOM EVENTS (2026-11-25) - POST /api/room-event ───────────────────────────────
+   Shopper actions inside the room that the admin counts: "size_pick" (the shopper
+   switched size in the room's selector - from, to, the recommendation) and "cart_add"
+   (the room's add-to-cart button), "cart_open" (the room's cart icon). One row per action in Supabase `room_events`
+   (pear-admin: supabase_setup_v9.sql), read back only by pear-admin. Ingest-only here,
+   like /api/sessions: no route reads the table back. Numbers and size labels only - no
+   name, no email. A table that does not exist yet (migration not run) answers ok:false
+   and the room ignores it - the shopper never waits on this. */
+const ROOM_EVENT_TYPES = new Set(["size_pick", "cart_add", "cart_open"]);
+/* Small flat extras only (e.g. a cart add's variantId/sku): at most 8 keys, string/
+   number/boolean values, strings cut at 80 - the body is shopper-controlled. */
+function roomEventData(d) {
+  if (!d || typeof d !== "object" || Array.isArray(d)) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(d).slice(0, 8)) {
+    const key = String(k).slice(0, 32);
+    if (typeof v === "string") out[key] = v.slice(0, 80);
+    else if (typeof v === "number" && Number.isFinite(v)) out[key] = v;
+    else if (typeof v === "boolean") out[key] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+function roomEventRow(b) {
+  const str = (v, max) => (v == null ? "" : String(v).trim().slice(0, max));
+  const type = str(b && b.type, 24);
+  if (!ROOM_EVENT_TYPES.has(type)) return null;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const host = str(b.storeHost, 120).toLowerCase();
+  return {
+    event_type:   type,
+    session_id:   str(b.sessionId, 64) || null,
+    user_id:      uuid.test(str(b.userId, 40)) ? str(b.userId, 40) : null,
+    store_host:   /^[a-z0-9.-]+$/.test(host) ? host : null,
+    garment_id:   str(b.garmentId, 64) || null,
+    garment_name: str(b.garmentName, 80) || null,
+    size:         str(b.size, 12) || null,
+    from_size:    str(b.fromSize, 12) || null,
+    rec_size:     str(b.recSize, 12) || null,
+    data:         roomEventData(b.data),
+  };
+}
+async function saveRoomEvent(req, res) {
+  if (storageUnavailable(res)) return;
+  const row = roomEventRow(req.body || {});
+  if (!row) return res.status(400).json({ ok: false, error: "bad_event" });
+  try {
+    const { error } = await supabase.from("room_events").insert([row]);
+    if (error) throw new Error(error.message);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[room-event] persist failed:", err?.message);
+    res.json({ ok: false, error: "not_saved" });
+  }
+}
+const roomEventLimiter = rateLimit({ windowMs: 60_000, max: 120 });  // size switches + cart adds
+app.post("/api/room-event", roomEventLimiter, saveRoomEvent);
+
 /* User identity routes (returning-visitor recognition). POST is rate limited; the
    public GET returns non-PII fields only. */
 app.post("/api/users",            userLimiter, createUser);
