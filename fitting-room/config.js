@@ -591,10 +591,19 @@ export const CONFIG = Object.freeze({
      note above) - 80ms is inside the noise of that, and it is being traded for the
      difference between a smooth stream and a visible 1-2s freeze.
 
-     Raise toward 0.15 if stutter persists on poor networks; drop back to 0 only to
+     80ms -> 150ms (2026-11-25, the owner's call): "everything is perfect except the picture jumps during a turn". Measured on
+     three of the owner's clips (the downloaded recordings, frame by frame): ~10 distinct frames a second, the gap between them
+     67-83ms at the median and 133-166ms at p90, single ones to 200-267ms; the day's TEST records read the swaps on time and
+     no stall. 80ms holds less than one such gap, 150ms holds the p90 one, at ~70ms more between the camera and the screen
+     (what is sent, the turn's decisions and where a swap lands on the body are untouched - this is the receiving end only).
+     It was tried once on 2026-10-09 and reverted together with a prompt sentence that drew a bare chest (3689cc4), never on
+     its own. It evens out only what arrives unevenly; it adds no frames, and a gap longer than it still shows. Not yet
+     measured on the engine; 0.08 is the way back.
+
+     Do not raise past 0.15 (image-first pins the range); drop back to 0 only to
      reproduce the original report. Also applied as jitterBufferTarget (the standard
      API, in ms) - see the track handler in app.js. */
-  PLAYOUT_DELAY_HINT: 0.08,         // seconds of client-side anti-jitter buffering; 0 = render ASAP, and stall on any jitter
+  PLAYOUT_DELAY_HINT: 0.15,         // seconds of client-side anti-jitter buffering; 0 = render ASAP, and stall on any jitter
   PREFER_LOW_LATENCY_CODEC: true,   // SDP munge ON: codec reorder + b=AS / b=TIAS bandwidth injection.
   // H264 is hardware-decoded on virtually all modern devices (iOS, Android, Windows, Mac);
   // VP8 is software-decoded on most mobile - putting H264 first cuts decode CPU + latency.

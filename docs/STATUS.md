@@ -4,7 +4,9 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-11-25 (noon) · **committed, not pushed:** a repeat measurement gets a fresh pose model, as the first one has (CLAUDE.md §7.31) - the likely cause of the strange 2nd run (stale shoulder order, FRONT 2s late, rear photo on the chest); first run, turn engine and prompts unchanged, no Worker deploy. Unit + visual 40/40 green; not measured on the engine._
+_Last updated: 2026-11-25 (evening) · the picture's receive buffer is **150ms instead of 80** on main, for the jumps during a turn (CLAUDE.md §7.32); a local browser check confirms it applies (frames held 60 -> 129ms), unit + visual 40/40 green. **Not measured on the engine** - your next session is the check; 0.08 is the way back. §7.31 (fresh pose model per measurement) is on main (6954b3e)._
+
+_Earlier: 2026-11-25 (noon) · **committed, not pushed:** a repeat measurement gets a fresh pose model, as the first one has (CLAUDE.md §7.31) - the likely cause of the strange 2nd run (stale shoulder order, FRONT 2s late, rear photo on the chest); first run, turn engine and prompts unchanged, no Worker deploy. Unit + visual 40/40 green; not measured on the engine._
 
 _Earlier: 2026-11-25 · **Store image scanner audit (read-only, no code changed).** `scanner/scan-store.js` is a manual command line tool, not wired to the server or any UI. (1) It writes no `classifier_version`, so with v12 in place the server treats its rows as stale and classifies again. (2) On FOX one tested photo is `cdn.shopify.com/s/files/…` in `/products.json` and `fox.co.il/cdn/shop/files/…` on the product page; `canonicalImageUrl` gives two different keys, so rows (and prepared backs, keyed the same way) can miss; the widget's `.js` merge returns the cdn.shopify.com spelling, and which one wins live was not measured. (3) A failed `/products.json` page ends the scan silently; non-Shopify stores get only products linked from the home page; no schedule or per-store progress. The size-chart capture is a separate mode and is unaffected. Five related tests pass. Not fixed._
 
@@ -37,7 +39,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Other colours when the size is sold out (FOX) | PR open on `claude/project-thread-17ltt0`, **review and merge waiting on you**; no Worker deploy needed (no `lib/` change) | branch |
+| Other colours when the size is sold out (FOX) | merged to main 2026-11-26 on your "מזג", inside [PR #10](https://github.com/pearInd/Pear/pull/10) (the combined branch you tested carried this branch up to `5551984`); no Worker deploy needed (no `lib/` change). CLAUDE.md §7.33 | main |
 | Suggested size when no exact size fits (183/73 "no size" report) | merged ([PR #2](https://github.com/pearInd/Pear/pull/2), `d69562d`); follow-up [PR #3](https://github.com/pearInd/Pear/pull/3) (152/77 -> M; everyone between S and XXL gets a size); PR #4 (smaller than S -> suggested S); then a `wrangler deploy` | main + branch |
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
 | Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done — merged to main 2026-10-13 ([PR #1](https://github.com/pearInd/Pear/pull/1), `306173f`); 2026-10-14: fox men's pants + castro men's jeans saved and live; no new stores unless you ask | main |
@@ -55,7 +57,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Black-screen on reopen | done | main `3a533d6`, `af5f4d4` |
 | Visual QA gate | done, known flaky (§8.5) | main |
 | Liquid Glass UI + consent gate | done | main `0827e51`, `89a5848` |
-| Store colour themes (FOX: red/white/black, flat, text by reading direction) | done on the branch, PR open - **review + merge waiting on you**; FOX's embed then adds `data-pear-theme="fox"`. 2026-11-25/26, theme only: the "verified" check, the green step line, every arrow and all hover effects removed, gender switch centred; the page is the clean white cut you chose (one 10% accent wash at the top corner). The branch also carries the similar-items work (`claude/project-thread-17ltt0`, 5551984) so one preview script shows both | `claude/project-thread-p2evpi` |
+| Store colour themes (FOX: red/white/black, flat, text by reading direction) | merged to main 2026-11-26 on your "מזג" ([PR #10](https://github.com/pearInd/Pear/pull/10)); Vercel only, no Worker deploy. **FOX's embed must add `data-pear-theme="fox"`** - without it the room is PEAR's default. 2026-11-25/26, theme only: the "verified" check, the green step line, every arrow and all hover effects removed, gender switch centred; the page is the clean white cut you chose (one 10% accent wash at the top corner). The branch also carries the similar-items work (`claude/project-thread-17ltt0`, 5551984) so one preview script shows both | main |
 
 ## Waiting on you (manual steps)
 
