@@ -150,6 +150,11 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 
 ---
 
+## Cart adds in the admin (2026-11-25) - in progress (PR open, not merged)
+- Room: `fitting-room/lux-interactions.js` logs `cart_add` (each add the room sends, with the chosen size) and `cart_open` (cart icon click) through `window.pearLogRoomEvent` (shared room_events plumbing of the size-hesitation work).
+- Admin (pear-admin `admin.js`): section "הוספות לסל מתוך הממשק" - adds, shoppers who added, cart-icon clicks, top products with sizes, recent adds; refreshes itself every 15s.
+- Waiting on you: run pear-admin `supabase_setup_v9.sql` on the app project, merge both PRs, deploy (Vercel only, no Worker deploy).
+
 ## Suggested size (2026-10-13)
 - **Stage:** merged to main (`d69562d`). Follow-up the same day: 152/77 was suggested XXL (the store chart decided
   from an estimated chest) - the suggestion now weighs width over height and the store chart no longer decides it
