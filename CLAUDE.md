@@ -2422,6 +2422,23 @@ re-opens the room on that product through `startTryOn()` (the PEAR button's clic
   when either has no type), never a colour of this model. They are sent as `kind: "model"`, after the colours.
 - `color-alternatives` §4. NOT yet verified on fox.co.il itself: no access from here.
 
+### 7.34 The shirt's colour through the turn - the rear photo a shade lower (2026-11-26, TEST sessions only) - NOT YET MEASURED ON THE ENGINE
+"In the turn the colour changes and the light does not; make it smooth, touch nothing else."
+- **Measured (the owner's clip 20261126-175244, white NEW YORK tee, fox 1824110100, a lite-pose torso patch every 0.1s):** front
+  199,182,166 (L184) before the turn, back 211,196,186 (L198), front after 194-199,175-184,168-170; it steps at the swaps. The
+  wall moved the other way at the back (L 203 -> 197) and did not return with the front, so part may be the camera's own balance;
+  the body's angle also shades the sides. V-neck clip: the same step ~3%, the wall steady.
+- **Not the references:** the store's front and rear read 239,228,233 / 240,229,236, the backdrop alike. The engine draws the
+  back lighter itself. The back prompt also lacks the front's "background unmodified" - not changed (a Worker deploy; the owner
+  shelved the last prompt change). §7.14: a colour word did not move the render.
+- **Change (`toneRearReference()`, app.js, after the box fit):** a light single top's distinct REAR photo multiplied by
+  REF_REAR_TONE [0.97, 0.955, 0.94]. TEST sessions; `?rear_tone=0/1`. Abstains on a PNG, mid-back luma under 180, bottoms,
+  looks. Front, turn, buffer, prompt untouched; no Worker deploy. `garment-box` §12.
+- **That the engine follows the reference's tone this closely is not proven.** The check: a TEST turn on a white tee,
+  `ctx.ref` {did: "toned"}, the same patch measured. No better, or worse on any frame: remove.
+
+---
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:

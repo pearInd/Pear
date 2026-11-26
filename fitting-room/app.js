@@ -8483,6 +8483,8 @@ function garmentBlobCached(url) {
       if (normalized && bandJob && typeof scaleRearToFront === "function") normalized = await scaleRearToFront(normalized, url);
       /* THE SAME GARMENT BOX IN BOTH PHOTOS (TEST sessions until measured): a top's front and rear redrawn to one garment size. */
       if (normalized && bandJob && typeof fitReferenceBox === "function") normalized = await fitReferenceBox(normalized, url);
+      /* THE REAR A SHADE LOWER: a light top's rear photo, so the back is not drawn brighter than the front (TEST sessions). */
+      if (normalized && bandJob && typeof toneRearReference === "function") normalized = await toneRearReference(normalized, url);
       /* THE HEAVY REFERENCE: an opaque PNG over REF_HEAVY_BYTES - a generated rear - goes as a JPEG of the same pixels.
          typeof-guarded: suites run this standalone. */
       if (normalized && typeof lightenHeavyReference === "function") normalized = await lightenHeavyReference(normalized);
@@ -9071,6 +9073,66 @@ async function fitReferenceBox(blob, url) {
   } catch (e) {
     refMaskNote({ did: "unfit", why: "failed" });
     console.warn("[PEAR] reference fit failed - sending it as it was:", e?.message || e);
+    return blob;
+  } finally {
+    try { bmp && bmp.close && bmp.close(); } catch (_) { /* already closed */ }
+  }
+}
+
+/* ── THE REAR A SHADE LOWER (2026-11-26, TEST sessions only until measured - CLAUDE.md §7.34) ───────────────────────────
+   "In the turn the shirt's colour changes and the light does not" (the owner). Measured on his white NEW YORK tee, every
+   0.1s: the front drawn 199,182,166 (a warm cream), the back 211,196,186 - brighter and pinker - from the frame the rear
+   reference landed, while the wall beside him got slightly darker. On the white V-neck the same step, ~3%. The store's front
+   and rear photos are NOT the cause: the shirt reads 239,228,233 against 240,229,236, the backdrop the same. The engine draws
+   the back lighter on its own; the one lever that touches nothing else is the picture it is given. So a LIGHT single top's
+   distinct rear photo is multiplied by REF_REAR_TONE (a shade darker, a little warmer) - about half the larger step measured,
+   since the V-neck's was small. The front photo, the turn, the prompt and the picture on screen are untouched.
+   It abstains on a PNG, a dark or mid garment (nothing was measured there), a bottom, a full look, and any failure.
+   Gate: TEST sessions; ?rear_tone=1 forces on, ?rear_tone=0 off. A TEST record's ctx.ref says { did: "toned" }.
+   THAT THE ENGINE FOLLOWS IS NOT PROVEN - measure a turn before this goes to shoppers; worse on any frame, take it out. */
+const REF_REAR_TONE = [0.97, 0.955, 0.94];   // r, g, b
+const REF_REAR_TONE_MIN_LUMA = 180;          // the rear photo's mid-back must be a light fabric
+function refToneOn() {
+  try {
+    const v = new URLSearchParams(location.search).get("rear_tone");
+    if (v === "0") return false;
+    if (v === "1") return true;
+  } catch (_) { return false; }
+  return typeof traceEnabled === "function" && traceEnabled();
+}
+/** The light single top's rear photo a shade lower, or the SAME Blob untouched. Never rejects. */
+async function toneRearReference(blob, url) {
+  if (!blob || typeof createImageBitmap !== "function" || !refToneOn() || /^image\/png$/i.test(blob.type || "")) return blob;
+  let bmp = null;
+  try {
+    const frontUrl = referenceFitFront(url);          // a single top's own photos only
+    if (!frontUrl || sameImage(frontUrl, url)) return blob;   // the REAR alone - the front goes as it is
+    bmp = await createImageBitmap(blob);
+    const W = bmp.width, H = bmp.height;
+    if (W < 64 || H < 64) return blob;
+    const off = typeof OffscreenCanvas !== "undefined"
+      ? new OffscreenCanvas(W, H)
+      : Object.assign(document.createElement("canvas"), { width: W, height: H });
+    const ctx = off.getContext("2d", { alpha: false, willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    const d = ctx.getImageData(Math.round(W * 0.44), Math.round(H * 0.54), Math.round(W * 0.12), Math.round(H * 0.14)).data;
+    const lumas = [];
+    for (let i = 0; i < d.length; i += 4) lumas.push(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]);
+    lumas.sort((a, b) => a - b);
+    const luma = lumas[lumas.length >> 1];
+    if (!(luma >= REF_REAR_TONE_MIN_LUMA)) return blob;
+    ctx.globalCompositeOperation = "multiply";
+    ctx.fillStyle = `rgb(${REF_REAR_TONE.map((g) => Math.round(g * 255)).join(",")})`;
+    ctx.fillRect(0, 0, W, H);
+    const encode = (q) => (off.convertToBlob ? off.convertToBlob({ type: "image/jpeg", quality: q }) : new Promise((res) => off.toBlob(res, "image/jpeg", q)));
+    let out = await encode(0.92);
+    if (out && out.size > blob.size * 1.6) out = await encode(0.85);
+    if (!out || !out.size || out.size > blob.size * 1.6) return blob;
+    refMaskNote({ did: "toned", luma: Math.round(luma), rgb: REF_REAR_TONE });
+    console.log(`[PEAR] rear reference: a shade lower so the back matches the front (luma ${Math.round(luma)}) -`, abbrevImg(url));
+    return out;
+  } catch (e) {
+    console.warn("[PEAR] rear tone failed - sending it as it was:", e?.message || e);
     return blob;
   } finally {
     try { bmp && bmp.close && bmp.close(); } catch (_) { /* already closed */ }

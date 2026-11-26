@@ -438,5 +438,32 @@ console.log("\n── §11 THE SAME GARMENT BOX IN BOTH PHOTOS (2026-11-24, TEST
     !/orient|swap|maybeSwap|effectiveAngle/i.test(fitFn));
 }
 
+/* §12 THE REAR A SHADE LOWER (CLAUDE.md §7.34) - run on a fake canvas */
+{
+  const from = APP.indexOf("const REF_REAR_TONE = [");
+  const to = APP.indexOf("/* Warm the cache with the front AND back assets", from);
+  const SRC12 = APP.slice(from, to);
+  const run = async ({ search = "", test = true, url = "back.jpg", type = "image/jpeg", grey = 235 } = {}) => {
+    const ops = [];
+    const ctx = { drawImage() {}, fillRect() { ops.push([this.globalCompositeOperation, this.fillStyle]); },
+      getImageData: () => ({ data: Uint8ClampedArray.from({ length: 400 }, (_, i) => (i % 4 === 3 ? 255 : grey)) }) };
+    const Canvas = class { getContext() { return ctx; } convertToBlob() { return Promise.resolve({ size: 1000, type: "image/jpeg", toned: true }); } };
+    const fn = new Function("location", "traceEnabled", "referenceFitFront", "sameImage", "createImageBitmap", "OffscreenCanvas", "refMaskNote", "abbrevImg", "console",
+      SRC12 + "; return toneRearReference;")({ search }, () => test, () => "front.jpg", (a, b) => a === b,
+      async () => ({ width: 600, height: 900, close() {} }), Canvas, () => {}, (u) => u, { log() {}, warn() {} });
+    const blob = { size: 1000, type };
+    const out = await fn(blob, url);
+    return { changed: out !== blob, ops };
+  };
+  const lit = await run();
+  check("§12.1 a light top's rear photo is multiplied a shade lower and warmer",
+    lit.changed && lit.ops.length === 1 && lit.ops[0][0] === "multiply" && lit.ops[0][1] === "rgb(247,244,240)", JSON.stringify(lit.ops));
+  check("§12.2 the FRONT photo goes as it is", !(await run({ url: "front.jpg" })).changed);
+  check("§12.3 a dark or mid garment, and a PNG, go as they are",
+    !(await run({ grey: 60 })).changed && !(await run({ grey: 150 })).changed && !(await run({ type: "image/png" })).changed);
+  check("§12.4 TEST sessions only: off for a shopper; ?rear_tone=1 on, =0 off",
+    !(await run({ test: false })).changed && (await run({ test: false, search: "?rear_tone=1" })).changed && !(await run({ search: "?rear_tone=0" })).changed);
+}
+
 console.log(fails === 0 ? "\ngarment-box: OK" : `\ngarment-box: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);
