@@ -27,6 +27,9 @@
   const POWER = "cubic-bezier(0.25, 1, 0.5, 1)";   // Apple signature power-ease
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const fine   = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  /* A themed room has no hover effects (the owner, 2026-11-25 - style.css STORE THEME 8): no lift
+     under the mouse, no lights drifting with it. The press is untouched. */
+  const noHover = document.documentElement.classList.contains("pear-store-theme");
 
   function ready(fn) {
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
@@ -367,7 +370,9 @@
     };
     const kick = () => { if (!running) { running = true; requestAnimationFrame(loop); } };
 
-    if (fine) {
+    if (noHover) {
+      /* themed: the mesh stays still */
+    } else if (fine) {
       window.addEventListener("mousemove", (e) => {
         tx = (e.clientX / window.innerWidth  - 0.5) * AMP;
         ty = (e.clientY / window.innerHeight - 0.5) * AMP;
@@ -497,7 +502,7 @@
     /* the mouse: lift on the way in, settle on the way out (one hovered button at a time) */
     let hovered = null;
     const leave = () => { if (!hovered) return; const el = hovered; hovered = null; stateOf(el).hover = false; move(el, "hover"); };
-    if (fine) {
+    if (fine && !noHover) {
       document.addEventListener("pointerover", (e) => {
         if (e.pointerType === "touch") return;
         const el = e.target.closest && e.target.closest(PRESSABLE);

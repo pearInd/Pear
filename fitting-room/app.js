@@ -1821,7 +1821,7 @@ function stockFallbacksFor(size) {
  *
  * @param {string|null} size - the recommended size, or null to clear the notice
  */
-function renderStockNotice(size) {
+function renderStockNotice(size, approx) {
   const el = $("stockNotice");
   if (!el) return;                       // Screen 1 markup absent (embed/test harness)
 
@@ -1844,7 +1844,48 @@ function renderStockNotice(size) {
     if (tray) tray.classList.remove("has-stock-notice");
   };
 
-  if (!size || !isSizeSoldOut(size)) return clear();
+  const altsEl = $("colorAlts");
+  if (altsEl) { altsEl.hidden = true; altsEl.replaceChildren(); }
+  /* NO EXACT SIZE: the approx case below hides the suggested size and says "no size";
+     every other path shows it again (the verdict painted it). */
+  const sizeEl = $("sizeResult"), labelEl = $("resultLabel");
+  if (sizeEl) sizeEl.classList.remove("is-alt-hidden");
+
+  const soldOut = !!size && isSizeSoldOut(size);
+  if (!size || (!soldOut && !approx)) return clear();
+
+  /* OTHER COLOURS OF THIS GARMENT (2026-11-25) - colours (and similar models) that still
+     sell this size are offered INSTEAD of the size-up/down sentence; none -> that
+     sentence, as before. NO EXACT SIZE: the same offer when the body falls between the
+     chart's rows (the "suggested size" case) - "no size" and the items instead of the
+     suggested size; none -> the suggested size, as before. Presentation only:
+     currentUserSize stays the nearest size, so Continue still measures this garment in it.
+     typeof-guarded: this region runs as a standalone slice in several suites. */
+  const alts = typeof colorAltsFor === "function" ? colorAltsFor(size) : [];
+  if (alts.length && typeof renderColorAlts === "function") {
+    const ctext = soldOut
+      ? tf("stockSoldOutColors", { size: formatSizeLabel(size) })
+      : tf("noSizeSimilar", { size: formatSizeLabel(size) });
+    if (ctext) {
+      if (!soldOut) {
+        if (labelEl) labelEl.innerText = t("resultLabelNoSize");
+        if (sizeEl) sizeEl.classList.add("is-alt-hidden");
+      }
+      el.textContent = ctext;
+      el.hidden = false;
+      if (box) box.classList.add("has-stock-notice");
+      if (tray) tray.classList.add("has-stock-notice");
+      renderColorAlts(alts);
+      console.log("[PEAR] recommended size", formatSizeLabel(size),
+        soldOut ? "is out of stock in this colour" : "is only the nearest size", "- offering",
+        alts.length, "similar item(s)");
+      return;
+    }
+  }
+  if (!soldOut) {                        // no exact size, nothing similar: the suggested size, as before
+    if (labelEl) labelEl.innerText = t("resultLabelApprox");
+    return clear();
+  }
 
   const { down, up } = stockFallbacksFor(size);
   const label = formatSizeLabel(size);
@@ -2335,7 +2376,8 @@ function applySizeVerdict(verdict) {
      shopper their size is M, which is false and outlives the visit - the honest answer
      is "L is your size, L is gone, here is what else would work". Case A/B of the
      requirement is a difference in what is SAID, not in what was computed. */
-  renderStockNotice(bestSize);
+  if (typeof noteSizeApprox === "function") noteSizeApprox(verdict.approx);
+  renderStockNotice(bestSize, !!verdict.approx);
   currentUserSize = bestSize;
   nextBtn.disabled = false;
   updateProgress();
@@ -2451,7 +2493,10 @@ function drawBodyGuide(result, video, canvas, chip) {
   const ok = !!(verdict && verdict.ok);
   if (Array.isArray(lms)) {
     ctx.lineCap = "round";
-    ctx.strokeStyle = ok ? "rgba(141, 182, 0, .95)" : "rgba(255, 255, 255, .9)";
+    /* The store's accent when a store theme set one (store-theme.js), else PEAR green. */
+    const accentRgb = (typeof document !== "undefined" && document.documentElement &&
+      getComputedStyle(document.documentElement).getPropertyValue("--accent-rgb").trim()) || "141, 182, 0";
+    ctx.strokeStyle = ok ? "rgba(" + accentRgb + ", .95)" : "rgba(255, 255, 255, .9)";
     ctx.shadowColor = "rgba(0, 0, 0, .35)"; ctx.shadowBlur = 6;
     ctx.lineWidth = ok ? 5 : 4;
     for (const [a, b] of BODY_GUIDE_BONES) {
@@ -3211,6 +3256,161 @@ function onMeasurementEnterResolved(e) {
   if (next) next.focus();
   else e.target.blur();
 }
+
+/* ── OTHER COLOURS OF THIS GARMENT (2026-11-25) ────────────────────────────────
+   Asked for: when the recommended size is gone in this colour, offer the same garment in
+   the colours that still have it - with a way to try one on - INSTEAD of "try one size
+   up/down". The widget reads the colours off the store's own page and each one's stock off
+   its own product JSON (pear-widget.js, OTHER COLOURS OF THIS GARMENT) and posts them as
+   PEAR_COLOR_OPTIONS. Nothing here invents a colour, a photo or a stock answer: a colour
+   is offered only when its own size list carries the recommended size and its own stock
+   list does not mark it gone, both normalised through parseSizeList() exactly as
+   isSizeSoldOut() normalises the page's.
+
+   PRESENTATION ONLY. The size the shopper is told, currentUserSize, the ladder and
+   everything calculateSize() decides are untouched - renderStockNotice() only chooses what
+   to SAY about a sold-out size. No colour with the size -> the size-up/down sentence,
+   exactly as before. Not embedded (no widget) -> no colours -> exactly as before.
+
+   Trying a colour asks the widget (PEAR_TRY_COLOR) to open the room on that product
+   through its own launch, so the back view, the classifier and the cart are that
+   product's. The consent tick is required first, as for Continue, and the measurements
+   are saved the way Continue saves them; the height/weight also ride along (?pear_hw=) so
+   a visitor without a saved profile finds the form filled in. */
+let colorOptions = [];
+let colorTryPending = false;
+
+function sanitizeColorOptions(list) {
+  const out = [];
+  if (!Array.isArray(list)) return out;
+  for (const o of list.slice(0, 14)) {
+    if (!o || typeof o !== "object") continue;
+    const handle = typeof o.handle === "string" ? o.handle : "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(handle)) continue;
+    let image = "";
+    try { const u = new URL(String(o.image || "")); if (u.protocol === "https:") image = u.href; } catch {}
+    if (!image) continue;
+    const strs = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === "string" && x.length <= 12).slice(0, 40) : []);
+    out.push({
+      handle,
+      hex: typeof o.hex === "string" && /^#[0-9a-f]{3,8}$/i.test(o.hex) ? o.hex : "",
+      title: typeof o.title === "string" ? o.title.slice(0, 140) : "",
+      image,
+      sizes: strs(o.sizes),
+      soldOut: strs(o.soldOut),
+      kind: o.kind === "model" ? "model" : "color",
+      gender: o.gender === "men" || o.gender === "women" || o.gender === "unisex" ? o.gender : "",
+    });
+  }
+  return out;
+}
+
+/* The colours (and similar models - kind "model", after the colours) that sell `size`
+   right now. */
+function colorAltsFor(size) {
+  if (!size || !colorOptions.length) return [];
+  const token = parseSizeList([size])[0];
+  if (!token) return [];
+  return colorOptions.filter((o) =>
+    parseSizeList(o.sizes).includes(token) && !parseSizeList(o.soldOut).includes(token) &&
+    fitsShopperGender(o))
+    .sort((a, b) => (a.kind === "model") - (b.kind === "model"));
+}
+
+/* THE SHOPPER'S GENDER (2026-11-25, Itai: "I set man - offer me men's items only, never
+   women's"). With a gender chosen on the switch: an item whose own product says the other
+   cut is never offered; a similar MODEL must say the shopper's cut (or unisex) - one that
+   says nothing is left out rather than guessed. A colour of this very model that says
+   nothing stays (it is the garment the shopper opened). No gender chosen -> no filter. */
+function fitsShopperGender(o) {
+  const g = typeof currentUserGender !== "undefined" ? currentUserGender : null;
+  if (g !== "men" && g !== "women") return true;
+  if (o.gender === g || o.gender === "unisex") return true;
+  return !o.gender && o.kind !== "model";
+}
+
+/* NO EXACT SIZE (2026-11-25, Itai: "when there is no size, write 'no size' and offer
+   similar items instead of a size up/down"). The verdict's approx flag, as last painted -
+   so a late PEAR_COLOR_OPTIONS repaints the same case. Presentation state only. */
+let sizeResultApprox = false;
+function noteSizeApprox(v) { sizeResultApprox = !!v; }
+
+function renderColorAlts(alts) {
+  const wrap = $("colorAlts");
+  if (!wrap) return;
+  wrap.replaceChildren();
+  if (!alts || !alts.length) { wrap.hidden = true; return; }
+  for (const o of alts) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "color-alt";
+    card.dataset.handle = o.handle;
+    card.setAttribute("aria-label", t("colorAltTryAria"));
+    const img = document.createElement("img");
+    img.className = "color-alt-img";
+    img.src = o.image;
+    img.alt = o.title || "";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    const row = document.createElement("span");
+    row.className = "color-alt-row";
+    if (o.kind === "model") card.classList.add("is-model");
+    if (o.hex) {
+      const dot = document.createElement("span");
+      dot.className = "color-alt-dot";
+      dot.style.background = o.hex;
+      row.appendChild(dot);
+    }
+    const label = document.createElement("span");
+    label.className = "color-alt-label";
+    label.textContent = t("colorAltTry");
+    row.appendChild(label);
+    card.append(img);
+    if (o.kind === "model" && o.title) {
+      const name = document.createElement("span");
+      name.className = "color-alt-name";
+      name.textContent = o.title;
+      card.append(name);
+    }
+    card.append(row);
+    card.addEventListener("click", () => tryColorOption(o.handle, card));
+    wrap.appendChild(card);
+  }
+  wrap.hidden = false;
+}
+
+async function tryColorOption(handle, card) {
+  if (colorTryPending || window.parent === window) return;
+  if (!syncConsentGate()) { nudgeConsent(); return; }
+  colorTryPending = true;
+  if (card) card.classList.add("is-busy");
+  try {
+    recordTermsConsent();
+    const h = Number($("height")?.value), w = Number($("weight")?.value);
+    await persistMeasurementsIfLoggedIn($("height")?.value, $("weight")?.value);
+    const hw = Number.isFinite(h) && Number.isFinite(w) && h > 0 && w > 0 ? `${h}x${w}` : "";
+    console.log("[PEAR] trying another colour of this garment:", handle);
+    const gender = currentUserGender === "men" || currentUserGender === "women" ? currentUserGender : "";
+    window.parent.postMessage({ type: "PEAR_TRY_COLOR", handle, hw, gender }, "*");
+  } catch (e) {
+    console.warn("[PEAR] could not switch colour:", e?.message || e);
+  } finally {
+    /* The widget replaces this room; if it does not (an older widget), let the shopper
+       try again rather than leave a dead card. */
+    setTimeout(() => { colorTryPending = false; if (card) card.classList.remove("is-busy"); }, 4000);
+  }
+}
+
+window.addEventListener("message", (e) => {
+  if (e.source !== window.parent || !e.data || e.data.type !== "PEAR_COLOR_OPTIONS") return;
+  colorOptions = sanitizeColorOptions(e.data.options);
+  console.log("[PEAR] other colours of this garment:", colorOptions.length);
+  /* Repaint only what is already showing - never a recompute of the size. */
+  try {
+    if (currentUserSize && $("resultBox")?.classList.contains("show")) renderStockNotice(currentUserSize, sizeResultApprox);
+  } catch {}
+});
 
 /* ── THE SIZE SERVICE ─────────────────────────────────────────────────────────
    POST /api/size - lib/sizing.js behind server.js. The only network call calculateSize()
@@ -4216,8 +4416,9 @@ function enterRoom() {
   } else {
     focusMode = false;
     $("focusBar").hidden = true;
-    renderCatalogPanel();
-    $("catalogPanel").hidden = false;
+    /* The catalog panel ("choose a garment from the catalog") is not shown (Itai, 2026-11-25):
+       the room opens on the store's own garment, never on a picker of ours. */
+    $("catalogPanel").hidden = true;
     setActiveItem(toItem(PEAR_CATALOG[0]), { silent: true });
   }
 
@@ -15038,22 +15239,22 @@ function injectSizeSelector() {
       .pear-sz-btn:hover {
         transform: translateY(-2px);
         background: rgba(255,255,255,0.7);
-        border-color: rgba(141,182,0,0.45);
+        border-color: rgba(var(--accent-rgb, 141, 182, 0),0.45);
         color: #0a0a0b;
         box-shadow: 0 8px 22px rgba(0,0,0,0.12);
       }
       .pear-sz-btn:active { transform: scale(0.94); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
       .pear-sz-btn.is-active {
-        background: rgba(141,182,0,0.16);
-        border-color: rgba(141,182,0,0.55);
+        background: rgba(var(--accent-rgb, 141, 182, 0),0.16);
+        border-color: rgba(var(--accent-rgb, 141, 182, 0),0.55);
         color: #5f7d00;
-        box-shadow: 0 0 0 1px rgba(141,182,0,0.25), 0 6px 20px rgba(141,182,0,0.25),
-                    inset 0 0 12px rgba(141,182,0,0.18);
+        box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 141, 182, 0),0.25), 0 6px 20px rgba(var(--accent-rgb, 141, 182, 0),0.25),
+                    inset 0 0 12px rgba(var(--accent-rgb, 141, 182, 0),0.18);
         animation: pearSzPulse 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
       }
       @keyframes pearSzPulse {
-        0%, 100% { box-shadow: 0 0 0 1px rgba(141,182,0,0.22), 0 6px 20px rgba(141,182,0,0.22), inset 0 0 12px rgba(141,182,0,0.16); }
-        50%      { box-shadow: 0 0 0 3px rgba(141,182,0,0.30), 0 10px 28px rgba(141,182,0,0.34), inset 0 0 18px rgba(141,182,0,0.28); }
+        0%, 100% { box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 141, 182, 0),0.22), 0 6px 20px rgba(var(--accent-rgb, 141, 182, 0),0.22), inset 0 0 12px rgba(var(--accent-rgb, 141, 182, 0),0.16); }
+        50%      { box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 141, 182, 0),0.30), 0 10px 28px rgba(var(--accent-rgb, 141, 182, 0),0.34), inset 0 0 18px rgba(var(--accent-rgb, 141, 182, 0),0.28); }
       }
       .pear-sz-hint {
         /* margin-left:auto removed - .pear-sz-head's own justify-content:space-between
@@ -15089,8 +15290,8 @@ function injectSizeSelector() {
       }
       .pear-sz-btn.is-oos.is-active {
         color: #5f7d00;
-        background: rgba(141,182,0,0.12);
-        border-color: rgba(141,182,0,0.45);
+        background: rgba(var(--accent-rgb, 141, 182, 0),0.12);
+        border-color: rgba(var(--accent-rgb, 141, 182, 0),0.45);
       }
       /* The legend - a third child of #pearSizeSelector, which is a COLUMN flex
          container, so it already gets its own full-width row from align-items:stretch
@@ -15710,6 +15911,18 @@ function showSizeForm(opts) {
     const setIf = (id, v) => { const el = $(id); if (el && v != null && v !== "" && !el.value) el.value = String(v); };
     setIf("height", PEAR_USER.height); setIf("weight", PEAR_USER.weight);
   }
+  /* OTHER COLOURS OF THIS GARMENT: a room the widget re-opened on another colour carries
+     the height/weight the shopper had typed (?pear_hw=HxW). Fills an EMPTY field only. */
+  try {
+    const hw = /^(\d{2,3}(?:\.\d)?)x(\d{2,3}(?:\.\d)?)$/.exec(new URLSearchParams(location.search).get("pear_hw") || "");
+    if (hw) {
+      const fill = (id, v) => { const el = $(id); if (el && !el.value) el.value = v; };
+      fill("height", hw[1]); fill("weight", hw[2]);
+    }
+    /* ...and the gender the shopper had chosen (?pear_gender=), when none is chosen here. */
+    const pg = new URLSearchParams(location.search).get("pear_gender");
+    if ((pg === "men" || pg === "women") && !currentUserGender) setGender(pg);
+  } catch {}
   try { calculateSize(); } catch {}
   setupConsentPanel();   // terms & accuracy consent - see COMPLIANCE above
 }
@@ -20944,10 +21157,10 @@ function injectReplayStyles() {
       background: linear-gradient(180deg, rgba(24,24,28,.93), rgba(11,11,13,.95));
       -webkit-backdrop-filter: blur(22px) saturate(150%);
       backdrop-filter: blur(22px) saturate(150%);
-      border: 1px solid rgba(141,182,0,.30);
+      border: 1px solid rgba(var(--accent-rgb, 141, 182, 0),.30);
       box-shadow:
         inset 0 1px 0 rgba(255,255,255,.06),
-        inset 0 0 0 1px rgba(141,182,0,.06),
+        inset 0 0 0 1px rgba(var(--accent-rgb, 141, 182, 0),.06),
         0 26px 64px rgba(0,0,0,.52);
       padding: 16px 16px 15px;
       opacity: 0;
@@ -20990,8 +21203,8 @@ function injectReplayStyles() {
       letter-spacing: .12em;
       text-transform: uppercase;
       color: #9cca00;
-      background: rgba(141,182,0,.13);
-      border: 1px solid rgba(141,182,0,.36);
+      background: rgba(var(--accent-rgb, 141, 182, 0),.13);
+      border: 1px solid rgba(var(--accent-rgb, 141, 182, 0),.36);
       border-radius: 9999px;
       padding: 5px 12px;
       white-space: nowrap;
@@ -20999,8 +21212,8 @@ function injectReplayStyles() {
     .pear-rz-badge::before {
       content: '';
       width: 7px; height: 7px; border-radius: 50%;
-      background: #8DB600;
-      box-shadow: 0 0 9px rgba(141,182,0,.7);
+      background: rgb(var(--accent-rgb, 141, 182, 0));
+      box-shadow: 0 0 9px rgba(var(--accent-rgb, 141, 182, 0),.7);
       animation: pearRzPulse 1.8s ease-in-out infinite;
     }
     @keyframes pearRzPulse { 0%,100% { opacity:1; } 50% { opacity:.25; } }
@@ -21060,13 +21273,13 @@ function injectReplayStyles() {
       box-shadow: 0 8px 22px rgba(0,0,0,.3);
     }
     .pear-rz-btn--dl {
-      background: #8DB600;
+      background: rgb(var(--accent-rgb, 141, 182, 0));
       color: #0a0a0b;
-      box-shadow: 0 12px 36px rgba(141,182,0,.26);
+      box-shadow: 0 12px 36px rgba(var(--accent-rgb, 141, 182, 0),.26);
     }
     .pear-rz-btn--dl:hover {
       background: #9cca00;
-      box-shadow: 0 12px 30px rgba(141,182,0,.42);
+      box-shadow: 0 12px 30px rgba(var(--accent-rgb, 141, 182, 0),.42);
     }
     .pear-rz-btn--dl .pear-rz-btn__en { opacity: .55; }
   `;

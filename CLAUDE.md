@@ -2403,6 +2403,25 @@ local loopback in Chromium (no engine) confirms the browser applies it: average 
 freeze in either. It adds no frames; only unevenness that arises in transit is absorbed. Nothing else changed (no Worker deploy).
 **The check:** a TEST session with a turn - smoother or not, and nothing else different. Not smoother, or the lag is felt: 0.08.
 
+### 7.33 Other colours when the recommended size is sold out (2026-11-25, Layer D presentation only) - NOT YET MEASURED ON THE ENGINE
+The owner: when the shopper's size is gone, offer the same garment in other colours that have it, and let them try one -
+instead of "one size up/down". FOX only. The widget (OTHER COLOURS OF THIS GARMENT) reads siblings ONLY from FOX's swatch
+markup (`.custom-color-swatch button[data-product-handle]`) and each sibling's stock ONLY from its own `/products/<h>.js`;
+posts them as PEAR_COLOR_OPTIONS. The room (same name, after `onMeasurementKeydown`) shows them inside `renderStockNotice()`
+when the recommended size is sold out and a colour sells it; none -> the old sentence. A card asks PEAR_TRY_COLOR; the widget
+re-opens the room on that product through `startTryOn()` (the PEAR button's click body, lifted out unchanged), with
+`_activeSibling` making the size/stock lists and the cart that product's, and `?pear_hw=` pre-filling an empty form.
+`calculateSize()`/`lib/sizing.js` untouched; `trace:prompt` identical. `color-alternatives` 
+**Second ask, the same day (Itai: "no size" means the suggested-size case too, and "similar items in the same style"):**
+- **NO EXACT SIZE:** a verdict with `approx` (the body between two rows) gets the same offer. The room writes
+  `resultLabelNoSize` and hides the suggested size (`#sizeResult.is-alt-hidden`), and lists the similar items that sell
+  that nearest size. `currentUserSize` stays the nearest size, so Continue still measures this garment in it. With
+  nothing similar, the suggested size is shown as before.
+- **SIMILAR MODELS:** taken only from the store's own Shopify recommendations for the page's product
+  (`/recommendations/products.json?intent=related`), kept only with the same product type (or the same title category
+  when either has no type), never a colour of this model. They are sent as `kind: "model"`, after the colours.
+- `color-alternatives` §4. NOT yet verified on fox.co.il itself: no access from here.
+
 ## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
 
 Before executing any `git push`, run this loop to completion:

@@ -39,6 +39,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
+| Other colours when the size is sold out (FOX) | merged to main 2026-11-26 on your "מזג", inside [PR #10](https://github.com/pearInd/Pear/pull/10) (the combined branch you tested carried this branch up to `5551984`); no Worker deploy needed (no `lib/` change). CLAUDE.md §7.33 | main |
 | Suggested size when no exact size fits (183/73 "no size" report) | merged ([PR #2](https://github.com/pearInd/Pear/pull/2), `d69562d`); follow-up [PR #3](https://github.com/pearInd/Pear/pull/3) (152/77 -> M; everyone between S and XXL gets a size); PR #4 (smaller than S -> suggested S); then a `wrangler deploy` | main + branch |
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
 | Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done — merged to main 2026-10-13 ([PR #1](https://github.com/pearInd/Pear/pull/1), `306173f`); 2026-10-14: fox men's pants + castro men's jeans saved and live; no new stores unless you ask | main |
@@ -56,6 +57,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Black-screen on reopen | done | main `3a533d6`, `af5f4d4` |
 | Visual QA gate | done, known flaky (§8.5) | main |
 | Liquid Glass UI + consent gate | done | main `0827e51`, `89a5848` |
+| Store colour themes (FOX: red/white/black, flat, text by reading direction) | merged to main 2026-11-26 on your "מזג" ([PR #10](https://github.com/pearInd/Pear/pull/10)); Vercel only, no Worker deploy. **FOX's embed must add `data-pear-theme="fox"`** - without it the room is PEAR's default. 2026-11-25/26, theme only: the "verified" check, the green step line, every arrow and all hover effects removed, gender switch centred; the page is the clean white cut you chose (one 10% accent wash at the top corner). The branch also carries the similar-items work (`claude/project-thread-17ltt0`, 5551984) so one preview script shows both | main |
 
 ## Waiting on you (manual steps)
 
@@ -149,6 +151,16 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
       "unavailable right now" (a TEST session says it is the credit).
 
 ---
+
+## Other colours when the size is sold out (2026-11-25)
+- **Stage:** merged to main 2026-11-26 on your "מזג", inside PR #10 (the combined branch you tested).
+- When the recommended size is sold out in the colour on the page, the size result shows the same garment in the
+  other colours that have that size (photo, colour dot, "try on"), instead of "try one size up/down". Tapping one
+  re-opens the room on that colour through the widget's normal launch (classify, back view, cart = that colour).
+  No colour with the size -> the old size-up/down sentence. The size calculation is untouched.
+- Data: FOX's own colour swatches on the product page + each colour's own product JSON (stock). FOX only.
+- Not done: similar items from other models (phase 2); a measurement on the real engine after switching colour.
+- Vercel only, no Worker deploy.
 
 ## Cart adds in the admin (2026-11-25) - in progress (PR open, not merged)
 - Room: `fitting-room/lux-interactions.js` logs `cart_add` (each add the room sends, with the chosen size) and `cart_open` (cart icon click) through `window.pearLogRoomEvent` (shared room_events plumbing of the size-hesitation work).
@@ -543,6 +555,16 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
   a tap; a quick tap plays the whole bubble).
 - **To check by hand:** the feel on a real iPhone and a mid-range Android (the press timing, the thumb stretch, scrolling
   smoothness with the glass blur).
+
+## Store colour themes (2026-11-25)
+- **Stage:** done on the branch, PR open, not merged. A store's embed sets its colours by configuration:
+  `data-pear-theme="<preset>"` (presets in `fitting-room/store-theme.js`) and/or `data-pear-color-primary / -on-primary /
+  -accent / -bg / -text`, `data-pear-font`. Under a theme the room keeps PEAR's glass shapes and fades in the store's colours
+  and font, with headings/labels/notes aligned to the reading direction. No theme = PEAR's look
+  exactly (qa:visual 40/40, screenshots identical to noise). Measurement, orientation and prompts untouched
+  (`trace:prompt` byte-identical). No Worker deploy.
+- **FOX preset (third cut, the same day, after two the owner turned down - flat black/square, flat solid red):** PEAR's glass look recoloured - white page, fades between shades of FOX red (#e21836) on the primary buttons and washes, black ink and black for the chosen size, Rubik; titles one colour.
+- **Waiting on you:** review, merge; then add `data-pear-theme="fox"` to FOX's script tag.
 
 ## Security hardening + client-code hiding
 - **Stage:** in progress.

@@ -459,6 +459,7 @@ const SUITES = [
   ["view-resolution", "view-resolution.test.mjs"],
   ["composite", "composite.test.mjs"],
   ["widget-dom", "widget-dom.test.mjs"],
+  ["color-alternatives", "color-alternatives.test.mjs"],
   ["widget-combined", "widget-combined.test.mjs"],
   ["scanner-extraction", "scanner-extraction.test.mjs"],
   ["thumbnail", "thumbnail.test.mjs"],

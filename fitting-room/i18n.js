@@ -351,6 +351,20 @@ const I18N = {
   },
   /* The in-room ladder's marker for a size the store cannot sell. Short because it is
      rendered inside a size button's accessible name, not as visible text. */
+  /* OTHER COLOURS OF THIS GARMENT (app.js) - said when other colours still have the size. */
+  stockSoldOutColors: {
+    he: "אין מידה {size} בצבע הזה. פריטים דומים שיש בהם את המידה שלך:",
+    en: "No size {size} in this colour. Similar items that have your size:",
+  },
+  /* NO EXACT SIZE (app.js renderStockNotice) - the body falls between the chart's rows and
+     similar items carry the nearest size. Shown INSTEAD of resultLabelApprox + the size. */
+  resultLabelNoSize: { he: "אין מידה עבורך בפריט הזה.", en: "No size for you in this item." },
+  noSizeSimilar: {
+    he: "פריטים דומים שאפשר למדוד במידה הקרובה אליך ({size}):",
+    en: "Similar items you can try in your nearest size ({size}):",
+  },
+  colorAltTry:     { he: "למדוד", en: "Try on" },
+  colorAltTryAria: { he: "למדוד בצבע הזה", en: "Try on in this colour" },
   stockSoldOutBadge: { he: "אזל מהמלאי", en: "Out of stock" },
   errNameRequired:          { he: "נא להזין שם מלא.", en: "Please enter your full name." },
   errEmailInvalid:          { he: "נא להזין כתובת אימייל תקינה.", en: "Please enter a valid email address." },
@@ -428,6 +442,19 @@ const I18N = {
   /* demo gate */
   demoAlreadyUsed:          { he: "כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!", en: "You've already completed your virtual fitting in this demo. Thank you!" },
 };
+
+/* A THEMED ROOM CARRIES NO ARROWS (the owner, 2026-11-25: "remove all the arrows"). Only when the
+   store's embed named a theme (store-theme.js set the class before this module ran); the default
+   room keeps its strings exactly. */
+try {
+  if (document.documentElement.classList.contains("pear-store-theme")) {
+    for (const k of Object.keys(I18N)) {
+      for (const l of Object.keys(I18N[k])) {
+        if (typeof I18N[k][l] === "string") I18N[k][l] = I18N[k][l].replace(/\s*[\u2190\u2192]\s*$/, "");
+      }
+    }
+  }
+} catch {}
 
 export function getActiveLang() {
   try {
