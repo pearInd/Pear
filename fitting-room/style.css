@@ -6896,30 +6896,27 @@ html.pear-store-theme {
 /* ── 1 · the page: the store's background in SHADES, as PEAR's default page is - never one flat
    fill (the owner, on the first glass cut: "the background on a computer is uniform, it tires the
    eye - shades, as it was in green"). Same layers and strengths as the default page, the accent
-   where the green and the sand were, over the store's own background. ── */
+   where the green and the sand were, over the store's own background.
+   REPLACED 2026-11-26 by the clean page he chose - see the note under these rules. ── */
 html.pear-store-theme body {
   background:
-    radial-gradient(1100px 760px at 84% -10%, rgba(var(--accent-rgb), .24), transparent 60%),
-    radial-gradient(900px 700px  at -8% 14%,  rgba(var(--accent-rgb), .15), transparent 58%),
-    radial-gradient(900px 900px  at 50% 118%, rgba(var(--accent-rgb), .19), transparent 60%),
-    linear-gradient(180deg, rgba(var(--store-text-rgb), .05), rgba(var(--store-text-rgb), .09)),
-    linear-gradient(180deg, var(--store-bg) 0%, rgba(var(--accent-rgb), .12) 52%, var(--store-bg) 100%),
+    radial-gradient(900px 620px at 88% -8%, rgba(var(--accent-rgb), .10), transparent 60%),
     var(--store-bg);
   background-attachment: fixed;
 }
-html.pear-store-theme body::before { background: radial-gradient(circle at 30% 30%, rgba(var(--accent-rgb), .30), transparent 65%); }
-html.pear-store-theme body::after  { background: radial-gradient(circle at 60% 40%, rgba(var(--accent-rgb), .19), transparent 65%); }
-/* the drifting mesh behind the glass: four lights of the accent, as the default's four */
-html.pear-store-theme .liquid-mesh {
-  background:
-    radial-gradient(38% 38% at 22% 26%, rgba(var(--accent-rgb), .23), transparent 70%),
-    radial-gradient(42% 42% at 82% 20%, rgba(var(--accent-rgb), .15), transparent 72%),
-    radial-gradient(48% 48% at 70% 84%, rgba(var(--accent-rgb), .19), transparent 72%),
-    radial-gradient(40% 40% at 14% 80%, rgba(var(--accent-rgb), .11), transparent 72%);
-}
+html.pear-store-theme body::before,
+html.pear-store-theme body::after { background: none; }
+/* the drifting mesh behind the glass: no light of its own on the clean page */
+html.pear-store-theme .liquid-mesh { background: none; }
 /* The owner, on the shaded page: "its colours are too shallow - a little darker so it looks more
-   serious, but not much, so it doesn't look odd". Each wash is ~1.5x stronger and a thin veil of
-   the store's text colour (5-9%) sits under them. */
+   serious, but not much, so it doesn't look odd". Each wash was made ~1.5x stronger over a thin
+   veil of the store's text colour (5-9%).
+   THEN (2026-11-26), on that darker page: "the colours still don't sit a hundred percent in the
+   background itself". Shown four cuts side by side in the narrow window (clean white with one
+   touch of the accent; grey-white with no accent; a much fainter pink; a darker grey) he chose
+   the first: the store's own background, clean, with ONE wash of the accent (10%) at the top
+   corner - no other wash, no veil, nothing in the two page halos or the mesh. The accent stays
+   in the buttons and highlights. The shaded and darkened cuts above are what he turned down. */
 
 /* ── 2 · primary actions: a fade between two shades of the accent, the on-primary ink ── */
 html.pear-store-theme body :is(.btn-primary, .btn-capture, .btn-add-cart, .cookie-btn--primary, .cl-card__look,

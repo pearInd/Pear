@@ -55,7 +55,7 @@ _Earlier (2026-10-11) · REVERTED IN PRODUCTION at the owner's request ("it does
 | Black-screen on reopen | done | main `3a533d6`, `af5f4d4` |
 | Visual QA gate | done, known flaky (§8.5) | main |
 | Liquid Glass UI + consent gate | done | main `0827e51`, `89a5848` |
-| Store colour themes (FOX: red/white/black, flat, text by reading direction) | done on the branch, PR open - **review + merge waiting on you**; FOX's embed then adds `data-pear-theme="fox"` | `claude/project-thread-p2evpi` |
+| Store colour themes (FOX: red/white/black, flat, text by reading direction) | done on the branch, PR open - **review + merge waiting on you**; FOX's embed then adds `data-pear-theme="fox"`. 2026-11-25/26, theme only: the "verified" check, the green step line, every arrow and all hover effects removed, gender switch centred; the page is the clean white cut you chose (one 10% accent wash at the top corner). The branch also carries the similar-items work (`claude/project-thread-17ltt0`, 5551984) so one preview script shows both | `claude/project-thread-p2evpi` |
 
 ## Waiting on you (manual steps)
 
